@@ -2,6 +2,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Literal
 
+from nutshell.base.agent import BaseAgent
 from nutshell.provider import Provider
 from nutshell.skill import Skill
 from nutshell.tool import Tool
@@ -9,10 +10,10 @@ from nutshell.types import AgentResult, Message, ToolCall
 
 ReleasePolicy = Literal["auto", "manual", "persistent"]
 
-_DEFAULT_MODEL = "claude-opus-4-6"
+_DEFAULT_MODEL = "claude-sonnet-4-6"
 
 
-class Agent:
+class Agent(BaseAgent):
     """A minimal LLM agent.
 
     Args:
@@ -20,7 +21,7 @@ class Agent:
         tools: List of Tool objects the agent can call.
         skills: List of Skill objects whose prompt_injection is appended
                 to the system prompt.
-        model: Model identifier string (default: claude-opus-4-6).
+        model: Model identifier string (default: claude-sonnet-4-6).
         provider: LLM provider instance. If omitted, AnthropicProvider
                   is used with the ANTHROPIC_API_KEY environment variable.
         release_policy: Lifecycle when used as a sub-agent.

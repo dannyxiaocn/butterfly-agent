@@ -3,6 +3,8 @@ import inspect
 import functools
 from typing import Any, Callable, get_type_hints
 
+from nutshell.base.tool import BaseTool
+
 
 def _python_type_to_json_schema(annotation: Any) -> dict:
     """Convert a Python type annotation to a JSON Schema type."""
@@ -39,7 +41,7 @@ def _build_schema_from_func(func: Callable) -> dict:
     return {"type": "object", "properties": props, "required": required}
 
 
-class Tool:
+class Tool(BaseTool):
     """An external action that an agent can call."""
 
     def __init__(
