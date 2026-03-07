@@ -10,6 +10,7 @@ requires-python = ">=3.11"
 dependencies = [
     "anthropic>=0.40.0",
     "pyyaml>=6.0",
+    "prompt-toolkit>=3.0",
 ]
 
 [project.optional-dependencies]
@@ -17,7 +18,8 @@ openai = ["openai>=1.0.0"]
 dev = ["pytest>=8.0.0", "pytest-asyncio>=0.24.0"]
 
 [project.scripts]
-nutshell-chat = "chat:main"
+nutshell-chat   = "chat:main"
+nutshell-server = "nutshell.infra.server:main"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

@@ -1,9 +1,10 @@
 """Nutshell — a minimal Python Agent library."""
 
 from nutshell.core.agent import Agent
-from nutshell.core.instance import Instance
+from nutshell.core.instance import Instance, INSTANCE_FINISHED
+from nutshell.core.ipc import FileIPC
 from nutshell.abstract.provider import Provider
-from nutshell.providers.anthropic import AnthropicProvider
+from nutshell.llm.anthropic import AnthropicProvider
 from nutshell.core.skill import Skill
 from nutshell.core.tool import Tool, tool
 from nutshell.core.types import AgentResult, Message, ToolCall
@@ -24,6 +25,8 @@ __all__ = [
     # Core
     "Agent",
     "Instance",
+    "INSTANCE_FINISHED",
+    "FileIPC",
     "Provider",
     "AnthropicProvider",
     "Skill",
