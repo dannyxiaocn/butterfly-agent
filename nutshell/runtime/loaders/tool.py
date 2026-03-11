@@ -61,7 +61,7 @@ class ToolLoader(BaseLoader[Tool]):
         if name in self._registry:
             impl = self._registry[name]
         else:
-            from nutshell.tools._registry import get_builtin
+            from nutshell.runtime.tools._registry import get_builtin
             impl = get_builtin(name) or _make_stub(name)
         return Tool(name=name, description=description, func=impl, schema=schema)
 

@@ -5,7 +5,7 @@ via POST. FastAPI is a thin HTTP wrapper over FileIPC — no agent logic here.
 
 Usage:
     nutshell-web
-    nutshell-web --port 8080 --instances-dir ./instances
+    nutshell-web --port 8080 --sessions-dir ./sessions
     python -m nutshell.ui.web
 """
 from __future__ import annotations
@@ -21,8 +21,9 @@ from typing import AsyncIterator
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
+from nutshell.runtime.status import ensure_session_status, read_session_status
 
-INSTANCES_DIR = Path("instances")
+SESSIONS_DIR = Path("sessions")
 _DEFAULT_ENTITY = "entity/agent_core"
 _DEFAULT_PORT = 8080
 
@@ -37,9 +38,35 @@ def _pid_alive(pid: int | None) -> bool:
         return False
 
 
+def _read_session_info(session_dir: Path) -> dict | None:
+    manifest_path = session_dir / "manifest.json"
+    if not manifest_path.exists():
+        return None
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception:
+        manifest = {}
+    tasks_path = session_dir / "tasks.md"
+    has_tasks = tasks_path.exists() and bool(tasks_path.read_text(encoding="utf-8").strip())
+    pid_alive = _pid_alive(manifest.get("pid"))
+    status = manifest.get("status", "active")
+    status_payload = read_session_status(session_dir)
+    return {
+        "id": session_dir.name,
+        "entity": manifest.get("entity", "?"),
+        "created_at": manifest.get("created_at", ""),
+        "pid_alive": pid_alive,
+        "status": status,
+        "has_tasks": has_tasks,
+        "model_state": status_payload.get("model_state", "idle"),
+        "model_source": status_payload.get("model_source"),
+        "alive": pid_alive and status != "stopped",
+    }
+
+
 # ── FastAPI app ────────────────────────────────────────────────────────────
 
-def create_app(instances_dir: Path) -> FastAPI:
+def create_app(sessions_dir: Path) -> FastAPI:
     app = FastAPI(title="Nutshell Web UI", docs_url=None, redoc_url=None)
 
     # ── HTML ──────────────────────────────────────────────────────────────
@@ -48,80 +75,68 @@ def create_app(instances_dir: Path) -> FastAPI:
     async def index():
         return _HTML
 
-    # ── Instances ─────────────────────────────────────────────────────────
+    # ── Sessions ──────────────────────────────────────────────────────────
 
-    @app.get("/api/instances")
-    async def list_instances():
-        if not instances_dir.exists():
+    @app.get("/api/sessions")
+    async def list_sessions():
+        if not sessions_dir.exists():
             return []
         result = []
-        for d in sorted(instances_dir.iterdir()):
+        for d in sorted(sessions_dir.iterdir()):
             if not d.is_dir():
                 continue
-            manifest_path = d / "manifest.json"
-            if not manifest_path.exists():
-                continue
-            try:
-                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            except Exception:
-                manifest = {}
-            is_stopped = manifest.get("status") == "stopped"
-            kanban_path = d / "kanban.md"
-            has_kanban = kanban_path.exists() and bool(kanban_path.read_text(encoding="utf-8").strip())
-            result.append({
-                "id": d.name,
-                "entity": manifest.get("entity", "?"),
-                "created_at": manifest.get("created_at", ""),
-                # Green only when daemon is running, not stopped, and has pending work
-                "alive": _pid_alive(manifest.get("pid")) and not is_stopped and has_kanban,
-            })
+            info = _read_session_info(d)
+            if info is not None:
+                result.append(info)
         return result
 
-    @app.post("/api/instances")
-    async def create_instance(body: dict):
-        instance_id = body.get("id") or datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    @app.post("/api/sessions")
+    async def create_session(body: dict):
+        session_id = body.get("id") or datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         entity = body.get("entity", _DEFAULT_ENTITY)
         heartbeat = float(body.get("heartbeat", 10.0))
 
-        instance_dir = instances_dir / instance_id
-        instance_dir.mkdir(parents=True, exist_ok=True)
-        (instance_dir / "files").mkdir(exist_ok=True)
-        (instance_dir / "context.jsonl").touch(exist_ok=True)
+        session_dir = sessions_dir / session_id
+        session_dir.mkdir(parents=True, exist_ok=True)
+        (session_dir / "files").mkdir(exist_ok=True)
+        (session_dir / "context.jsonl").touch(exist_ok=True)
+        (session_dir / "tasks.md").touch(exist_ok=True)
 
         manifest = {
-            "instance_id": instance_id,
+            "session_id": session_id,
             "entity": entity,
             "created_at": datetime.now().isoformat(),
             "heartbeat": heartbeat,
         }
-        (instance_dir / "manifest.json").write_text(
+        (session_dir / "manifest.json").write_text(
             json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
         )
-        return {"id": instance_id, "entity": entity}
+        ensure_session_status(session_dir)
+        return {"id": session_id, "entity": entity}
 
     # ── Messages ──────────────────────────────────────────────────────────
 
-    @app.post("/api/instances/{instance_id}/messages")
-    async def send_message(instance_id: str, body: dict):
-        from nutshell.core.ipc import FileIPC
-        instance_dir = instances_dir / instance_id
-        if not instance_dir.exists():
-            raise HTTPException(404, f"Instance not found: {instance_id}")
-        ipc = FileIPC(instance_dir)
+    @app.post("/api/sessions/{session_id}/messages")
+    async def send_message(session_id: str, body: dict):
+        from nutshell.runtime.ipc import FileIPC
+        session_dir = sessions_dir / session_id
+        if not session_dir.exists():
+            raise HTTPException(404, f"Session not found: {session_id}")
+        ipc = FileIPC(session_dir)
         msg_id = ipc.send_message(body.get("content", ""))
         return {"id": msg_id}
 
     # ── SSE events ────────────────────────────────────────────────────────
 
-    @app.get("/api/instances/{instance_id}/events")
-    async def stream_events(instance_id: str, since: int = 0):
-        instance_dir = instances_dir / instance_id
-        if not instance_dir.exists():
-            raise HTTPException(404, f"Instance not found: {instance_id}")
+    @app.get("/api/sessions/{session_id}/events")
+    async def stream_events(session_id: str, since: int = 0):
+        session_dir = sessions_dir / session_id
+        if not session_dir.exists():
+            raise HTTPException(404, f"Session not found: {session_id}")
 
         async def generator() -> AsyncIterator[str]:
-            from nutshell.core.ipc import FileIPC
-            ipc = FileIPC(instance_dir)
+            from nutshell.runtime.ipc import FileIPC
+            ipc = FileIPC(session_dir)
             offset = since
             # Yield existing events first
             for event, new_offset in ipc.tail_display(offset):
@@ -145,15 +160,15 @@ def create_app(instances_dir: Path) -> FastAPI:
 
     # ── History ───────────────────────────────────────────────────────────
 
-    @app.get("/api/instances/{instance_id}/history")
-    async def get_history(instance_id: str):
+    @app.get("/api/sessions/{session_id}/history")
+    async def get_history(session_id: str):
         """Return all display events derived from context.jsonl + current byte offset.
 
         JS loads this once on attach to render full history instantly,
         then starts SSE from the returned offset for new events only.
         """
-        from nutshell.core.ipc import FileIPC
-        ipc = FileIPC(instances_dir / instance_id)
+        from nutshell.runtime.ipc import FileIPC
+        ipc = FileIPC(sessions_dir / session_id)
         events: list[dict] = []
         size = 0
         for event, offset in ipc.tail_display(0):
@@ -163,44 +178,44 @@ def create_app(instances_dir: Path) -> FastAPI:
 
     # ── Stop / Start ──────────────────────────────────────────────────────
 
-    @app.post("/api/instances/{instance_id}/stop")
-    async def stop_instance(instance_id: str):
-        from nutshell.core.ipc import FileIPC
-        instance_dir = instances_dir / instance_id
-        _set_manifest_status(instance_dir / "manifest.json", "stopped")
-        if instance_dir.exists():
-            FileIPC(instance_dir).append(
+    @app.post("/api/sessions/{session_id}/stop")
+    async def stop_session(session_id: str):
+        from nutshell.runtime.ipc import FileIPC
+        session_dir = sessions_dir / session_id
+        _set_manifest_status(session_dir / "manifest.json", "stopped")
+        if session_dir.exists():
+            FileIPC(session_dir).append(
                 {"type": "status", "value": "heartbeat paused — use ▶ Start to resume"}
             )
         return {"ok": True}
 
-    @app.post("/api/instances/{instance_id}/start")
-    async def start_instance(instance_id: str):
-        from nutshell.core.ipc import FileIPC
-        instance_dir = instances_dir / instance_id
-        _set_manifest_status(instance_dir / "manifest.json", "active")
-        if instance_dir.exists():
-            FileIPC(instance_dir).append(
+    @app.post("/api/sessions/{session_id}/start")
+    async def start_session(session_id: str):
+        from nutshell.runtime.ipc import FileIPC
+        session_dir = sessions_dir / session_id
+        _set_manifest_status(session_dir / "manifest.json", "active")
+        if session_dir.exists():
+            FileIPC(session_dir).append(
                 {"type": "status", "value": "heartbeat resumed"}
             )
         return {"ok": True}
 
-    # ── Kanban ────────────────────────────────────────────────────────────
+    # ── Tasks ─────────────────────────────────────────────────────────────
 
-    @app.get("/api/instances/{instance_id}/kanban")
-    async def get_kanban(instance_id: str):
-        kanban_path = instances_dir / instance_id / "kanban.md"
-        if not kanban_path.exists():
+    @app.get("/api/sessions/{session_id}/tasks")
+    async def get_tasks(session_id: str):
+        tasks_path = sessions_dir / session_id / "tasks.md"
+        if not tasks_path.exists():
             return {"content": ""}
-        return {"content": kanban_path.read_text(encoding="utf-8")}
+        return {"content": tasks_path.read_text(encoding="utf-8")}
 
-    @app.put("/api/instances/{instance_id}/kanban")
-    async def set_kanban(instance_id: str, body: dict):
-        instance_dir = instances_dir / instance_id
-        if not instance_dir.exists():
-            raise HTTPException(404, f"Instance not found: {instance_id}")
-        kanban_path = instance_dir / "kanban.md"
-        kanban_path.write_text(body.get("content", ""), encoding="utf-8")
+    @app.put("/api/sessions/{session_id}/tasks")
+    async def set_tasks(session_id: str, body: dict):
+        session_dir = sessions_dir / session_id
+        if not session_dir.exists():
+            raise HTTPException(404, f"Session not found: {session_id}")
+        tasks_path = session_dir / "tasks.md"
+        tasks_path.write_text(body.get("content", ""), encoding="utf-8")
         return {"ok": True}
 
     return app
@@ -245,29 +260,47 @@ _HTML = """<!DOCTYPE html>
   /* Header */
   #header { background: var(--bg2); border-bottom: 1px solid var(--border); padding: 10px 16px; display: flex; align-items: center; gap: 12px; }
   #header h1 { font-size: 15px; font-weight: 600; color: var(--accent); }
-  #server-status { font-size: 11px; color: var(--muted); margin-left: auto; }
-  #server-status.alive { color: var(--green); }
+  #server-indicator { display: flex; align-items: center; gap: 8px; padding: 4px 10px; border: 1px solid var(--border); border-radius: 999px; font-size: 11px; color: var(--muted); }
+  #server-indicator.on { border-color: rgba(63, 185, 80, 0.45); color: #b8f3c0; background: rgba(63, 185, 80, 0.12); }
+  #server-indicator.off { border-color: rgba(248, 81, 73, 0.45); color: #ffb7b1; background: rgba(248, 81, 73, 0.12); }
+  #server-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  #server-indicator.on #server-dot { background: var(--green); }
+  #server-indicator.off #server-dot { background: var(--red); }
+  #header-meta { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+  #session-name { font-size: 11px; color: var(--muted); }
+  #session-indicator { display: flex; align-items: center; gap: 8px; padding: 4px 10px; border: 1px solid var(--border); border-radius: 999px; font-size: 11px; color: var(--muted); }
+  #session-indicator.running { border-color: rgba(63, 185, 80, 0.45); color: #b8f3c0; background: rgba(63, 185, 80, 0.12); }
+  #session-indicator.queued { border-color: rgba(210, 153, 34, 0.45); color: #f4d48c; background: rgba(210, 153, 34, 0.12); }
+  #session-indicator.idle { border-color: var(--border); color: var(--muted); background: transparent; }
+  #session-indicator.stopped { border-color: rgba(248, 81, 73, 0.45); color: #ffb7b1; background: rgba(248, 81, 73, 0.12); }
+  #session-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  #session-indicator.running #session-dot { background: var(--green); }
+  #session-indicator.queued #session-dot { background: var(--yellow); }
+  #session-indicator.idle #session-dot { background: var(--muted); }
+  #session-indicator.stopped #session-dot { background: var(--red); }
 
   /* Layout */
   #main { display: flex; flex: 1; overflow: hidden; }
   #sidebar { width: 220px; background: var(--bg2); border-right: 1px solid var(--border); display: flex; flex-direction: column; }
   #chat-area { flex: 1; display: flex; flex-direction: column; }
-  #kanban-panel { width: 240px; background: var(--bg2); border-left: 1px solid var(--border); display: flex; flex-direction: column; }
+  #tasks-panel { width: 240px; background: var(--bg2); border-left: 1px solid var(--border); display: flex; flex-direction: column; }
 
   /* Sidebar */
   .panel-header { padding: 10px 12px; font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
-  #instance-list { flex: 1; overflow-y: auto; }
-  .instance-item { padding: 8px 12px; cursor: pointer; border-bottom: 1px solid var(--border); transition: background 0.1s; }
-  .instance-item:hover { background: var(--bg3); }
-  .instance-item.active { background: var(--bg3); border-left: 2px solid var(--accent); }
-  .instance-name { font-weight: 500; color: var(--text); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .instance-meta { font-size: 10px; color: var(--muted); margin-top: 2px; }
+  #session-list { flex: 1; overflow-y: auto; }
+  .session-item { padding: 8px 12px; cursor: pointer; border-bottom: 1px solid var(--border); transition: background 0.1s; }
+  .session-item:hover { background: var(--bg3); }
+  .session-item.active { background: var(--bg3); border-left: 2px solid var(--accent); }
+  .session-name { font-weight: 500; color: var(--text); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .session-meta { font-size: 10px; color: var(--muted); margin-top: 2px; }
   .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }
-  .dot.alive { background: var(--green); }
-  .dot.dead  { background: var(--muted); }
+  .dot.running { background: var(--green); }
+  .dot.queued { background: var(--yellow); }
+  .dot.idle { background: var(--muted); }
+  .dot.stopped { background: var(--red); }
   #new-btn { margin: 10px 10px 0; padding: 6px 10px; background: var(--accent); color: #000; border: none; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 600; }
   #new-btn:hover { opacity: 0.85; }
-  .instance-controls { display: flex; gap: 4px; margin: 4px 10px 10px; }
+  .session-controls { display: flex; gap: 4px; margin: 4px 10px 10px; }
   .ctrl-btn { flex: 1; padding: 4px 0; border: 1px solid var(--border); border-radius: 4px; cursor: pointer; font-size: 11px; background: var(--bg3); color: var(--muted); }
   .ctrl-btn:hover { color: var(--text); border-color: var(--muted); }
   .ctrl-btn.stop:hover { color: var(--red); border-color: var(--red); }
@@ -286,6 +319,8 @@ _HTML = """<!DOCTYPE html>
   .msg.error  { background: #2d1515; border-left: 3px solid var(--red); color: var(--red); }
   .msg-label  { font-size: 10px; color: var(--muted); margin-bottom: 2px; }
   .msg-ts { font-size: 10px; color: var(--muted); opacity: 0.5; margin-top: 3px; }
+  .msg-inline { display: inline-flex; align-items: center; gap: 8px; }
+  .msg-inline-ts { font-size: 10px; color: var(--muted); opacity: 0.75; }
 
   /* Input */
   #input-row { padding: 10px 12px; border-top: 1px solid var(--border); display: flex; gap: 8px; background: var(--bg2); }
@@ -293,44 +328,54 @@ _HTML = """<!DOCTYPE html>
   #msg-input:focus { border-color: var(--accent); }
   #send-btn { padding: 8px 14px; background: var(--accent); color: #000; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 13px; }
   #send-btn:hover { opacity: 0.85; }
-  #no-instance { color: var(--muted); font-size: 12px; align-self: center; }
+  #no-session { color: var(--muted); font-size: 12px; align-self: center; }
 
-  /* Kanban */
-  #kanban-content { flex: 1; padding: 10px 12px; overflow-y: auto; white-space: pre-wrap; font-size: 12px; color: var(--text); line-height: 1.6; }
-  #kanban-edit { display: none; flex-direction: column; flex: 1; padding: 8px; gap: 6px; }
-  #kanban-textarea { flex: 1; background: var(--bg3); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 6px; font-family: inherit; font-size: 12px; resize: none; outline: none; }
-  #kanban-save { padding: 4px 10px; background: var(--green); color: #000; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; }
-  #kanban-cancel { padding: 4px 10px; background: var(--bg3); color: var(--muted); border: 1px solid var(--border); border-radius: 4px; cursor: pointer; font-size: 12px; }
-  .kanban-actions { display: flex; gap: 6px; }
-  #kanban-edit-btn { cursor: pointer; font-size: 11px; color: var(--muted); border: none; background: none; }
-  #kanban-edit-btn:hover { color: var(--accent); }
+  /* Tasks */
+  #tasks-content { flex: 1; padding: 10px 12px; overflow-y: auto; white-space: pre-wrap; font-size: 12px; color: var(--text); line-height: 1.6; }
+  #tasks-edit { display: none; flex-direction: column; flex: 1; padding: 8px; gap: 6px; }
+  #tasks-textarea { flex: 1; background: var(--bg3); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 6px; font-family: inherit; font-size: 12px; resize: none; outline: none; }
+  #tasks-save { padding: 4px 10px; background: var(--green); color: #000; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; }
+  #tasks-cancel { padding: 4px 10px; background: var(--bg3); color: var(--muted); border: 1px solid var(--border); border-radius: 4px; cursor: pointer; font-size: 12px; }
+  .tasks-actions { display: flex; gap: 6px; }
+  #tasks-edit-btn { cursor: pointer; font-size: 11px; color: var(--muted); border: none; background: none; }
+  #tasks-edit-btn:hover { color: var(--accent); }
 </style>
 </head>
 <body>
 
 <div id="header">
   <h1>🥜 nutshell</h1>
-  <span id="server-status">checking server...</span>
+  <div id="server-indicator" class="off">
+    <span id="server-dot"></span>
+    <span id="server-state">server off</span>
+  </div>
+  <div id="header-meta">
+    <span id="session-name">no session selected</span>
+    <div id="session-indicator" class="idle">
+      <span id="session-dot"></span>
+      <span id="session-state">idle</span>
+    </div>
+  </div>
 </div>
 
 <div id="main">
-  <!-- Sidebar: instances -->
+  <!-- Sidebar: sessions -->
   <div id="sidebar">
     <div class="panel-header">
-      Instances
-      <button id="new-btn" onclick="showNewInstanceDialog()">+ New</button>
+      Sessions
+      <button id="new-btn" onclick="showNewSessionDialog()">+ New</button>
     </div>
-    <div id="instance-list"></div>
-    <div class="instance-controls">
-      <button class="ctrl-btn stop" onclick="stopInstance()">⏸ Stop</button>
-      <button class="ctrl-btn start" onclick="startInstance()">▶ Start</button>
+    <div id="session-list"></div>
+    <div class="session-controls">
+      <button class="ctrl-btn stop" onclick="stopSession()">⏸ Stop</button>
+      <button class="ctrl-btn start" onclick="startSession()">▶ Start</button>
     </div>
   </div>
 
   <!-- Chat -->
   <div id="chat-area">
     <div id="messages">
-      <div class="msg status">Select or create an instance to start chatting.</div>
+      <div class="msg status">Select or create a session to start chatting.</div>
     </div>
     <div id="input-row">
       <input id="msg-input" type="text" placeholder="Type a message..." disabled onkeydown="onInputKey(event)">
@@ -338,70 +383,78 @@ _HTML = """<!DOCTYPE html>
     </div>
   </div>
 
-  <!-- Kanban -->
-  <div id="kanban-panel">
+  <!-- Tasks -->
+  <div id="tasks-panel">
     <div class="panel-header">
-      Kanban
-      <button id="kanban-edit-btn" onclick="toggleKanbanEdit()">edit</button>
+      Tasks
+      <button id="tasks-edit-btn" onclick="toggleTasksEdit()">edit</button>
     </div>
-    <div id="kanban-content">(no instance selected)</div>
-    <div id="kanban-edit">
-      <textarea id="kanban-textarea" placeholder="Add tasks here..."></textarea>
-      <div class="kanban-actions">
-        <button id="kanban-save" onclick="saveKanban()">Save</button>
-        <button id="kanban-cancel" onclick="toggleKanbanEdit()">Cancel</button>
+    <div id="tasks-content">(no session selected)</div>
+    <div id="tasks-edit">
+      <textarea id="tasks-textarea" placeholder="Add tasks here..."></textarea>
+      <div class="tasks-actions">
+        <button id="tasks-save" onclick="saveTasks()">Save</button>
+        <button id="tasks-cancel" onclick="toggleTasksEdit()">Cancel</button>
       </div>
     </div>
   </div>
 </div>
 
 <script>
-  let currentInstance = null;
+  let currentSession = null;
   let eventSource = null;
-  let instances = [];
+  let sessions = [];
+  let modelState = { state: 'idle', source: null };
 
   // ── Init ──────────────────────────────────────────────────────────────
 
   async function init() {
-    await refreshInstances();
-    setInterval(refreshInstances, 3000);
-    setInterval(refreshKanban, 2000);
+    await refreshSessions();
+    setInterval(refreshSessions, 3000);
+    setInterval(refreshTasks, 2000);
   }
 
-  // ── Instances ─────────────────────────────────────────────────────────
+  // ── Sessions ──────────────────────────────────────────────────────────
 
-  async function refreshInstances() {
-    const res = await fetch('/api/instances');
-    instances = await res.json();
-    renderInstanceList();
-
-    const alive = instances.some(i => i.alive);
-    const el = document.getElementById('server-status');
-    el.textContent = alive ? '● server running' : '○ server stopped';
-    el.className = alive ? 'alive' : '';
+  async function refreshSessions() {
+    const res = await fetch('/api/sessions');
+    sessions = await res.json();
+    syncModelStateFromMeta();
+    renderServerIndicator();
+    renderSessionList();
+    renderSessionIndicator();
   }
 
-  function renderInstanceList() {
-    const list = document.getElementById('instance-list');
+  function renderServerIndicator() {
+    const hasRunningDaemon = sessions.some(sess => sess.pid_alive);
+    const el = document.getElementById('server-indicator');
+    const state = document.getElementById('server-state');
+    el.className = hasRunningDaemon ? 'on' : 'off';
+    state.textContent = hasRunningDaemon ? 'server on' : 'server off';
+  }
+
+  function renderSessionList() {
+    const list = document.getElementById('session-list');
     list.innerHTML = '';
-    for (const inst of instances) {
+    for (const sess of sessions) {
+      const tone = sessionTone(sess);
       const div = document.createElement('div');
-      div.className = 'instance-item' + (inst.id === currentInstance ? ' active' : '');
-      div.onclick = () => attachInstance(inst.id);
+      div.className = 'session-item' + (sess.id === currentSession ? ' active' : '');
+      div.onclick = () => attachSession(sess.id);
       div.innerHTML = `
-        <div class="instance-name">
-          <span class="dot ${inst.alive ? 'alive' : 'dead'}"></span>${inst.id}
+        <div class="session-name">
+          <span class="dot ${tone}"></span>${sess.id}
         </div>
-        <div class="instance-meta">${inst.entity}</div>
+        <div class="session-meta">${sess.entity}</div>
       `;
       list.appendChild(div);
     }
   }
 
-  async function attachInstance(id) {
-    if (id === currentInstance) return;
-    currentInstance = id;
-    renderInstanceList();
+  async function attachSession(id) {
+    if (id === currentSession) return;
+    currentSession = id;
+    renderSessionList();
 
     // Close old SSE
     if (eventSource) { eventSource.close(); eventSource = null; }
@@ -409,39 +462,44 @@ _HTML = """<!DOCTYPE html>
     // Clear chat
     const msgs = document.getElementById('messages');
     msgs.innerHTML = '';
+    modelState = { state: 'idle', source: null };
+    renderServerIndicator();
+    renderSessionIndicator();
 
     // Enable input
     document.getElementById('msg-input').disabled = false;
     document.getElementById('send-btn').disabled = false;
 
-    // Load full history instantly from outbox, get current offset
-    const histRes = await fetch(`/api/instances/${id}/history`);
+    // Load full history instantly, get current offset
+    const histRes = await fetch(`/api/sessions/${id}/history`);
     const { events, offset } = await histRes.json();
     for (const event of events) appendEvent(event);
+    syncModelStateFromMeta();
+    renderSessionIndicator();
 
     // SSE from current offset — only new events from here on
-    eventSource = new EventSource(`/api/instances/${id}/events?since=${offset}`);
-    const types = ['agent','user','tool','heartbeat_trigger','heartbeat_finished','status','error'];
+    eventSource = new EventSource(`/api/sessions/${id}/events?since=${offset}`);
+    const types = ['agent','user','tool','model_status','heartbeat_trigger','heartbeat_finished','status','error'];
     for (const t of types) {
       eventSource.addEventListener(t, e => appendEvent(JSON.parse(e.data)));
     }
 
-    refreshKanban();
+    refreshTasks();
   }
 
-  async function showNewInstanceDialog() {
-    const id = prompt('Instance ID (leave empty for timestamp):') ?? null;
+  async function showNewSessionDialog() {
+    const id = prompt('Session ID (leave empty for timestamp):') ?? null;
     if (id === null) return;
     const entity = prompt('Entity path:', 'entity/agent_core');
     if (!entity) return;
-    const res = await fetch('/api/instances', {
+    const res = await fetch('/api/sessions', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({ id: id || '', entity }),
     });
     const data = await res.json();
-    await refreshInstances();
-    attachInstance(data.id);
+    await refreshSessions();
+    attachSession(data.id);
   }
 
   // ── Chat ──────────────────────────────────────────────────────────────
@@ -457,6 +515,17 @@ _HTML = """<!DOCTYPE html>
   function appendEvent(event) {
     const msgs = document.getElementById('messages');
     const etype = event.type || 'message';
+    if (etype === 'model_status') {
+      modelState = { state: event.state || 'idle', source: event.source || null };
+      const meta = currentSessionMeta();
+      if (meta) {
+        meta.model_state = modelState.state;
+        meta.model_source = modelState.source;
+      }
+      renderSessionIndicator();
+      renderSessionList();
+      return;
+    }
     const div = document.createElement('div');
     div.className = `msg ${etype}`;
 
@@ -475,9 +544,11 @@ _HTML = """<!DOCTYPE html>
     } else if (etype === 'heartbeat_trigger') {
       text = '⏱ Heartbeat';
     } else if (etype === 'heartbeat_finished') {
-      text = '[instance finished — all tasks done]';
+      text = '[session finished — all tasks done]';
     } else if (etype === 'status') {
-      text = `[status: ${event.value}]`;
+      text = event.value === 'cancelled' || event.value === 'stopped'
+        ? '[server stopped]'
+        : `[status: ${event.value}]`;
     } else if (etype === 'error') {
       text = `[error] ${event.content}`;
     } else {
@@ -487,7 +558,10 @@ _HTML = """<!DOCTYPE html>
     const ts = fmtTime(event.ts);
     const tsHtml = ts ? `<div class="msg-ts">${ts}</div>` : '';
 
-    if (label) {
+    if (etype === 'status') {
+      const prefix = ts ? `<span class="msg-inline-ts">${ts}</span>` : '';
+      div.innerHTML = `<div class="msg-inline">${prefix}${escHtml(text)}</div>`;
+    } else if (label) {
       div.innerHTML = `<div class="msg-label">${label}</div>${escHtml(text)}${tsHtml}`;
     } else if (etype === 'heartbeat_trigger') {
       div.innerHTML = `${escHtml(text)}${tsHtml}`;
@@ -499,6 +573,57 @@ _HTML = """<!DOCTYPE html>
     msgs.scrollTop = msgs.scrollHeight;
   }
 
+  function currentSessionMeta() {
+    return sessions.find(sess => sess.id === currentSession) || null;
+  }
+
+  function syncModelStateFromMeta() {
+    const meta = currentSessionMeta();
+    modelState = {
+      state: meta?.model_state || 'idle',
+      source: meta?.model_source || null,
+    };
+  }
+
+  function sessionTone(session) {
+    if (!session) return 'idle';
+    if (session.status === 'stopped') return 'stopped';
+    if (session.pid_alive && session.model_state === 'running') return 'running';
+    if (session.has_tasks) return 'queued';
+    return 'idle';
+  }
+
+  function renderSessionIndicator() {
+    const meta = currentSessionMeta();
+    const nameEl = document.getElementById('session-name');
+    const indicator = document.getElementById('session-indicator');
+    const stateEl = document.getElementById('session-state');
+    if (!meta) {
+      nameEl.textContent = 'no session selected';
+      indicator.className = 'idle';
+      stateEl.textContent = 'idle';
+      return;
+    }
+
+    nameEl.textContent = meta.id;
+
+    let tone = 'idle';
+    let label = 'idle';
+    if (meta.status === 'stopped') {
+      tone = 'stopped';
+      label = 'stopped by user';
+    } else if (meta.pid_alive && meta.model_state === 'running') {
+      tone = 'running';
+      label = `running (${meta.model_source || modelState.source || 'user'})`;
+    } else if (meta.has_tasks) {
+      tone = 'queued';
+      label = 'tasks queued';
+    }
+
+    indicator.className = tone;
+    stateEl.textContent = label;
+  }
+
   function onInputKey(e) {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
   }
@@ -506,59 +631,68 @@ _HTML = """<!DOCTYPE html>
   async function sendMessage() {
     const input = document.getElementById('msg-input');
     const text = input.value.trim();
-    if (!text || !currentInstance) return;
+    if (!text || !currentSession) return;
     input.value = '';
 
-    await fetch(`/api/instances/${currentInstance}/messages`, {
+    await fetch(`/api/sessions/${currentSession}/messages`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({ content: text }),
     });
   }
 
-  // ── Kanban ────────────────────────────────────────────────────────────
+  // ── Tasks ─────────────────────────────────────────────────────────────
 
-  async function refreshKanban() {
-    if (!currentInstance) return;
-    const res = await fetch(`/api/instances/${currentInstance}/kanban`);
+  async function refreshTasks() {
+    if (!currentSession) return;
+    const res = await fetch(`/api/sessions/${currentSession}/tasks`);
     const data = await res.json();
     const content = data.content?.trim() || '(empty)';
-    document.getElementById('kanban-content').textContent = content;
-    document.getElementById('kanban-textarea').value = data.content || '';
+    document.getElementById('tasks-content').textContent = content;
+    document.getElementById('tasks-textarea').value = data.content || '';
+    const meta = currentSessionMeta();
+    if (meta) meta.has_tasks = Boolean(data.content?.trim());
+    renderServerIndicator();
+    renderSessionIndicator();
+    renderSessionList();
   }
 
-  function toggleKanbanEdit() {
-    const view = document.getElementById('kanban-content');
-    const edit = document.getElementById('kanban-edit');
+  function toggleTasksEdit() {
+    const view = document.getElementById('tasks-content');
+    const edit = document.getElementById('tasks-edit');
     const isEditing = edit.style.display === 'flex';
     view.style.display = isEditing ? 'block' : 'none';
     edit.style.display = isEditing ? 'none' : 'flex';
   }
 
-  async function saveKanban() {
-    if (!currentInstance) return;
-    const content = document.getElementById('kanban-textarea').value;
-    await fetch(`/api/instances/${currentInstance}/kanban`, {
+  async function saveTasks() {
+    if (!currentSession) return;
+    const content = document.getElementById('tasks-textarea').value;
+    await fetch(`/api/sessions/${currentSession}/tasks`, {
       method: 'PUT',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({ content }),
     });
-    toggleKanbanEdit();
-    refreshKanban();
+    toggleTasksEdit();
+    refreshTasks();
   }
 
   // ── Stop / Start ──────────────────────────────────────────────────────
 
-  async function stopInstance() {
-    if (!currentInstance) return;
-    await fetch(`/api/instances/${currentInstance}/stop`, { method: 'POST' });
-    await refreshInstances(); // immediately reflect stopped state in indicator
+  async function stopSession() {
+    if (!currentSession) return;
+    await fetch(`/api/sessions/${currentSession}/stop`, { method: 'POST' });
+    await refreshSessions();
+    renderServerIndicator();
+    renderSessionIndicator();
   }
 
-  async function startInstance() {
-    if (!currentInstance) return;
-    await fetch(`/api/instances/${currentInstance}/start`, { method: 'POST' });
-    await refreshInstances(); // immediately reflect resumed state in indicator
+  async function startSession() {
+    if (!currentSession) return;
+    await fetch(`/api/sessions/${currentSession}/start`, { method: 'POST' });
+    await refreshSessions();
+    renderServerIndicator();
+    renderSessionIndicator();
   }
 
   // ── Utils ─────────────────────────────────────────────────────────────
@@ -580,13 +714,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Nutshell Web UI")
     parser.add_argument("--port", type=int, default=_DEFAULT_PORT)
     parser.add_argument("--host", default="0.0.0.0")
-    parser.add_argument("--instances-dir", default=str(INSTANCES_DIR), metavar="DIR")
+    parser.add_argument("--sessions-dir", default=str(SESSIONS_DIR), metavar="DIR")
     args = parser.parse_args()
 
-    instances_dir = Path(args.instances_dir)
-    instances_dir.mkdir(parents=True, exist_ok=True)
+    sessions_dir = Path(args.sessions_dir)
+    sessions_dir.mkdir(parents=True, exist_ok=True)
 
-    app = create_app(instances_dir)
+    app = create_app(sessions_dir)
     print(f"nutshell web UI: http://localhost:{args.port}")
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
 

@@ -1,6 +1,5 @@
-# Agent manifest for core_agent
+# Agent manifest for agent_core
 # Paths are relative to this file's directory.
-# This manifest is consumed by the infra layer (future AgentLoader).
 
 name: agent_core
 description: A general-purpose assistant with basic capabilities.
@@ -13,7 +12,6 @@ prompts:
   heartbeat: prompts/heartbeat.md
 
 tools:
-  - tools/echo.json
   - tools/bash.json
 
 skills:

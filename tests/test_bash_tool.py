@@ -1,6 +1,6 @@
 """Tests for the built-in bash tool."""
 import pytest
-from nutshell.tools.bash import create_bash_tool
+from nutshell.runtime.tools.bash import create_bash_tool
 from nutshell.core.tool import Tool
 
 
@@ -75,6 +75,8 @@ async def test_factory_default_workdir(tmp_path):
 async def test_pty_basic():
     t = create_bash_tool()
     result = await t.execute(command="echo pty-hello", pty=True)
+    if "[pty unavailable" in result:
+        pytest.skip("PTY not available in this environment")
     assert "pty-hello" in result
     assert "[exit 0]" in result
 
@@ -83,6 +85,8 @@ async def test_pty_basic():
 async def test_pty_exit_code():
     t = create_bash_tool()
     result = await t.execute(command="exit 3", pty=True)
+    if "[pty unavailable" in result:
+        pytest.skip("PTY not available in this environment")
     assert "[exit 3]" in result
 
 
@@ -90,4 +94,6 @@ async def test_pty_exit_code():
 async def test_pty_timeout():
     t = create_bash_tool()
     result = await t.execute(command="sleep 60", timeout=0.3, pty=True)
+    if "[pty unavailable" in result:
+        pytest.skip("PTY not available in this environment")
     assert "timed out" in result.lower()

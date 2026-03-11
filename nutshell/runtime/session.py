@@ -9,71 +9,73 @@ from typing import TYPE_CHECKING
 from nutshell.core.agent import Agent
 from nutshell.core.tool import tool
 from nutshell.core.types import AgentResult
+from nutshell.runtime.status import ensure_session_status, write_session_status
 
 if TYPE_CHECKING:
-    from nutshell.core.ipc import FileIPC
+    from nutshell.runtime.ipc import FileIPC
 
-INSTANCES_DIR = Path("instances")
+SESSIONS_DIR = Path("sessions")
 DEFAULT_HEARTBEAT_INTERVAL = 10.0  # seconds
-INSTANCE_FINISHED = "INSTANCE_FINISHED"
+SESSION_FINISHED = "SESSION_FINISHED"
 
 
-class Instance:
+class Session:
     """Agent persistent run context (server mode only).
 
-    Disk layout: instances/<id>/
+    Disk layout: sessions/<id>/
         manifest.json    — config + runtime state (entity, heartbeat, status, pid)
-        kanban.md        — free-form task notes (plain file read/write)
+        tasks.md         — free-form task notes (plain file read/write)
         context.jsonl    — append-only log: user_input, turn, status, error, heartbeat_finished
         files/           — associated files directory
 
     Usage:
-        inst = Instance(agent, instance_id="my-project")
-        ipc  = FileIPC(inst.instance_dir)
-        await inst.run_daemon_loop(ipc)
+        session = Session(agent, session_id="my-project")
+        ipc     = FileIPC(session.session_dir)
+        await session.run_daemon_loop(ipc)
 
-    Resuming an existing instance uses the same constructor — directory
+    Resuming an existing session uses the same constructor — directory
     creation is idempotent (existing files are never overwritten).
     """
 
     def __init__(
         self,
         agent: Agent,
-        instance_id: str | None = None,
-        base_dir: Path = INSTANCES_DIR,
+        session_id: str | None = None,
+        base_dir: Path = SESSIONS_DIR,
         heartbeat: float = DEFAULT_HEARTBEAT_INTERVAL,
     ) -> None:
         self._agent = agent
-        self._instance_id = instance_id or datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        self._session_id = session_id or datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         self._base_dir = base_dir
         self._heartbeat_interval = heartbeat
         self._agent_lock: asyncio.Lock = asyncio.Lock()
         self._ipc: FileIPC | None = None
 
-        # Idempotent directory creation — safe for both new and resumed instances
-        self.instance_dir.mkdir(parents=True, exist_ok=True)
+        # Idempotent directory creation — safe for both new and resumed sessions
+        self.session_dir.mkdir(parents=True, exist_ok=True)
         self.files_dir.mkdir(exist_ok=True)
-        if not self.kanban_path.exists():
-            self.kanban_path.write_text("", encoding="utf-8")
+        if not self.tasks_path.exists():
+            self.tasks_path.write_text("", encoding="utf-8")
         if not self._context_path.exists():
             self._context_path.touch()
+        ensure_session_status(self.session_dir)
 
-        self._inject_kanban_tools(agent)
+        self._inject_task_tools(agent)
 
-    def _inject_kanban_tools(self, agent: Agent) -> None:
-        kanban_path = self.kanban_path
+    def _inject_task_tools(self, agent: Agent) -> None:
+        tasks_path = self.tasks_path
 
-        @tool(description="Read the current kanban board")
-        def read_kanban() -> str:
-            content = kanban_path.read_text(encoding="utf-8").strip()
+        @tool(description="Read the current task list")
+        def read_tasks() -> str:
+            content = tasks_path.read_text(encoding="utf-8").strip()
             return content or "(empty)"
 
-        @tool(description="Overwrite the kanban board. Pass empty string to clear all tasks.")
-        def write_kanban(content: str) -> str:
-            kanban_path.write_text(content, encoding="utf-8")
-            return "Kanban updated."
+        @tool(description="Overwrite the task list. Pass empty string to clear all tasks.")
+        def write_tasks(content: str) -> str:
+            tasks_path.write_text(content, encoding="utf-8")
+            return "Tasks updated."
 
-        agent.tools.extend([read_kanban, write_kanban])
+        agent.tools.extend([read_tasks, write_tasks])
 
     # ── History persistence ────────────────────────────────────────
 
@@ -110,60 +112,73 @@ class Instance:
     async def chat(self, message: str) -> AgentResult:
         """Run agent with user message. Holds agent lock — blocks heartbeat tick."""
         old_len = len(self._agent._history)
-        async with self._agent_lock:
-            result = await self._agent.run(message)
+        self._set_model_status("running", "user")
+        try:
+            async with self._agent_lock:
+                result = await self._agent.run(message)
+        except BaseException:
+            self._set_model_status("idle", "user")
+            raise
 
         # Append full turn (the user_input event was already written by the UI
         # via send_message before the server picked it up).
         self._append_context({
             "type": "turn",
             "triggered_by": "user",
-            "messages": [{"role": m.role, "content": m.content} for m in result.messages[old_len:]],
+            "messages": self._serialize_turn_messages(result.messages[old_len:]),
         })
+        self._set_model_status("idle", "user")
         return result
 
     async def tick(self) -> AgentResult | None:
-        """Single heartbeat: run agent if kanban is non-empty.
+        """Single heartbeat: run agent if tasks are non-empty.
 
-        Returns None if kanban is empty.
-        Clears kanban and prunes history if agent responds INSTANCE_FINISHED.
+        Returns None if tasks are empty.
+        Clears tasks and prunes history if agent responds SESSION_FINISHED.
         """
-        kanban_content = self.kanban_path.read_text(encoding="utf-8").strip()
-        if not kanban_content:
+        tasks_content = self.tasks_path.read_text(encoding="utf-8").strip()
+        if not tasks_content:
             return None
 
-        # Snapshot history so we can roll back if INSTANCE_FINISHED
+        # Snapshot history so we can roll back if SESSION_FINISHED
         history_snapshot = list(self._agent._history)
         old_len = len(self._agent._history)
 
         heartbeat_instructions = self._agent.heartbeat_prompt or "Continue working on your tasks."
-        prompt = f"Heartbeat activation.\n\nCurrent kanban:\n{kanban_content}\n\n{heartbeat_instructions}"
+        prompt = f"Heartbeat activation.\n\nCurrent tasks:\n{tasks_content}\n\n{heartbeat_instructions}"
 
-        async with self._agent_lock:
-            result = await self._agent.run(prompt)
+        trigger_ts = self._set_model_status("running", "heartbeat")
+        try:
+            async with self._agent_lock:
+                result = await self._agent.run(prompt)
+        except BaseException:
+            self._set_model_status("idle", "heartbeat")
+            raise
 
-        if INSTANCE_FINISHED in result.content:
-            # Clear kanban, prune heartbeat history so it doesn't pollute context
-            self.kanban_path.write_text("", encoding="utf-8")
+        if SESSION_FINISHED in result.content:
+            # Clear tasks, prune heartbeat history so it doesn't pollute context
+            self.tasks_path.write_text("", encoding="utf-8")
             self._agent._history = history_snapshot
             self._append_context({"type": "heartbeat_finished"})
         else:
-            # Only log to context if instance is still active — skip if user stopped
-            # the instance while this heartbeat was in-flight (avoids ghost output in UI)
+            # Only log to context if session is still active — skip if user stopped
+            # the session while this heartbeat was in-flight (avoids ghost output in UI)
             if not self.is_stopped():
                 self._append_context({
                     "type": "turn",
                     "triggered_by": "heartbeat",
-                    "messages": [{"role": m.role, "content": m.content} for m in result.messages[old_len:]],
+                    "trigger_ts": trigger_ts,
+                    "messages": self._serialize_turn_messages(result.messages[old_len:]),
                 })
 
+        self._set_model_status("idle", "heartbeat")
         return result
 
     # ── Stop / Start ───────────────────────────────────────────────
 
     @property
     def manifest_path(self) -> Path:
-        return self.instance_dir / "manifest.json"
+        return self.session_dir / "manifest.json"
 
     def is_stopped(self) -> bool:
         """True if manifest has status=stopped."""
@@ -217,16 +232,16 @@ class Instance:
     # ── Server loop ────────────────────────────────────────────────
 
     async def run_daemon_loop(self, ipc: "FileIPC") -> None:
-        """Run as a server-managed instance.
+        """Run as a server-managed session.
 
         Polls context.jsonl for user_input events every 0.5s.
         Fires heartbeat ticks every heartbeat_interval seconds.
 
         Heartbeat is skipped when:
-          - instance status == "stopped" (user issued /stop)
+          - session status == "stopped" (user issued /stop)
           - agent_lock is held (agent already running)
 
-        A user message always wakes a stopped instance (clears stopped status).
+        A user message always wakes a stopped session (clears stopped status).
         last_tick_time is updated AFTER the tick completes, so tick duration
         never eats into the next interval.
         """
@@ -244,7 +259,7 @@ class Instance:
                 inputs, input_offset = ipc.poll_inputs(input_offset)
                 for msg in inputs:
                     content = msg.get("content", "")
-                    # User message wakes a stopped instance
+                    # User message wakes a stopped session
                     if self.is_stopped():
                         self.set_status("active")
                         self._append_context({"type": "status", "value": "resumed"})
@@ -268,30 +283,32 @@ class Instance:
                 await asyncio.sleep(0.5)
 
         except asyncio.CancelledError:
+            self._set_model_status("idle", "system")
             self._append_context({"type": "status", "value": "cancelled"})
             self._clear_pid()
             raise
 
+        self._set_model_status("idle", "system")
         self._append_context({"type": "status", "value": "stopped"})
         self._clear_pid()
 
     # ── Properties ─────────────────────────────────────────────────
 
     @property
-    def instance_dir(self) -> Path:
-        return self._base_dir / self._instance_id
+    def session_dir(self) -> Path:
+        return self._base_dir / self._session_id
 
     @property
     def files_dir(self) -> Path:
-        return self.instance_dir / "files"
+        return self.session_dir / "files"
 
     @property
-    def kanban_path(self) -> Path:
-        return self.instance_dir / "kanban.md"
+    def tasks_path(self) -> Path:
+        return self.session_dir / "tasks.md"
 
     @property
     def _context_path(self) -> Path:
-        return self.instance_dir / "context.jsonl"
+        return self.session_dir / "context.jsonl"
 
     # ── Internal ───────────────────────────────────────────────────
 
@@ -303,3 +320,36 @@ class Instance:
             event.setdefault("ts", datetime.now().isoformat())
             with self._context_path.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(event, ensure_ascii=False) + "\n")
+
+    def _set_model_status(self, state: str, source: str) -> str:
+        ts = datetime.now().isoformat()
+        self._append_context({"type": "model_status", "state": state, "source": source, "ts": ts})
+        try:
+            write_session_status(self.session_dir, model_state=state, model_source=source)
+        except Exception:
+            pass
+        return ts
+
+    def _serialize_turn_messages(self, messages: list) -> list[dict]:
+        serialized: list[dict] = []
+        for message in messages:
+            entry = {
+                "role": message.role,
+                "ts": datetime.now().isoformat(),
+                "content": self._serialize_message_content(message.content),
+            }
+            serialized.append(entry)
+        return serialized
+
+    def _serialize_message_content(self, content):
+        if not isinstance(content, list):
+            return content
+        blocks: list = []
+        for block in content:
+            if isinstance(block, dict):
+                payload = dict(block)
+                payload.setdefault("ts", datetime.now().isoformat())
+                blocks.append(payload)
+            else:
+                blocks.append(block)
+        return blocks

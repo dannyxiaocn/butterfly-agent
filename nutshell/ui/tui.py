@@ -1,10 +1,10 @@
 """Nutshell TUI — Textual-based terminal UI for nutshell-server.
 
 Usage:
-    nutshell-tui                        # create new instance (random ID)
-    nutshell-tui --create my-project    # create named instance
-    nutshell-tui --attach my-project    # attach to existing instance
-    nutshell-tui --instances-dir DIR    # custom instances directory
+    nutshell-tui                        # create new session (random ID)
+    nutshell-tui --create my-project    # create named session
+    nutshell-tui --attach my-project    # attach to existing session
+    nutshell-tui --sessions-dir DIR     # custom sessions directory
 """
 from __future__ import annotations
 
@@ -19,12 +19,10 @@ from textual import on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, ScrollableContainer, Vertical
-from textual.css.query import NoMatches
-from textual.reactive import reactive
-from textual.widget import Widget
-from textual.widgets import Footer, Header, Input, Label, ListItem, ListView, Markdown, Static
+from textual.widgets import Button, Footer, Header, Input, Label, ListItem, ListView, Markdown, Static, TextArea
+from nutshell.runtime.status import ensure_session_status, read_session_status
 
-INSTANCES_DIR = Path("instances")
+SESSIONS_DIR = Path("sessions")
 _DEFAULT_ENTITY = "entity/agent_core"
 
 
@@ -38,8 +36,6 @@ def _pid_alive(pid: int | None) -> bool:
         return False
 
 
-# ── Utility ────────────────────────────────────────────────────────────────
-
 def _set_manifest_status(manifest_path: Path, status: str) -> None:
     if not manifest_path.exists():
         return
@@ -51,169 +47,219 @@ def _set_manifest_status(manifest_path: Path, status: str) -> None:
         pass
 
 
-def _load_instances(instances_dir: Path) -> list[dict]:
-    if not instances_dir.exists():
+def _read_session_info(session_dir: Path) -> dict | None:
+    manifest_path = session_dir / "manifest.json"
+    if not manifest_path.exists():
+        return None
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception:
+        manifest = {}
+    tasks_path = session_dir / "tasks.md"
+    has_tasks = tasks_path.exists() and bool(tasks_path.read_text(encoding="utf-8").strip())
+    pid_alive = _pid_alive(manifest.get("pid"))
+    status = manifest.get("status", "active")
+    status_payload = read_session_status(session_dir)
+    return {
+        "id": session_dir.name,
+        "entity": manifest.get("entity", "?"),
+        "pid_alive": pid_alive,
+        "status": status,
+        "has_tasks": has_tasks,
+        "model_state": status_payload.get("model_state", "idle"),
+        "model_source": status_payload.get("model_source"),
+    }
+
+
+def _load_sessions(sessions_dir: Path) -> list[dict]:
+    if not sessions_dir.exists():
         return []
-    result = []
-    for d in sorted(instances_dir.iterdir()):
-        if not d.is_dir():
+    sessions: list[dict] = []
+    for session_dir in sorted(sessions_dir.iterdir()):
+        if not session_dir.is_dir():
             continue
-        manifest_path = d / "manifest.json"
-        if not manifest_path.exists():
-            continue
-        try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except Exception:
-            manifest = {}
-        result.append({
-            "id": d.name,
-            "entity": manifest.get("entity", "?"),
-            "alive": _pid_alive(manifest.get("pid")),
-        })
-    return result
+        info = _read_session_info(session_dir)
+        if info is not None:
+            sessions.append(info)
+    return sessions
 
 
-def _create_instance(instances_dir: Path, instance_id: str, entity: str, heartbeat: float = 10.0) -> Path:
-    instance_dir = instances_dir / instance_id
-    instance_dir.mkdir(parents=True, exist_ok=True)
-    (instance_dir / "files").mkdir(exist_ok=True)
-    (instance_dir / "context.jsonl").touch(exist_ok=True)
+def _create_session(sessions_dir: Path, session_id: str, entity: str, heartbeat: float = 10.0) -> Path:
+    session_dir = sessions_dir / session_id
+    session_dir.mkdir(parents=True, exist_ok=True)
+    (session_dir / "files").mkdir(exist_ok=True)
+    (session_dir / "context.jsonl").touch(exist_ok=True)
+    (session_dir / "tasks.md").touch(exist_ok=True)
     manifest = {
-        "instance_id": instance_id,
+        "session_id": session_id,
         "entity": entity,
         "created_at": datetime.now().isoformat(),
         "heartbeat": heartbeat,
+        "status": "active",
     }
-    (instance_dir / "manifest.json").write_text(
+    (session_dir / "manifest.json").write_text(
         json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
     )
-    return instance_dir
+    ensure_session_status(session_dir)
+    return session_dir
 
 
-# ── Widgets ────────────────────────────────────────────────────────────────
+def _session_tone(session: dict, model_status: str) -> tuple[str, str]:
+    if session.get("status") == "stopped":
+        return "stopped", "stopped"
+    effective_state = model_status or session.get("model_state", "idle")
+    if session.get("pid_alive") and effective_state == "running":
+        return "running", "running"
+    if session.get("has_tasks"):
+        return "queued", "tasks queued"
+    return "idle", "idle"
+
+
+class SessionListItem(ListItem):
+    def __init__(self, session: dict, model_status: str = "idle") -> None:
+        tone, label = _session_tone(session, model_status)
+        self.session_id = session["id"]
+        self._base_classes = f"session-item {tone}"
+        super().__init__(
+            Label(f"{session['id']}\n{session['entity']}\n[{label}]"),
+            classes=self._base_classes,
+        )
+
+    def refresh_state(self, session: dict, model_status: str = "idle", selected: bool = False) -> None:
+        tone, label = _session_tone(session, model_status)
+        suffix = " selected" if selected else ""
+        self.set_class(False, "running")
+        self.set_class(False, "queued")
+        self.set_class(False, "idle")
+        self.set_class(False, "stopped")
+        self.set_class(False, "selected")
+        self.add_class("session-item")
+        self.add_class(tone)
+        if selected:
+            self.add_class("selected")
+        label_widget = self.query_one(Label)
+        label_widget.update(f"{session['id']}\n{session['entity']}\n[{label}]")
+
 
 class ChatMessage(Static):
-    """Single chat message rendered in the chat view."""
-
     DEFAULT_CSS = """
     ChatMessage {
-        padding: 0 1;
-        margin-bottom: 1;
+        height: auto;
+        margin: 0 0 1 0;
     }
-    ChatMessage.agent { color: $accent; }
-    ChatMessage.user  { color: $success; }
-    ChatMessage.tool  { color: $warning; opacity: 0.8; }
-    ChatMessage.heartbeat { color: $warning; opacity: 0.7; }
-    ChatMessage.status { color: $text-muted; opacity: 0.6; }
-    ChatMessage.error  { color: $error; }
+    ChatMessage .shell {
+        background: $surface;
+        border-left: wide $panel;
+        padding: 0 1 1 1;
+    }
+    ChatMessage.agent .shell { border-left: wide $accent; }
+    ChatMessage.user .shell { border-left: wide $success; }
+    ChatMessage.tool .shell { border-left: wide $warning; }
+    ChatMessage.error .shell { border-left: wide $error; }
+    ChatMessage.status .shell,
+    ChatMessage.heartbeat_trigger .shell,
+    ChatMessage.heartbeat_finished .shell {
+        border-left: wide $primary;
+        background: $surface-lighten-1;
+    }
+    ChatMessage .label {
+        color: $text-muted;
+        text-style: bold;
+        padding-bottom: 1;
+    }
+    ChatMessage.agent .label { color: $accent; }
+    ChatMessage.user .label { color: $success; }
+    ChatMessage.tool .label { color: $warning; }
+    ChatMessage.error .label { color: $error; }
+    ChatMessage Markdown {
+        background: transparent;
+        padding: 0;
+    }
     """
 
     def __init__(self, event: dict) -> None:
-        etype = event.get("type", "")
-        content = self._format(event)
-        super().__init__(content, classes=etype)
+        super().__init__("", classes=event.get("type", ""))
+        self._event = event
+
+    def compose(self) -> ComposeResult:
+        label, body, markdown = self._render_parts(self._event)
+        with Vertical(classes="shell"):
+            if label:
+                yield Static(label, classes="label")
+            if markdown:
+                yield Markdown(body)
+            else:
+                yield Static(body)
 
     @staticmethod
-    def _format(event: dict) -> str:
+    def _render_parts(event: dict) -> tuple[str, str, bool]:
         etype = event.get("type", "")
         if etype == "agent":
-            return f"agent❯ {event.get('content', '')}"
+            title = "agent (heartbeat)" if event.get("triggered_by") == "heartbeat" else "agent"
+            return title, event.get("content", ""), True
         if etype == "user":
-            return f"you  ❯ {event.get('content', '')}"
+            return "you", event.get("content", ""), True
         if etype == "tool":
-            return f"  [tool] {event.get('name')}({event.get('input', {})})"
-        if etype == "heartbeat":
-            return f"  [heartbeat] {event.get('content', '')}"
+            payload = json.dumps(event.get("input", {}), ensure_ascii=False, indent=2)
+            return f"tool: {event.get('name', 'unknown')}", f"```json\n{payload}\n```", True
+        if etype == "heartbeat_trigger":
+            return "heartbeat", "Background heartbeat started.", False
         if etype == "heartbeat_finished":
-            return "  [instance finished — all tasks done]"
+            return "heartbeat", "Session finished. All tasks are done.", False
         if etype == "status":
-            return f"  [status: {event.get('value')}]"
+            return "status", event.get("value", ""), False
         if etype == "error":
-            return f"  [error] {event.get('content')}"
-        return str(event)
+            return "error", event.get("content", ""), False
+        return "", str(event), False
 
 
 class ChatView(ScrollableContainer):
-    """Scrollable chat history panel."""
-
     DEFAULT_CSS = """
     ChatView {
         border: round $primary;
-        padding: 0;
         height: 1fr;
+        padding: 1;
+        overflow-y: auto;
     }
     """
 
     def add_event(self, event: dict) -> None:
-        msg = ChatMessage(event)
-        self.mount(msg)
+        if event.get("type") == "model_status":
+            return
+        self.mount(ChatMessage(event))
         self.scroll_end(animate=False)
 
-
-class KanbanPanel(Static):
-    """Right-side panel showing kanban.md content."""
-
-    DEFAULT_CSS = """
-    KanbanPanel {
-        border: round $secondary;
-        padding: 1;
-        width: 28;
-        height: auto;
-        min-height: 8;
-    }
-    """
-
-    def update_kanban(self, content: str) -> None:
-        text = content.strip() if content.strip() else "(empty)"
-        self.update(f"[bold]Kanban[/bold]\n{'─' * 20}\n{text}")
-
-
-class InstancePanel(Static):
-    """Right-side panel listing instances."""
-
-    DEFAULT_CSS = """
-    InstancePanel {
-        border: round $secondary;
-        padding: 1;
-        width: 28;
-        height: 1fr;
-    }
-    """
-
-    def update_instances(self, instances: list[dict], current_id: str | None) -> None:
-        lines = ["[bold]Instances[/bold]", "─" * 20]
-        for inst in instances:
-            bullet = "●" if inst["alive"] else "○"
-            marker = " ◀" if inst["id"] == current_id else ""
-            lines.append(f"{bullet} {inst['id']}{marker}")
-        if not instances:
-            lines.append("(none)")
-        self.update("\n".join(lines))
+    def clear_events(self) -> None:
+        self.remove_children()
 
 
 class StatusBar(Static):
-    """Bottom status bar."""
-
     DEFAULT_CSS = """
     StatusBar {
-        height: 1;
-        background: $primary-background;
-        color: $text-muted;
+        height: 2;
         padding: 0 1;
+        background: $surface-lighten-1;
+        content-align: left middle;
     }
+    StatusBar.running { color: $success; }
+    StatusBar.queued { color: $warning; }
+    StatusBar.idle { color: $text-muted; }
+    StatusBar.stopped { color: $error; }
     """
 
-    def set_status(self, instance_id: str | None, server_alive: bool) -> None:
-        srv = "[green]running[/green]" if server_alive else "[red]stopped[/red]"
-        inst = instance_id or "none"
-        self.update(f"server: {srv}  │  instance: {inst}  │  q: quit  │  ctrl+n: new")
+    def update_status(self, session: dict | None, model_status: str) -> None:
+        for name in ("running", "queued", "idle", "stopped"):
+            self.set_class(False, name)
+        if session is None:
+            self.add_class("idle")
+            self.update("No session selected")
+            return
+        tone, label = _session_tone(session, model_status)
+        self.add_class(tone)
+        self.update(f"session: {session['id']}  |  state: {label}  |  model: {model_status}")
 
-
-# ── Main App ───────────────────────────────────────────────────────────────
 
 class NutshellTUI(App):
-    """Nutshell terminal UI."""
-
     CSS = """
     Screen {
         layout: vertical;
@@ -222,73 +268,189 @@ class NutshellTUI(App):
         layout: horizontal;
         height: 1fr;
     }
-    #left {
+    #sidebar {
+        width: 32;
+        min-width: 24;
+        border-right: solid $panel;
+        padding: 1;
         layout: vertical;
-        width: 1fr;
     }
-    #right {
+    #sidebar-title {
+        height: 1;
+        margin-bottom: 1;
+        color: $text-muted;
+    }
+    #sessions {
+        height: 1fr;
+        border: round $secondary;
+        margin-bottom: 1;
+    }
+    .session-item {
+        padding: 0 1;
+        height: auto;
+    }
+    .session-item.selected {
+        background: $boost;
+    }
+    .session-item.running { border-left: wide $success; }
+    .session-item.queued { border-left: wide $warning; }
+    .session-item.idle { border-left: wide $panel; }
+    .session-item.stopped { border-left: wide $error; }
+    #sidebar-actions {
+        height: auto;
+        layout: horizontal;
+    }
+    #sidebar-actions Button {
+        width: 1fr;
+        margin-right: 1;
+    }
+    #sidebar-actions Button:last-child {
+        margin-right: 0;
+    }
+    #center {
+        width: 1fr;
+        padding: 1;
         layout: vertical;
-        width: 28;
+    }
+    #chat-status {
+        margin-bottom: 1;
     }
     #input-row {
         height: 3;
-        border: round $accent;
-        padding: 0 1;
+        margin-top: 1;
     }
-    Input {
-        border: none;
+    #input {
+        width: 1fr;
+    }
+    #rightbar {
+        width: 36;
+        min-width: 28;
+        border-left: solid $panel;
+        padding: 1;
+        layout: vertical;
+    }
+    #tasks-title {
         height: 1;
-        margin: 1 0;
+        margin-bottom: 1;
+        color: $text-muted;
+    }
+    #tasks {
+        height: 1fr;
+        border: round $secondary;
     }
     """
 
     BINDINGS = [
         Binding("ctrl+c,q", "quit", "Quit"),
-        Binding("ctrl+n", "new_instance", "New Instance"),
+        Binding("ctrl+n", "new_session", "New Session"),
+        Binding("ctrl+r", "refresh_sessions", "Refresh"),
+        Binding("ctrl+j", "focus_sessions", "Sessions"),
+        Binding("ctrl+l", "focus_input", "Input"),
+        Binding("ctrl+s", "stop_session", "Stop"),
+        Binding("ctrl+g", "start_session", "Start"),
     ]
 
-    def __init__(self, instances_dir: Path, instance_id: str | None, entity: str) -> None:
+    def __init__(self, sessions_dir: Path, session_id: str | None, entity: str) -> None:
         super().__init__()
-        self._instances_dir = instances_dir
+        self._sessions_dir = sessions_dir
         self._entity = entity
-        self._instance_id: str | None = instance_id
+        self._session_id = session_id
         self._ipc = None
         self._context_offset = 0
+        self._model_status = "idle"
+        self._session_cache: list[dict] = []
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         with Horizontal(id="main"):
-            with Vertical(id="left"):
+            with Vertical(id="sidebar"):
+                yield Static("Sessions", id="sidebar-title")
+                yield ListView(id="sessions")
+                with Horizontal(id="sidebar-actions"):
+                    yield Button("New", id="new-session", variant="primary")
+                    yield Button("Start", id="start-session")
+                    yield Button("Stop", id="stop-session", variant="error")
+            with Vertical(id="center"):
+                yield StatusBar(id="chat-status")
                 yield ChatView(id="chat")
                 with Horizontal(id="input-row"):
-                    yield Input(placeholder="Type a message... (/status /kanban /exit)", id="input")
-            with Vertical(id="right"):
-                yield KanbanPanel(id="kanban")
-                yield InstancePanel(id="instances")
-        yield StatusBar(id="status")
+                    yield Input(placeholder="Type a message or /tasks /status /stop /start /quit", id="input")
+            with Vertical(id="rightbar"):
+                yield Static("Tasks", id="tasks-title")
+                yield TextArea("", id="tasks", read_only=True, show_line_numbers=False)
         yield Footer()
 
     def on_mount(self) -> None:
-        if self._instance_id:
-            self._attach_instance(self._instance_id)
+        self._reload_sessions()
+        if self._session_id is not None:
+            self._attach_session(self._session_id)
+        elif self._session_cache:
+            self._attach_session(self._session_cache[0]["id"])
         self._poll_worker()
-        self._refresh_panels()
+        self._refresh_loop()
+        self.action_focus_input()
 
-    def _attach_instance(self, instance_id: str) -> None:
-        from nutshell.core.ipc import FileIPC
-        instance_dir = self._instances_dir / instance_id
-        self._instance_id = instance_id
-        self._ipc = FileIPC(instance_dir)
+    def _current_session(self) -> dict | None:
+        for session in self._session_cache:
+            if session["id"] == self._session_id:
+                return session
+        return None
+
+    def _reload_sessions(self) -> None:
+        self._session_cache = _load_sessions(self._sessions_dir)
+        list_view = self.query_one("#sessions", ListView)
+        list_view.clear()
+        selected_index = 0
+        for index, session in enumerate(self._session_cache):
+            is_current = session["id"] == self._session_id
+            if is_current:
+                selected_index = index
+            tone_status = self._model_status if is_current else session.get("model_state", "idle")
+            list_view.mount(SessionListItem(session, tone_status))
+        if self._session_cache:
+            list_view.index = selected_index
+        self._refresh_status_bar()
+
+    def _refresh_status_bar(self) -> None:
+        self.query_one("#chat-status", StatusBar).update_status(self._current_session(), self._model_status)
+
+    def _refresh_tasks(self) -> None:
+        tasks_widget = self.query_one("#tasks", TextArea)
+        if not self._session_id:
+            tasks_widget.load_text("")
+            return
+        tasks_path = self._sessions_dir / self._session_id / "tasks.md"
+        content = tasks_path.read_text(encoding="utf-8") if tasks_path.exists() else ""
+        tasks_widget.load_text(content)
+
+    def _attach_session(self, session_id: str) -> None:
+        from nutshell.runtime.ipc import FileIPC
+        session_dir = self._sessions_dir / session_id
+        if not session_dir.exists():
+            return
+        self._session_id = session_id
+        self._ipc = FileIPC(session_dir)
         self._context_offset = 0
-        # Replay existing context
+        self._model_status = read_session_status(session_dir).get("model_state", "idle")
         chat = self.query_one("#chat", ChatView)
+        chat.clear_events()
         for event, offset in self._ipc.tail_display(0):
             self._context_offset = offset
+            self._consume_event(event)
             chat.add_event(event)
+        self._reload_sessions()
+        self._refresh_tasks()
+        self.action_focus_input()
+
+    def _consume_event(self, event: dict) -> None:
+        if event.get("type") != "model_status":
+            return
+        self._model_status = event.get("state", "idle")
+        self._refresh_status_bar()
+        self._reload_sessions()
 
     @work(exclusive=False)
     async def _poll_worker(self) -> None:
-        """Background worker: poll outbox every 0.3s."""
         while True:
             await asyncio.sleep(0.3)
             if self._ipc is None:
@@ -296,141 +458,130 @@ class NutshellTUI(App):
             chat = self.query_one("#chat", ChatView)
             for event, offset in self._ipc.tail_display(self._context_offset):
                 self._context_offset = offset
+                self.call_from_thread(self._consume_event, event)
                 self.call_from_thread(chat.add_event, event)
 
     @work(exclusive=False)
-    async def _refresh_panels(self) -> None:
-        """Background worker: refresh kanban + instances every 2s."""
+    async def _refresh_loop(self) -> None:
         while True:
             await asyncio.sleep(2.0)
-            self._do_refresh()
+            self.call_from_thread(self._reload_sessions)
+            self.call_from_thread(self._refresh_tasks)
 
-    def _do_refresh(self) -> None:
-        # Kanban
-        kanban_panel = self.query_one("#kanban", KanbanPanel)
-        if self._instance_id:
-            kanban_path = self._instances_dir / self._instance_id / "kanban.md"
-            content = kanban_path.read_text(encoding="utf-8") if kanban_path.exists() else ""
-            kanban_panel.update_kanban(content)
+    @on(ListView.Selected, "#sessions")
+    def on_session_selected(self, event: ListView.Selected) -> None:
+        item = event.item
+        session_id = getattr(item, "session_id", None)
+        if session_id:
+            self._attach_session(session_id)
 
-        # Instances
-        inst_panel = self.query_one("#instances", InstancePanel)
-        instances = _load_instances(self._instances_dir)
-        inst_panel.update_instances(instances, self._instance_id)
+    @on(Button.Pressed, "#new-session")
+    def on_new_button(self) -> None:
+        self.action_new_session()
 
-        # Status bar
-        status = self.query_one("#status", StatusBar)
-        alive = False
-        if self._instance_id:
-            try:
-                manifest_path = self._instances_dir / self._instance_id / "manifest.json"
-                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-                alive = _pid_alive(manifest.get("pid"))
-            except Exception:
-                pass
-        status.set_status(self._instance_id, alive)
+    @on(Button.Pressed, "#stop-session")
+    def on_stop_button(self) -> None:
+        self.action_stop_session()
+
+    @on(Button.Pressed, "#start-session")
+    def on_start_button(self) -> None:
+        self.action_start_session()
 
     @on(Input.Submitted, "#input")
     def on_input_submitted(self, event: Input.Submitted) -> None:
         text = event.value.strip()
-        self.query_one("#input", Input).clear()
+        event.input.clear()
         if not text:
             return
-
-        # Built-in commands
-        if text.lower() in ("/exit", "/quit", "/q"):
+        if text.lower() in {"/quit", "/q", "/exit"}:
             self.exit()
             return
-
-        if text.lower() == "/kanban":
-            kanban_path = self._instances_dir / self._instance_id / "kanban.md" if self._instance_id else None
-            content = kanban_path.read_text(encoding="utf-8").strip() if (kanban_path and kanban_path.exists()) else "(empty)"
-            chat = self.query_one("#chat", ChatView)
-            chat.add_event({"type": "status", "value": f"kanban:\n{content}"})
+        if text.lower() == "/tasks":
+            tasks_path = self._sessions_dir / self._session_id / "tasks.md" if self._session_id else None
+            content = tasks_path.read_text(encoding="utf-8").strip() if tasks_path and tasks_path.exists() else "(empty)"
+            self.query_one("#chat", ChatView).add_event({"type": "status", "value": f"tasks:\n{content}"})
             return
-
         if text.lower() == "/status":
-            pid = None
-            alive = False
-            if self._instance_id:
-                try:
-                    manifest_path = self._instances_dir / self._instance_id / "manifest.json"
-                    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-                    pid = manifest.get("pid")
-                    alive = _pid_alive(pid)
-                except Exception:
-                    pass
-            msg = f"server: {'running (pid ' + str(pid) + ')' if alive else 'not running'}"
-            chat = self.query_one("#chat", ChatView)
-            chat.add_event({"type": "status", "value": msg})
+            session = self._current_session()
+            if session is None:
+                message = "no session selected"
+            else:
+                _, label = _session_tone(session, self._model_status)
+                message = f"session: {session['id']} | state: {label} | model: {self._model_status}"
+            self.query_one("#chat", ChatView).add_event({"type": "status", "value": message})
             return
-
         if text.lower() == "/stop":
-            if self._instance_id:
-                _set_manifest_status(self._instances_dir / self._instance_id / "manifest.json", "stopped")
-            chat = self.query_one("#chat", ChatView)
-            chat.add_event({"type": "status", "value": "heartbeat paused (/start to resume)"})
+            self.action_stop_session()
             return
-
         if text.lower() == "/start":
-            if self._instance_id:
-                _set_manifest_status(self._instances_dir / self._instance_id / "manifest.json", "active")
-            chat = self.query_one("#chat", ChatView)
-            chat.add_event({"type": "status", "value": "heartbeat resumed"})
+            self.action_start_session()
             return
-
         if text.startswith("/"):
-            chat = self.query_one("#chat", ChatView)
-            chat.add_event({"type": "error", "content": f"Unknown command: {text}"})
+            self.query_one("#chat", ChatView).add_event({"type": "error", "content": f"Unknown command: {text}"})
             return
-
-        # Send to server
         if self._ipc is None:
-            chat = self.query_one("#chat", ChatView)
-            chat.add_event({"type": "error", "content": "No instance attached. Use --create or --attach."})
+            self.query_one("#chat", ChatView).add_event({"type": "error", "content": "No session attached."})
             return
-
         self._ipc.send_message(text)
-        chat = self.query_one("#chat", ChatView)
-        chat.add_event({"type": "user", "content": text})
+        self.query_one("#chat", ChatView).add_event({"type": "user", "content": text})
 
-    def action_new_instance(self) -> None:
-        instance_id = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        _create_instance(self._instances_dir, instance_id, self._entity)
-        self._attach_instance(instance_id)
-        self._do_refresh()
-        chat = self.query_one("#chat", ChatView)
-        chat.add_event({"type": "status", "value": f"Created instance: {instance_id}"})
+    def action_new_session(self) -> None:
+        session_id = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        _create_session(self._sessions_dir, session_id, self._entity)
+        self._reload_sessions()
+        self._attach_session(session_id)
+        self.query_one("#chat", ChatView).add_event({"type": "status", "value": f"Created session: {session_id}"})
 
+    def action_refresh_sessions(self) -> None:
+        self._reload_sessions()
+        self._refresh_tasks()
 
-# ── Entry point ────────────────────────────────────────────────────────────
+    def action_focus_sessions(self) -> None:
+        self.query_one("#sessions", ListView).focus()
+
+    def action_focus_input(self) -> None:
+        self.query_one("#input", Input).focus()
+
+    def action_stop_session(self) -> None:
+        if not self._session_id:
+            return
+        _set_manifest_status(self._sessions_dir / self._session_id / "manifest.json", "stopped")
+        self._reload_sessions()
+        self._refresh_status_bar()
+        self.query_one("#chat", ChatView).add_event({"type": "status", "value": "heartbeat paused"})
+
+    def action_start_session(self) -> None:
+        if not self._session_id:
+            return
+        _set_manifest_status(self._sessions_dir / self._session_id / "manifest.json", "active")
+        self._reload_sessions()
+        self._refresh_status_bar()
+        self.query_one("#chat", ChatView).add_event({"type": "status", "value": "heartbeat resumed"})
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Nutshell TUI")
     group = parser.add_mutually_exclusive_group()
-    group.add_argument("--create", metavar="ID", nargs="?", const="", help="Create new instance")
-    group.add_argument("--attach", metavar="ID", help="Attach to existing instance")
+    group.add_argument("--create", metavar="ID", nargs="?", const="", help="Create new session")
+    group.add_argument("--attach", metavar="ID", help="Attach to existing session")
     parser.add_argument("--entity", "-e", default=_DEFAULT_ENTITY)
-    parser.add_argument("--instances-dir", default=str(INSTANCES_DIR), metavar="DIR")
+    parser.add_argument("--sessions-dir", default=str(SESSIONS_DIR), metavar="DIR")
     args = parser.parse_args()
 
-    instances_dir = Path(args.instances_dir)
-    instances_dir.mkdir(parents=True, exist_ok=True)
+    sessions_dir = Path(args.sessions_dir)
+    sessions_dir.mkdir(parents=True, exist_ok=True)
 
-    instance_id: str | None = None
-
+    session_id: str | None
     if args.create is not None:
-        instance_id = args.create or datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        _create_instance(instances_dir, instance_id, args.entity)
+        session_id = args.create or datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        _create_session(sessions_dir, session_id, args.entity)
     elif args.attach:
-        instance_id = args.attach
+        session_id = args.attach
     else:
-        # Default: create new
-        instance_id = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        _create_instance(instances_dir, instance_id, args.entity)
+        session_id = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        _create_session(sessions_dir, session_id, args.entity)
 
-    app = NutshellTUI(instances_dir=instances_dir, instance_id=instance_id, entity=args.entity)
-    app.run()
+    NutshellTUI(sessions_dir=sessions_dir, session_id=session_id, entity=args.entity).run()
 
 
 if __name__ == "__main__":

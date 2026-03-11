@@ -1,13 +1,13 @@
-# Nutshell `v0.3.0`
+# Nutshell `v0.4.0`
 
-A minimal Python agent runtime. Agents run as persistent server-managed instances with autonomous heartbeat ticking, accessible via TUI or web browser.
+A minimal Python agent runtime. Agents run as persistent server-managed sessions with autonomous heartbeat ticking, accessible via TUI or web browser.
 
 ---
 
 ## How It Works
 
 ```
-nutshell-server          ← always-on backend (manages all instances)
+nutshell-server          ← always-on backend (manages all sessions)
 nutshell-tui             ← terminal UI
 nutshell-web             ← web UI (http://localhost:8080)
 ```
@@ -23,7 +23,7 @@ pip install -e .
 export ANTHROPIC_API_KEY=sk-...
 
 nutshell-server                          # terminal 1: keep running
-nutshell-tui --create my-instance        # terminal 2: TUI
+nutshell-tui --create my-project         # terminal 2: TUI
 nutshell-web                             # or: web UI at http://localhost:8080
 ```
 
@@ -31,14 +31,14 @@ nutshell-web                             # or: web UI at http://localhost:8080
 
 ## Concepts
 
-### Instance
+### Session
 
-An **instance** is a running agent session — a specific agent entity loaded into a persistent context. Each instance has its own directory:
+A **session** is a running agent instance — a specific agent entity loaded into a persistent context. Each session has its own directory:
 
 ```
-instances/my-instance/
+sessions/my-project/
 ├── manifest.json    ← config + runtime state (entity, heartbeat, status, pid)
-├── kanban.md        ← task board (read/written by the agent)
+├── tasks.md         ← task board (read/written by the agent)
 ├── context.jsonl    ← append-only event log: all conversation + IPC
 └── files/           ← attached files
 ```
@@ -51,7 +51,7 @@ instances/my-instance/
 | `turn` | Server | Completed agent turn (full Anthropic-format messages) |
 | `status` | Server | Status changes (resumed, cancelled, heartbeat paused) |
 | `error` | Server | Runtime errors |
-| `heartbeat_finished` | Server | Agent signalled `INSTANCE_FINISHED` |
+| `heartbeat_finished` | Server | Agent signalled `SESSION_FINISHED` |
 
 The UI derives display events (`user`, `agent`, `tool`, `heartbeat_trigger`) by parsing `turn` events.
 
@@ -71,13 +71,13 @@ entity/my-agent/
     └── search.json     ← tool schema (JSON Schema)
 ```
 
-Multiple instances can run from the same entity.
+Multiple sessions can run from the same entity.
 
 ### Heartbeat
 
-Every `heartbeat_interval` seconds (default: 10s), the server checks if `kanban.md` is non-empty. If so, the agent is invoked to continue work autonomously. The interval is counted **from when the previous tick completes**, so a slow agent never gets back-to-back ticks.
+Every `heartbeat_interval` seconds (default: 10s), the server checks if `tasks.md` is non-empty. If so, the agent is invoked to continue work autonomously. The interval is counted **from when the previous tick completes**, so a slow agent never gets back-to-back ticks.
 
-The agent signals completion by responding with `INSTANCE_FINISHED` — this clears the kanban and ends the heartbeat cycle.
+The agent signals completion by responding with `SESSION_FINISHED` — this clears the task board and ends the heartbeat cycle.
 
 ---
 
@@ -104,19 +104,19 @@ tools:
 
 ### `prompts/system.md`
 
-The agent's identity and rules. Agents that use the kanban should include kanban instructions:
+The agent's identity and rules. Agents that use the task board should include task instructions:
 
 ```markdown
 You are a focused coding assistant.
 
-## Kanban Board
+## Task Board
 
-You have a persistent kanban board for tracking work across sessions.
-Use read_kanban to check outstanding tasks.
-Use write_kanban to update the board when you finish each activation:
+You have a persistent task board for tracking work across sessions.
+Use read_tasks to check outstanding tasks.
+Use write_tasks to update the board when you finish each activation:
 - Remove completed tasks, leave unfinished ones with notes.
-- Call write_kanban("") when all work is done.
-An empty kanban means no outstanding work remains.
+- Call write_tasks("") when all work is done.
+An empty task board means no outstanding work remains.
 ```
 
 ### `prompts/heartbeat.md`
@@ -124,13 +124,13 @@ An empty kanban means no outstanding work remains.
 Instructions injected into every heartbeat prompt. If omitted, a generic fallback is used:
 
 ```markdown
-When activated by the heartbeat, continue working on your kanban tasks.
+When activated by the heartbeat, continue working on your tasks.
 After each heartbeat:
-- Call write_kanban("") when ALL tasks are finished.
-- Update kanban with progress notes if work remains.
+- Call write_tasks("") when ALL tasks are finished.
+- Update the task board with progress notes if work remains.
 - Summarize what you did.
 
-If all work is complete, respond with exactly: INSTANCE_FINISHED
+If all work is complete, respond with exactly: SESSION_FINISHED
 ```
 
 ### `skills/*.md`
@@ -209,36 +209,36 @@ agent = AgentLoader(impl_registry={"search_web": my_search_fn}).load(Path("entit
 ## Terminal UI
 
 ```bash
-nutshell-tui --create my-instance           # new instance (timestamp ID if no name)
-nutshell-tui --attach my-instance           # attach to existing
+nutshell-tui --create my-project            # new session (timestamp ID if no name)
+nutshell-tui --attach my-project            # attach to existing
 nutshell-tui --entity entity/my-agent       # specify entity (default: entity/agent_core)
-nutshell-tui --instances-dir ~/my-instances
+nutshell-tui --sessions-dir ~/my-sessions
 ```
 
 ```
 ┌──────────────────────────────────┬──────────────────────┐
-│  agent❯ I've started the tasks.  │  Kanban              │
+│  agent❯ I've started the tasks.  │  Tasks               │
 │  you  ❯ Add one more task.       │  ─────────────────   │
-│  agent❯ Added to kanban.         │  - Write report      │
+│  agent❯ Added to tasks.          │  - Write report      │
 │                                  │                      │
-│                                  │  Instances           │
+│                                  │  Sessions            │
 │                                  │  ─────────────────   │
-│                                  │  ● my-instance  ◀   │
-│                                  │  ○ old-instance      │
+│                                  │  ● my-project   ◀   │
+│                                  │  ○ old-project       │
 ├──────────────────────────────────┴──────────────────────┤
 │  > Type a message...                                     │
 ├──────────────────────────────────────────────────────────┤
-│  server: running (pid 12345)  │  instance: my-instance  │
+│  server: running (pid 12345)  │  session: my-project    │
 └──────────────────────────────────────────────────────────┘
 ```
 
 | Command | Action |
 |---------|--------|
-| `/kanban` | Show kanban inline |
+| `/tasks` | Show task board inline |
 | `/status` | Show server PID |
 | `/stop` | Pause heartbeat |
 | `/start` | Resume heartbeat |
-| `Ctrl+N` | New instance |
+| `Ctrl+N` | New session |
 | `/exit` or `q` | Quit (server keeps running) |
 
 ---
@@ -248,22 +248,22 @@ nutshell-tui --instances-dir ~/my-instances
 ```bash
 nutshell-web                          # http://localhost:8080
 nutshell-web --port 9000
-nutshell-web --instances-dir ~/my-instances
+nutshell-web --sessions-dir ~/my-sessions
 ```
 
-3-column layout: instance list (left), chat with SSE streaming (center), kanban editor (right). Stop/Start buttons per instance.
+3-column layout: session list (left), chat with SSE streaming (center), task editor (right). Stop/Start buttons per session.
 
 **API:**
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/api/instances` | List instances |
-| `POST` | `/api/instances` | Create instance |
-| `GET` | `/api/instances/{id}/history` | Full event history + current offset |
-| `GET` | `/api/instances/{id}/events?since=N` | SSE stream from byte offset |
-| `POST` | `/api/instances/{id}/messages` | Send user message |
-| `GET/PUT` | `/api/instances/{id}/kanban` | Read/write kanban |
-| `POST` | `/api/instances/{id}/stop\|start` | Pause/resume heartbeat |
+| `GET` | `/api/sessions` | List sessions |
+| `POST` | `/api/sessions` | Create session |
+| `GET` | `/api/sessions/{id}/history` | Full event history + current offset |
+| `GET` | `/api/sessions/{id}/events?since=N` | SSE stream from byte offset |
+| `POST` | `/api/sessions/{id}/messages` | Send user message |
+| `GET/PUT` | `/api/sessions/{id}/tasks` | Read/write task board |
+| `POST` | `/api/sessions/{id}/stop\|start` | Pause/resume heartbeat |
 
 ---
 
@@ -271,26 +271,27 @@ nutshell-web --instances-dir ~/my-instances
 
 ```
 nutshell/
+├── abstract/          # ABCs: BaseAgent, BaseTool, Provider, BaseLoader
 ├── core/
 │   ├── agent.py       # Agent — LLM loop, tool execution, history
-│   ├── instance.py    # Instance — persistent session + heartbeat daemon loop
-│   ├── ipc.py         # FileIPC — context.jsonl append + display event derivation
 │   ├── tool.py        # Tool + @tool decorator
 │   ├── skill.py       # Skill dataclass
 │   └── types.py       # Message, ToolCall, AgentResult
-├── loaders/
-│   ├── agent.py       # AgentLoader: entity/ dir → Agent
-│   ├── tool.py        # ToolLoader: .json → Tool (auto-wires built-ins)
-│   └── skill.py       # SkillLoader: .md → Skill
-├── tools/
-│   ├── bash.py        # create_bash_tool(): subprocess + PTY execution
-│   └── _registry.py   # Built-in tool registry (name → callable)
 ├── llm/
 │   ├── anthropic.py   # AnthropicProvider (default)
 │   └── openai.py      # OpenAIProvider
-├── infra/
+├── runtime/
+│   ├── session.py     # Session — persistent context + heartbeat daemon loop
+│   ├── ipc.py         # FileIPC — context.jsonl append + display event derivation
+│   ├── watcher.py     # SessionWatcher — polls sessions/ directory
 │   ├── server.py      # nutshell-server entry point
-│   └── watcher.py     # InstanceWatcher — polls instances/ directory
+│   ├── loaders/
+│   │   ├── agent.py   # AgentLoader: entity/ dir → Agent
+│   │   ├── tool.py    # ToolLoader: .json → Tool (auto-wires built-ins)
+│   │   └── skill.py   # SkillLoader: .md → Skill
+│   └── tools/
+│       ├── bash.py    # create_bash_tool(): subprocess + PTY execution
+│       └── _registry.py  # Built-in tool registry (name → callable)
 └── ui/
     ├── tui.py         # nutshell-tui (Textual)
     └── web.py         # nutshell-web (FastAPI + SSE)
@@ -308,21 +309,28 @@ pytest tests/    # uses MockProvider, no API key needed
 
 ## Changelog
 
+### v0.4.0
+- **Restructured package layout** — `loaders/` and `tools/` moved into `runtime/` sub-packages; `infra/` renamed to `runtime/`. The package now has four clear layers: `abstract` (interfaces), `core` (pure agent logic), `llm` (providers), `runtime` (server + loaders + built-in tools), `ui` (interfaces).
+- **`Instance` → `Session`** — the persistent run context class is now `Session`; `INSTANCE_FINISHED` → `SESSION_FINISHED`; default storage directory `instances/` → `sessions/`.
+- **`kanban.md` → `tasks.md`** — the per-session task board file is renamed; injected agent tools renamed `read_tasks` / `write_tasks`; API routes `/kanban` → `/tasks`; TUI command `/kanban` → `/tasks`.
+- **Removed `echo` built-in from `agent_core`** — was a test-only tool with no practical use in the default agent.
+- **Removed duplicate `providers/` package** — was an exact copy of `llm/`, dead code.
+
 ### v0.3.0
 - **Built-in `bash` tool** — `create_bash_tool()` factory returns a Tool agents can use to run shell commands. Two execution modes: async subprocess (default) and PTY (`pty=True`, preserves `isatty()` / color output, Unix only via stdlib `pty` + reader thread pattern).
-- **Built-in tool registry** — `nutshell/tools/_registry.py` maps tool names to implementations. `ToolLoader` falls back to this registry automatically, so entities can declare `bash` (and future built-ins) in `agent.yaml` without any Python wiring.
+- **Built-in tool registry** — `_registry.py` maps tool names to implementations. `ToolLoader` falls back to this registry automatically, so entities can declare `bash` in `agent.yaml` without any Python wiring.
 - **`entity/agent_core` gains `bash` tool** — `tools/bash.json` added and registered in `agent.yaml`.
 - **`create_bash_tool` exported** from `nutshell` top-level.
 
 ### v0.2.0
-- **Single-file IPC** — `context.jsonl` replaces `inbox.jsonl`, `outbox.jsonl`, and `daemon.pid`. Instance directory reduced from 6 files to 3.
+- **Single-file IPC** — `context.jsonl` replaces `inbox.jsonl`, `outbox.jsonl`, and `daemon.pid`. Session directory reduced from 6 files to 3.
 - **Append-only context** — every write is O(1); no more read-modify-write JSON array.
 - **PID in manifest** — `daemon.pid` eliminated; PID stored in `manifest.json["pid"]`.
 - **Heartbeat prompt in entity** — behavior instructions moved from hardcoded Python to `prompts/heartbeat.md`, configurable per agent via `agent.yaml`.
 - **Dead code removed** — `BaseSkill`, `PromptLoader`, `Skill.to_prompt_fragment()`, `Instance.is_done()`, `Instance.close()`, `.nutshell_log`.
 
 ### v0.1.1
-- History resume, lossless context storage, inbox replay prevention, heartbeat ghost output fix, stop/start indicator, crashed instance restart.
+- History resume, lossless context storage, inbox replay prevention, heartbeat ghost output fix, stop/start indicator, crashed session restart.
 
 ### v0.1.0
-- Initial release: server + TUI + web UI, persistent instances, heartbeat, kanban.
+- Initial release: server + TUI + web UI, persistent sessions, heartbeat, task board.

@@ -4,8 +4,8 @@ from typing import Callable
 
 from nutshell.abstract.loader import BaseLoader
 from nutshell.core.agent import Agent
-from nutshell.loaders.skill import SkillLoader
-from nutshell.loaders.tool import ToolLoader
+from nutshell.runtime.loaders.skill import SkillLoader
+from nutshell.runtime.loaders.tool import ToolLoader
 
 
 def _load_prompt(path: Path) -> str:

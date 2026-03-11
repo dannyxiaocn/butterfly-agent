@@ -5,6 +5,7 @@ All communication flows through a single append-only context.jsonl file.
 Event types written to context.jsonl:
   user_input       — UI → daemon: {"type": "user_input", "content": "...", "id": "...", "ts": "..."}
   turn             — daemon → UI: {"type": "turn", "triggered_by": "user|heartbeat", "messages": [...], "ts": "..."}
+  model_status     — daemon → UI: {"type": "model_status", "state": "running|idle", "source": "user|heartbeat", "ts": "..."}
   status           — daemon → UI: {"type": "status", "value": "...", "ts": "..."}
   error            — daemon → UI: {"type": "error", "content": "...", "ts": "..."}
   heartbeat_finished — daemon → UI: {"type": "heartbeat_finished", "ts": "..."}
@@ -13,6 +14,7 @@ Display events derived for the UI from context.jsonl:
   user             — from user_input
   agent            — from turn (last assistant message)
   tool             — from turn (tool_use blocks in assistant messages)
+  model_status     — passed through as-is
   heartbeat_trigger — from turn with triggered_by="heartbeat"
   heartbeat_finished, status, error — passed through as-is
 """
@@ -60,22 +62,22 @@ def _to_display_events(event: dict) -> list[dict]:
                 break
         return result
 
-    if etype in ("heartbeat_finished", "status", "error"):
+    if etype in ("model_status", "heartbeat_finished", "status", "error"):
         return [event]
 
     return []
 
 
 class FileIPC:
-    """File-based IPC for a single instance via a single append-only context.jsonl.
+    """File-based IPC for a single session via a single append-only context.jsonl.
 
-    Layout inside instance_dir/:
+    Layout inside session_dir/:
         context.jsonl — all events (user_input, turn, status, error, heartbeat_finished)
     """
 
-    def __init__(self, instance_dir: Path) -> None:
-        self.instance_dir = instance_dir
-        self.context_path = instance_dir / "context.jsonl"
+    def __init__(self, session_dir: Path) -> None:
+        self.session_dir = session_dir
+        self.context_path = session_dir / "context.jsonl"
 
     # ── Write ────────────────────────────────────────────────────────
 

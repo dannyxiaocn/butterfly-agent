@@ -10,7 +10,7 @@ from typing import Callable
 
 
 def _make_bash() -> Callable:
-    from nutshell.tools.bash import create_bash_tool
+    from nutshell.runtime.tools.bash import create_bash_tool
     return create_bash_tool()._func
 
 
