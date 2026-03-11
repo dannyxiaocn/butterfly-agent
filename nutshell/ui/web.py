@@ -69,14 +69,14 @@ def _read_session_info(session_dir: Path) -> dict | None:
 
 
 def _session_priority(info: dict) -> int:
-    """Return sort priority: 0=running, 1=queued, 2=idle, 3=stopped."""
+    """Return sort priority: 0=running, 1=napping(tasks queued), 2=stopped, 3=idle."""
     if info.get("model_state") == "running" and info.get("pid_alive") and info.get("status") != "stopped":
         return 0
     if info.get("has_tasks") and info.get("pid_alive") and info.get("status") != "stopped":
         return 1
     if info.get("status") == "stopped":
-        return 3
-    return 2
+        return 2
+    return 3
 
 
 def _sort_sessions(sessions: list[dict]) -> list[dict]:
@@ -209,7 +209,7 @@ def create_app(sessions_dir: Path) -> FastAPI:
     async def stop_session(session_id: str):
         from nutshell.runtime.ipc import FileIPC
         session_dir = sessions_dir / session_id
-        write_session_status(session_dir, status="stopped")
+        write_session_status(session_dir, status="stopped", stopped_at=datetime.now().isoformat())
         if session_dir.exists():
             FileIPC(session_dir).append(
                 {"type": "status", "value": "heartbeat paused — use ▶ Start to resume"}
@@ -220,7 +220,7 @@ def create_app(sessions_dir: Path) -> FastAPI:
     async def start_session(session_id: str):
         from nutshell.runtime.ipc import FileIPC
         session_dir = sessions_dir / session_id
-        write_session_status(session_dir, status="active")
+        write_session_status(session_dir, status="active", stopped_at=None)
         if session_dir.exists():
             FileIPC(session_dir).append(
                 {"type": "status", "value": "heartbeat resumed"}
@@ -287,14 +287,14 @@ _HTML = r"""<!DOCTYPE html>
   #session-name { font-size: 11px; color: var(--muted); }
   #session-indicator { display: flex; align-items: center; gap: 8px; padding: 4px 10px; border: 1px solid var(--border); border-radius: 999px; font-size: 11px; color: var(--muted); }
   #session-indicator.running { border-color: rgba(63, 185, 80, 0.45); color: #b8f3c0; background: rgba(63, 185, 80, 0.12); }
-  #session-indicator.queued { border-color: rgba(210, 153, 34, 0.45); color: #f4d48c; background: rgba(210, 153, 34, 0.12); }
-  #session-indicator.idle { border-color: var(--border); color: var(--muted); background: transparent; }
+  #session-indicator.napping { border-color: rgba(210, 153, 34, 0.45); color: #f4d48c; background: rgba(210, 153, 34, 0.12); }
   #session-indicator.stopped { border-color: rgba(248, 81, 73, 0.45); color: #ffb7b1; background: rgba(248, 81, 73, 0.12); }
+  #session-indicator.idle { border-color: var(--border); color: var(--muted); background: transparent; }
   #session-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
   #session-indicator.running #session-dot { background: var(--green); animation: pulse-dot 1.5s ease-in-out infinite; }
-  #session-indicator.queued #session-dot { background: var(--yellow); }
-  #session-indicator.idle #session-dot { background: var(--muted); }
+  #session-indicator.napping #session-dot { background: var(--yellow); animation: pulse-dot 2.5s ease-in-out infinite; }
   #session-indicator.stopped #session-dot { background: var(--red); }
+  #session-indicator.idle #session-dot { background: var(--muted); }
 
   @keyframes pulse-dot { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
 
@@ -314,9 +314,9 @@ _HTML = r"""<!DOCTYPE html>
   .session-meta { font-size: 10px; color: var(--muted); margin-top: 2px; }
   .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }
   .dot.running { background: var(--green); animation: pulse-dot 1.5s ease-in-out infinite; }
-  .dot.queued { background: var(--yellow); }
-  .dot.idle { background: var(--muted); }
+  .dot.napping { background: var(--yellow); animation: pulse-dot 2.5s ease-in-out infinite; }
   .dot.stopped { background: var(--red); }
+  .dot.idle { background: var(--muted); }
   #new-btn { margin: 10px 10px 0; padding: 6px 10px; background: var(--accent); color: #000; border: none; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 600; }
   #new-btn:hover { opacity: 0.85; }
   .session-controls { display: flex; gap: 4px; margin: 4px 10px 10px; }
@@ -332,7 +332,7 @@ _HTML = r"""<!DOCTYPE html>
   .msg.agent.heartbeat-agent { border-left-color: #6b9fd4; opacity: 0.85; }
   .msg.user  { background: #1c2a3a; border-left: 3px solid var(--green); color: var(--text); align-self: flex-end; }
   .msg.tool  { background: var(--bg2); color: var(--yellow); font-size: 11px; border-left: 3px solid var(--yellow); white-space: pre-wrap; }
-  .msg.heartbeat_trigger { background: #1a2535; border: 1px dashed #3a5a8a; color: #6b9fd4; font-size: 11px; align-self: flex-end; border-radius: 12px; padding: 3px 10px; }
+  .msg.heartbeat_trigger { background: #1a2030; border-left: 3px solid var(--accent); color: var(--text); align-self: flex-end; }
   .msg.heartbeat_finished { color: var(--muted); font-size: 11px; }
   .msg.status { color: var(--muted); font-size: 11px; text-align: center; align-self: center; }
   .msg.error  { background: #2d1515; border-left: 3px solid var(--red); color: var(--red); }
@@ -617,18 +617,19 @@ _HTML = r"""<!DOCTYPE html>
     const etype = event.type || 'message';
 
     if (etype === 'model_status') {
-      const wasRunning = modelState.state === 'running';
       modelState = { state: event.state || 'idle', source: event.source || null };
       const meta = currentSessionMeta();
       if (meta) {
         meta.model_state = modelState.state;
         meta.model_source = modelState.source;
       }
-      if (modelState.state === 'running' && !thinkingEl) {
-        showThinking();
-      } else if (modelState.state !== 'running' && wasRunning) {
-        // Model finished but no agent event yet — keep bubble until agent arrives
-        // (agent event will call hideThinking)
+      if (modelState.state === 'running') {
+        if (!thinkingEl) showThinking();
+      } else {
+        // Model is now idle. The turn/heartbeat_finished event was written BEFORE
+        // model_status(idle), so any agent event already arrived and called hideThinking().
+        // This call handles edge cases (error, cancelled, heartbeat SESSION_FINISHED).
+        hideThinking();
       }
       renderSessionIndicator();
       renderSessionList();
@@ -658,14 +659,17 @@ _HTML = r"""<!DOCTYPE html>
     } else if (etype === 'tool') {
       html = escHtml(`[${event.name}] ` + JSON.stringify(event.input || {}));
     } else if (etype === 'heartbeat_trigger') {
-      html = '⏱ Heartbeat';
+      label = '⏱ server';
+      html = '<em>heartbeat — checking tasks</em>';
     } else if (etype === 'heartbeat_finished') {
+      hideThinking();
       html = '[session finished — all tasks done]';
     } else if (etype === 'status') {
       html = event.value === 'cancelled' || event.value === 'stopped'
         ? '[server stopped]'
         : `[status: ${escHtml(String(event.value || ''))}]`;
     } else if (etype === 'error') {
+      hideThinking();
       html = `[error] ${escHtml(event.content || '')}`;
     } else {
       html = escHtml(JSON.stringify(event));
@@ -701,9 +705,9 @@ _HTML = r"""<!DOCTYPE html>
 
   function sessionTone(session) {
     if (!session) return 'idle';
+    if (session.pid_alive && session.model_state === 'running' && session.status !== 'stopped') return 'running';
+    if (session.has_tasks && session.pid_alive && session.status !== 'stopped') return 'napping';
     if (session.status === 'stopped') return 'stopped';
-    if (session.pid_alive && session.model_state === 'running') return 'running';
-    if (session.has_tasks && session.pid_alive) return 'queued';
     return 'idle';
   }
 
@@ -723,15 +727,15 @@ _HTML = r"""<!DOCTYPE html>
 
     let tone = 'idle';
     let label = 'idle';
-    if (meta.status === 'stopped') {
-      tone = 'stopped';
-      label = 'stopped';
-    } else if (meta.pid_alive && (meta.model_state === 'running' || modelState.state === 'running')) {
+    if (meta.pid_alive && (meta.model_state === 'running' || modelState.state === 'running') && meta.status !== 'stopped') {
       tone = 'running';
       label = `running (${modelState.source || meta.model_source || 'user'})`;
-    } else if (meta.has_tasks && meta.pid_alive) {
-      tone = 'queued';
-      label = 'tasks queued';
+    } else if (meta.has_tasks && meta.pid_alive && meta.status !== 'stopped') {
+      tone = 'napping';
+      label = 'napping';
+    } else if (meta.status === 'stopped') {
+      tone = 'stopped';
+      label = 'stopped';
     }
 
     indicator.className = tone;

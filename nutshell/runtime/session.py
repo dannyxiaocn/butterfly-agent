@@ -187,8 +187,11 @@ class Session:
         return read_session_status(self.session_dir).get("status") == "stopped"
 
     def set_status(self, status: str) -> None:
-        """Write status field to status.json."""
-        write_session_status(self.session_dir, status=status)
+        """Write status field to status.json. Clears stopped_at when resuming."""
+        updates: dict = {"status": status}
+        if status == "active":
+            updates["stopped_at"] = None
+        write_session_status(self.session_dir, **updates)
 
     def _write_pid(self) -> None:
         """Write current process PID into status.json."""
@@ -216,6 +219,8 @@ class Session:
         """
         self._ipc = ipc
         self._write_pid()
+        # Reset stale "running" state from a previous crash
+        write_session_status(self.session_dir, model_state="idle", model_source="system")
 
         # Skip existing context events — only process new user_input events.
         # Starting at current file size prevents replay of prior session messages.
@@ -236,6 +241,20 @@ class Session:
                         await self.chat(content)
                     except Exception as exc:
                         self._append_context({"type": "error", "content": str(exc)})
+
+                # Auto-expire stopped sessions after 5 hours
+                if self.is_stopped():
+                    st = read_session_status(self.session_dir)
+                    stopped_at_str = st.get("stopped_at")
+                    if stopped_at_str:
+                        try:
+                            elapsed = (datetime.now() - datetime.fromisoformat(stopped_at_str)).total_seconds()
+                            if elapsed >= 5 * 3600:
+                                self.tasks_path.write_text("", encoding="utf-8")
+                                write_session_status(self.session_dir, status="active", stopped_at=None)
+                                self._append_context({"type": "status", "value": "auto-expired after 5h stopped"})
+                        except Exception:
+                            pass
 
                 # Heartbeat timer — check elapsed since last tick COMPLETED
                 now = asyncio.get_event_loop().time()

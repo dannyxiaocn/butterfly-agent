@@ -2,8 +2,11 @@
 from __future__ import annotations
 import asyncio
 import json
+from datetime import datetime
 from pathlib import Path
 from typing import Callable
+
+_AUTO_EXPIRE_HOURS = 5
 
 
 class SessionWatcher:
@@ -94,9 +97,26 @@ class SessionWatcher:
             except (json.JSONDecodeError, OSError):
                 continue
 
-            from nutshell.runtime.status import read_session_status
-            if read_session_status(session_dir).get("status") == "stopped":
-                continue
+            from nutshell.runtime.status import read_session_status, write_session_status
+            status_data = read_session_status(session_dir)
+            if status_data.get("status") == "stopped":
+                # Auto-expire sessions stopped for more than _AUTO_EXPIRE_HOURS
+                stopped_at_str = status_data.get("stopped_at")
+                auto_expired = False
+                if stopped_at_str:
+                    try:
+                        elapsed = (datetime.now() - datetime.fromisoformat(stopped_at_str)).total_seconds()
+                        if elapsed >= _AUTO_EXPIRE_HOURS * 3600:
+                            write_session_status(session_dir, status="active", stopped_at=None)
+                            tasks_path = session_dir / "tasks.md"
+                            if tasks_path.exists():
+                                tasks_path.write_text("", encoding="utf-8")
+                            print(f"[server] Auto-expired stopped session: {session_id}")
+                            auto_expired = True
+                    except Exception:
+                        pass
+                if not auto_expired:
+                    continue
 
             discovered.append(session_id)
             task = asyncio.create_task(
