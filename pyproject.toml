@@ -4,14 +4,12 @@ build-backend = "hatchling.build"
 
 [project]
 name = "nutshell"
-version = "0.4.0"
+version = "0.5.0"
 description = "A minimal Python Agent library"
 requires-python = ">=3.11"
 dependencies = [
     "anthropic>=0.40.0",
     "pyyaml>=6.0",
-    "prompt-toolkit>=3.0",
-    "textual>=0.80",
     "fastapi>=0.115",
     "uvicorn>=0.30",
 ]
@@ -22,7 +20,6 @@ dev = ["pytest>=8.0.0", "pytest-asyncio>=0.24.0"]
 
 [project.scripts]
 nutshell-server = "nutshell.runtime.server:main"
-nutshell-tui    = "nutshell.ui.tui:main"
 nutshell-web    = "nutshell.ui.web:main"
 
 [tool.pytest.ini_options]

@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 from nutshell.abstract.provider import Provider
 from nutshell.core.types import Message, ToolCall
@@ -25,6 +25,8 @@ class AnthropicProvider(Provider):
         tools: list["Tool"],
         system_prompt: str,
         model: str,
+        *,
+        on_text_chunk: Callable[[str], None] | None = None,
     ) -> tuple[str, list[ToolCall]]:
         api_messages = _to_api_messages(messages)
         api_tools = [t.to_api_dict() for t in tools] if tools else []
@@ -38,7 +40,14 @@ class AnthropicProvider(Provider):
         if api_tools:
             kwargs["tools"] = api_tools
 
-        response = await self._client.messages.create(**kwargs)
+        if on_text_chunk is not None:
+            # Streaming mode — yields text chunks as they arrive
+            async with self._client.messages.stream(**kwargs) as stream:
+                async for text in stream.text_stream:
+                    on_text_chunk(text)
+                response = await stream.get_final_message()
+        else:
+            response = await self._client.messages.create(**kwargs)
 
         content_text = ""
         tool_calls: list[ToolCall] = []

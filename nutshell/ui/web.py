@@ -21,7 +21,7 @@ from typing import AsyncIterator
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
-from nutshell.runtime.status import ensure_session_status, read_session_status
+from nutshell.runtime.status import ensure_session_status, read_session_status, write_session_status
 
 SESSIONS_DIR = Path("sessions")
 _DEFAULT_ENTITY = "entity/agent_core"
@@ -39,6 +39,7 @@ def _pid_alive(pid: int | None) -> bool:
 
 
 def _read_session_info(session_dir: Path) -> dict | None:
+    """Read session metadata from manifest.json (static) and status.json (dynamic)."""
     manifest_path = session_dir / "manifest.json"
     if not manifest_path.exists():
         return None
@@ -46,22 +47,45 @@ def _read_session_info(session_dir: Path) -> dict | None:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except Exception:
         manifest = {}
+    # All dynamic state comes from status.json
+    status_payload = read_session_status(session_dir)
     tasks_path = session_dir / "tasks.md"
     has_tasks = tasks_path.exists() and bool(tasks_path.read_text(encoding="utf-8").strip())
-    pid_alive = _pid_alive(manifest.get("pid"))
-    status = manifest.get("status", "active")
-    status_payload = read_session_status(session_dir)
+    pid_alive = _pid_alive(status_payload.get("pid"))
+    status = status_payload.get("status", "active")
     return {
         "id": session_dir.name,
         "entity": manifest.get("entity", "?"),
         "created_at": manifest.get("created_at", ""),
+        "heartbeat": manifest.get("heartbeat", 10.0),
         "pid_alive": pid_alive,
         "status": status,
         "has_tasks": has_tasks,
         "model_state": status_payload.get("model_state", "idle"),
         "model_source": status_payload.get("model_source"),
+        "last_run_at": status_payload.get("last_run_at"),
         "alive": pid_alive and status != "stopped",
     }
+
+
+def _session_priority(info: dict) -> int:
+    """Return sort priority: 0=running, 1=queued, 2=idle, 3=stopped."""
+    if info.get("model_state") == "running" and info.get("pid_alive") and info.get("status") != "stopped":
+        return 0
+    if info.get("has_tasks") and info.get("pid_alive") and info.get("status") != "stopped":
+        return 1
+    if info.get("status") == "stopped":
+        return 3
+    return 2
+
+
+def _sort_sessions(sessions: list[dict]) -> list[dict]:
+    """Sort sessions: running > queued > idle > stopped, then by most recently run, then by creation time."""
+    # Step 1: stable sort by timestamp descending (most recent first)
+    sessions.sort(key=lambda s: s.get("last_run_at") or s.get("created_at") or "", reverse=True)
+    # Step 2: stable sort by priority ascending — preserves timestamp order within groups
+    sessions.sort(key=_session_priority)
+    return sessions
 
 
 # ── FastAPI app ────────────────────────────────────────────────────────────
@@ -82,13 +106,13 @@ def create_app(sessions_dir: Path) -> FastAPI:
         if not sessions_dir.exists():
             return []
         result = []
-        for d in sorted(sessions_dir.iterdir()):
+        for d in sessions_dir.iterdir():
             if not d.is_dir():
                 continue
             info = _read_session_info(d)
             if info is not None:
                 result.append(info)
-        return result
+        return _sort_sessions(result)
 
     @app.post("/api/sessions")
     async def create_session(body: dict):
@@ -102,6 +126,7 @@ def create_app(sessions_dir: Path) -> FastAPI:
         (session_dir / "context.jsonl").touch(exist_ok=True)
         (session_dir / "tasks.md").touch(exist_ok=True)
 
+        # manifest.json is purely static config — written once, never mutated
         manifest = {
             "session_id": session_id,
             "entity": entity,
@@ -111,6 +136,7 @@ def create_app(sessions_dir: Path) -> FastAPI:
         (session_dir / "manifest.json").write_text(
             json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
         )
+        # status.json holds all runtime/dynamic state
         ensure_session_status(session_dir)
         return {"id": session_id, "entity": entity}
 
@@ -138,11 +164,11 @@ def create_app(sessions_dir: Path) -> FastAPI:
             from nutshell.runtime.ipc import FileIPC
             ipc = FileIPC(session_dir)
             offset = since
-            # Yield existing events first
+            # Yield events that appeared before the SSE connection was established
             for event, new_offset in ipc.tail_display(offset):
                 offset = new_offset
                 yield _sse_format(event)
-            # Then stream new events
+            # Then stream new events as they arrive
             while True:
                 await asyncio.sleep(0.3)
                 for event, new_offset in ipc.tail_display(offset):
@@ -166,12 +192,13 @@ def create_app(sessions_dir: Path) -> FastAPI:
 
         JS loads this once on attach to render full history instantly,
         then starts SSE from the returned offset for new events only.
+        Partial text (streaming chunks) are skipped — only complete turns appear.
         """
         from nutshell.runtime.ipc import FileIPC
         ipc = FileIPC(sessions_dir / session_id)
         events: list[dict] = []
         size = 0
-        for event, offset in ipc.tail_display(0):
+        for event, offset in ipc.tail_display(0, skip_partial=True):
             events.append(event)
             size = offset
         return {"events": events, "offset": size}
@@ -182,7 +209,7 @@ def create_app(sessions_dir: Path) -> FastAPI:
     async def stop_session(session_id: str):
         from nutshell.runtime.ipc import FileIPC
         session_dir = sessions_dir / session_id
-        _set_manifest_status(session_dir / "manifest.json", "stopped")
+        write_session_status(session_dir, status="stopped")
         if session_dir.exists():
             FileIPC(session_dir).append(
                 {"type": "status", "value": "heartbeat paused — use ▶ Start to resume"}
@@ -193,7 +220,7 @@ def create_app(sessions_dir: Path) -> FastAPI:
     async def start_session(session_id: str):
         from nutshell.runtime.ipc import FileIPC
         session_dir = sessions_dir / session_id
-        _set_manifest_status(session_dir / "manifest.json", "active")
+        write_session_status(session_dir, status="active")
         if session_dir.exists():
             FileIPC(session_dir).append(
                 {"type": "status", "value": "heartbeat resumed"}
@@ -221,17 +248,6 @@ def create_app(sessions_dir: Path) -> FastAPI:
     return app
 
 
-def _set_manifest_status(manifest_path: Path, status: str) -> None:
-    if not manifest_path.exists():
-        return
-    try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        manifest["status"] = status
-        manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
-    except Exception:
-        pass
-
-
 def _sse_format(event: dict) -> str:
     etype = event.get("type", "message")
     data = json.dumps(event, ensure_ascii=False)
@@ -240,12 +256,13 @@ def _sse_format(event: dict) -> str:
 
 # ── Embedded HTML ──────────────────────────────────────────────────────────
 
-_HTML = """<!DOCTYPE html>
+_HTML = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Nutshell</title>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -274,10 +291,12 @@ _HTML = """<!DOCTYPE html>
   #session-indicator.idle { border-color: var(--border); color: var(--muted); background: transparent; }
   #session-indicator.stopped { border-color: rgba(248, 81, 73, 0.45); color: #ffb7b1; background: rgba(248, 81, 73, 0.12); }
   #session-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
-  #session-indicator.running #session-dot { background: var(--green); }
+  #session-indicator.running #session-dot { background: var(--green); animation: pulse-dot 1.5s ease-in-out infinite; }
   #session-indicator.queued #session-dot { background: var(--yellow); }
   #session-indicator.idle #session-dot { background: var(--muted); }
   #session-indicator.stopped #session-dot { background: var(--red); }
+
+  @keyframes pulse-dot { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
 
   /* Layout */
   #main { display: flex; flex: 1; overflow: hidden; }
@@ -294,7 +313,7 @@ _HTML = """<!DOCTYPE html>
   .session-name { font-weight: 500; color: var(--text); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .session-meta { font-size: 10px; color: var(--muted); margin-top: 2px; }
   .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }
-  .dot.running { background: var(--green); }
+  .dot.running { background: var(--green); animation: pulse-dot 1.5s ease-in-out infinite; }
   .dot.queued { background: var(--yellow); }
   .dot.idle { background: var(--muted); }
   .dot.stopped { background: var(--red); }
@@ -308,19 +327,44 @@ _HTML = """<!DOCTYPE html>
 
   /* Chat */
   #messages { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
-  .msg { padding: 6px 10px; border-radius: 6px; max-width: 90%; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+  .msg { padding: 6px 10px; border-radius: 6px; max-width: 90%; line-height: 1.6; word-break: break-word; }
   .msg.agent { background: var(--bg3); border-left: 3px solid var(--accent); color: var(--text); }
   .msg.agent.heartbeat-agent { border-left-color: #6b9fd4; opacity: 0.85; }
   .msg.user  { background: #1c2a3a; border-left: 3px solid var(--green); color: var(--text); align-self: flex-end; }
-  .msg.tool  { background: var(--bg2); color: var(--yellow); font-size: 11px; border-left: 3px solid var(--yellow); }
+  .msg.tool  { background: var(--bg2); color: var(--yellow); font-size: 11px; border-left: 3px solid var(--yellow); white-space: pre-wrap; }
   .msg.heartbeat_trigger { background: #1a2535; border: 1px dashed #3a5a8a; color: #6b9fd4; font-size: 11px; align-self: flex-end; border-radius: 12px; padding: 3px 10px; }
   .msg.heartbeat_finished { color: var(--muted); font-size: 11px; }
   .msg.status { color: var(--muted); font-size: 11px; text-align: center; align-self: center; }
   .msg.error  { background: #2d1515; border-left: 3px solid var(--red); color: var(--red); }
-  .msg-label  { font-size: 10px; color: var(--muted); margin-bottom: 2px; }
-  .msg-ts { font-size: 10px; color: var(--muted); opacity: 0.5; margin-top: 3px; }
+  .msg-label  { font-size: 10px; color: var(--muted); margin-bottom: 4px; }
+  .msg-ts { font-size: 10px; color: var(--muted); opacity: 0.5; margin-top: 4px; }
   .msg-inline { display: inline-flex; align-items: center; gap: 8px; }
   .msg-inline-ts { font-size: 10px; color: var(--muted); opacity: 0.75; }
+
+  /* Thinking bubble */
+  .msg.thinking { background: var(--bg3); border-left: 3px solid var(--accent); color: var(--muted); }
+  .thinking-dots { display: inline-flex; gap: 4px; align-items: center; height: 20px; }
+  .thinking-dots span { width: 6px; height: 6px; background: var(--accent); border-radius: 50%; display: inline-block; animation: thinking-bounce 1.2s ease-in-out infinite; }
+  .thinking-dots span:nth-child(2) { animation-delay: 0.2s; }
+  .thinking-dots span:nth-child(3) { animation-delay: 0.4s; }
+  @keyframes thinking-bounce { 0%,60%,100% { transform: translateY(0); opacity: 0.5; } 30% { transform: translateY(-5px); opacity: 1; } }
+
+  /* Markdown rendering inside agent messages */
+  .msg.agent p { margin: 0.4em 0; }
+  .msg.agent p:first-child { margin-top: 0; }
+  .msg.agent p:last-child { margin-bottom: 0; }
+  .msg.agent code { background: var(--bg); padding: 1px 5px; border-radius: 3px; font-family: inherit; font-size: 12px; }
+  .msg.agent pre { background: var(--bg); padding: 8px 10px; border-radius: 4px; overflow-x: auto; margin: 6px 0; }
+  .msg.agent pre code { padding: 0; background: none; }
+  .msg.agent ul, .msg.agent ol { margin: 0.4em 0 0.4em 1.4em; }
+  .msg.agent li { margin: 0.2em 0; }
+  .msg.agent h1, .msg.agent h2, .msg.agent h3, .msg.agent h4 { margin: 0.6em 0 0.3em; font-weight: 600; }
+  .msg.agent blockquote { border-left: 3px solid var(--border); padding-left: 8px; color: var(--muted); margin: 0.4em 0; }
+  .msg.agent table { border-collapse: collapse; width: 100%; margin: 0.4em 0; }
+  .msg.agent th, .msg.agent td { border: 1px solid var(--border); padding: 4px 8px; }
+  .msg.agent th { background: var(--bg2); }
+  .msg.agent a { color: var(--accent); }
+  .msg.user p { margin: 0; }
 
   /* Input */
   #input-row { padding: 10px 12px; border-top: 1px solid var(--border); display: flex; gap: 8px; background: var(--bg2); }
@@ -328,7 +372,6 @@ _HTML = """<!DOCTYPE html>
   #msg-input:focus { border-color: var(--accent); }
   #send-btn { padding: 8px 14px; background: var(--accent); color: #000; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 13px; }
   #send-btn:hover { opacity: 0.85; }
-  #no-session { color: var(--muted); font-size: 12px; align-self: center; }
 
   /* Tasks */
   #tasks-content { flex: 1; padding: 10px 12px; overflow-y: auto; white-space: pre-wrap; font-size: 12px; color: var(--text); line-height: 1.6; }
@@ -405,6 +448,12 @@ _HTML = """<!DOCTYPE html>
   let eventSource = null;
   let sessions = [];
   let modelState = { state: 'idle', source: null };
+  let thinkingEl = null;  // The active "thinking" bubble element
+
+  // Configure marked for safe rendering
+  if (typeof marked !== 'undefined') {
+    marked.setOptions({ breaks: true, gfm: true });
+  }
 
   // ── Init ──────────────────────────────────────────────────────────────
 
@@ -417,8 +466,10 @@ _HTML = """<!DOCTYPE html>
   // ── Sessions ──────────────────────────────────────────────────────────
 
   async function refreshSessions() {
-    const res = await fetch('/api/sessions');
-    sessions = await res.json();
+    try {
+      const res = await fetch('/api/sessions');
+      sessions = await res.json();
+    } catch (e) { return; }
     syncModelStateFromMeta();
     renderServerIndicator();
     renderSessionList();
@@ -436,16 +487,18 @@ _HTML = """<!DOCTYPE html>
   function renderSessionList() {
     const list = document.getElementById('session-list');
     list.innerHTML = '';
+    // Sessions arrive pre-sorted from the API
     for (const sess of sessions) {
       const tone = sessionTone(sess);
       const div = document.createElement('div');
       div.className = 'session-item' + (sess.id === currentSession ? ' active' : '');
       div.onclick = () => attachSession(sess.id);
+      const lastRun = sess.last_run_at ? fmtDate(sess.last_run_at) : (sess.created_at ? fmtDate(sess.created_at) : '');
       div.innerHTML = `
         <div class="session-name">
-          <span class="dot ${tone}"></span>${sess.id}
+          <span class="dot ${tone}"></span>${escHtml(sess.id)}
         </div>
-        <div class="session-meta">${sess.entity}</div>
+        <div class="session-meta">${escHtml(sess.entity)}${lastRun ? ' · ' + lastRun : ''}</div>
       `;
       list.appendChild(div);
     }
@@ -458,6 +511,7 @@ _HTML = """<!DOCTYPE html>
 
     // Close old SSE
     if (eventSource) { eventSource.close(); eventSource = null; }
+    hideThinking();
 
     // Clear chat
     const msgs = document.getElementById('messages');
@@ -470,16 +524,18 @@ _HTML = """<!DOCTYPE html>
     document.getElementById('msg-input').disabled = false;
     document.getElementById('send-btn').disabled = false;
 
-    // Load full history instantly, get current offset
+    // Load full history instantly (partial_text events are skipped server-side)
     const histRes = await fetch(`/api/sessions/${id}/history`);
     const { events, offset } = await histRes.json();
     for (const event of events) appendEvent(event);
     syncModelStateFromMeta();
     renderSessionIndicator();
+    // Restore thinking bubble if model is currently running
+    if (modelState.state === 'running') showThinking();
 
     // SSE from current offset — only new events from here on
     eventSource = new EventSource(`/api/sessions/${id}/events?since=${offset}`);
-    const types = ['agent','user','tool','model_status','heartbeat_trigger','heartbeat_finished','status','error'];
+    const types = ['agent','user','tool','model_status','partial_text','heartbeat_trigger','heartbeat_finished','status','error'];
     for (const t of types) {
       eventSource.addEventListener(t, e => appendEvent(JSON.parse(e.data)));
     }
@@ -502,6 +558,32 @@ _HTML = """<!DOCTYPE html>
     attachSession(data.id);
   }
 
+  // ── Thinking bubble ───────────────────────────────────────────────────
+
+  function showThinking(text) {
+    const msgs = document.getElementById('messages');
+    if (!thinkingEl) {
+      thinkingEl = document.createElement('div');
+      thinkingEl.className = 'msg thinking';
+      thinkingEl.id = 'thinking-bubble';
+      msgs.appendChild(thinkingEl);
+    }
+    if (text) {
+      const rendered = typeof marked !== 'undefined' ? marked.parse(text) : escHtml(text);
+      thinkingEl.innerHTML = '<div class="msg-label">agent</div><div class="thinking-text">' + rendered + '</div>';
+    } else {
+      thinkingEl.innerHTML = '<div class="msg-label">agent</div><div class="thinking-dots"><span></span><span></span><span></span></div>';
+    }
+    msgs.scrollTop = msgs.scrollHeight;
+  }
+
+  function hideThinking() {
+    if (thinkingEl) {
+      thinkingEl.remove();
+      thinkingEl = null;
+    }
+  }
+
   // ── Chat ──────────────────────────────────────────────────────────────
 
   function fmtTime(ts) {
@@ -512,61 +594,93 @@ _HTML = """<!DOCTYPE html>
     } catch { return ''; }
   }
 
+  function fmtDate(ts) {
+    if (!ts) return '';
+    try {
+      const d = new Date(ts);
+      const now = new Date();
+      const isToday = d.toDateString() === now.toDateString();
+      if (isToday) return d.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
+      return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    } catch { return ''; }
+  }
+
+  function renderMarkdown(text) {
+    if (typeof marked !== 'undefined') {
+      return marked.parse(text || '');
+    }
+    return '<pre style="white-space:pre-wrap">' + escHtml(text || '') + '</pre>';
+  }
+
   function appendEvent(event) {
     const msgs = document.getElementById('messages');
     const etype = event.type || 'message';
+
     if (etype === 'model_status') {
+      const wasRunning = modelState.state === 'running';
       modelState = { state: event.state || 'idle', source: event.source || null };
       const meta = currentSessionMeta();
       if (meta) {
         meta.model_state = modelState.state;
         meta.model_source = modelState.source;
       }
+      if (modelState.state === 'running' && !thinkingEl) {
+        showThinking();
+      } else if (modelState.state !== 'running' && wasRunning) {
+        // Model finished but no agent event yet — keep bubble until agent arrives
+        // (agent event will call hideThinking)
+      }
       renderSessionIndicator();
       renderSessionList();
       return;
     }
+
+    if (etype === 'partial_text') {
+      // Update the thinking bubble with streamed text
+      showThinking(event.content || '');
+      return;
+    }
+
     const div = document.createElement('div');
     div.className = `msg ${etype}`;
 
     let label = '';
-    let text = '';
+    let html = '';
 
     if (etype === 'agent') {
+      hideThinking();  // Replace thinking bubble with actual response
       label = event.triggered_by === 'heartbeat' ? '⏱ agent' : 'agent';
       div.className += event.triggered_by === 'heartbeat' ? ' heartbeat-agent' : '';
-      text = event.content || '';
+      html = renderMarkdown(event.content || '');
     } else if (etype === 'user') {
       label = 'you';
-      text = event.content || '';
+      html = '<p>' + escHtml(event.content || '') + '</p>';
     } else if (etype === 'tool') {
-      text = `[tool] ${event.name}(${JSON.stringify(event.input || {})})`;
+      html = escHtml(`[${event.name}] ` + JSON.stringify(event.input || {}));
     } else if (etype === 'heartbeat_trigger') {
-      text = '⏱ Heartbeat';
+      html = '⏱ Heartbeat';
     } else if (etype === 'heartbeat_finished') {
-      text = '[session finished — all tasks done]';
+      html = '[session finished — all tasks done]';
     } else if (etype === 'status') {
-      text = event.value === 'cancelled' || event.value === 'stopped'
+      html = event.value === 'cancelled' || event.value === 'stopped'
         ? '[server stopped]'
-        : `[status: ${event.value}]`;
+        : `[status: ${escHtml(String(event.value || ''))}]`;
     } else if (etype === 'error') {
-      text = `[error] ${event.content}`;
+      html = `[error] ${escHtml(event.content || '')}`;
     } else {
-      text = JSON.stringify(event);
+      html = escHtml(JSON.stringify(event));
     }
 
     const ts = fmtTime(event.ts);
     const tsHtml = ts ? `<div class="msg-ts">${ts}</div>` : '';
 
     if (etype === 'status') {
-      const prefix = ts ? `<span class="msg-inline-ts">${ts}</span>` : '';
-      div.innerHTML = `<div class="msg-inline">${prefix}${escHtml(text)}</div>`;
+      const prefix = ts ? `<span class="msg-inline-ts">${ts}</span> ` : '';
+      div.innerHTML = `<div class="msg-inline">${prefix}${html}</div>`;
     } else if (label) {
-      div.innerHTML = `<div class="msg-label">${label}</div>${escHtml(text)}${tsHtml}`;
-    } else if (etype === 'heartbeat_trigger') {
-      div.innerHTML = `${escHtml(text)}${tsHtml}`;
+      div.innerHTML = `<div class="msg-label">${label}</div>${html}${tsHtml}`;
     } else {
-      div.innerHTML = `${escHtml(text)}${tsHtml}`;
+      div.innerHTML = `${html}${tsHtml}`;
     }
 
     msgs.appendChild(div);
@@ -589,7 +703,7 @@ _HTML = """<!DOCTYPE html>
     if (!session) return 'idle';
     if (session.status === 'stopped') return 'stopped';
     if (session.pid_alive && session.model_state === 'running') return 'running';
-    if (session.has_tasks) return 'queued';
+    if (session.has_tasks && session.pid_alive) return 'queued';
     return 'idle';
   }
 
@@ -611,11 +725,11 @@ _HTML = """<!DOCTYPE html>
     let label = 'idle';
     if (meta.status === 'stopped') {
       tone = 'stopped';
-      label = 'stopped by user';
-    } else if (meta.pid_alive && meta.model_state === 'running') {
+      label = 'stopped';
+    } else if (meta.pid_alive && (meta.model_state === 'running' || modelState.state === 'running')) {
       tone = 'running';
-      label = `running (${meta.model_source || modelState.source || 'user'})`;
-    } else if (meta.has_tasks) {
+      label = `running (${modelState.source || meta.model_source || 'user'})`;
+    } else if (meta.has_tasks && meta.pid_alive) {
       tone = 'queued';
       label = 'tasks queued';
     }
@@ -645,16 +759,18 @@ _HTML = """<!DOCTYPE html>
 
   async function refreshTasks() {
     if (!currentSession) return;
-    const res = await fetch(`/api/sessions/${currentSession}/tasks`);
-    const data = await res.json();
-    const content = data.content?.trim() || '(empty)';
-    document.getElementById('tasks-content').textContent = content;
-    document.getElementById('tasks-textarea').value = data.content || '';
-    const meta = currentSessionMeta();
-    if (meta) meta.has_tasks = Boolean(data.content?.trim());
-    renderServerIndicator();
-    renderSessionIndicator();
-    renderSessionList();
+    try {
+      const res = await fetch(`/api/sessions/${currentSession}/tasks`);
+      const data = await res.json();
+      const content = data.content?.trim() || '(empty)';
+      document.getElementById('tasks-content').textContent = content;
+      document.getElementById('tasks-textarea').value = data.content || '';
+      const meta = currentSessionMeta();
+      if (meta) meta.has_tasks = Boolean(data.content?.trim());
+      renderServerIndicator();
+      renderSessionIndicator();
+      renderSessionList();
+    } catch (e) {}
   }
 
   function toggleTasksEdit() {
@@ -683,22 +799,18 @@ _HTML = """<!DOCTYPE html>
     if (!currentSession) return;
     await fetch(`/api/sessions/${currentSession}/stop`, { method: 'POST' });
     await refreshSessions();
-    renderServerIndicator();
-    renderSessionIndicator();
   }
 
   async function startSession() {
     if (!currentSession) return;
     await fetch(`/api/sessions/${currentSession}/start`, { method: 'POST' });
     await refreshSessions();
-    renderServerIndicator();
-    renderSessionIndicator();
   }
 
   // ── Utils ─────────────────────────────────────────────────────────────
 
   function escHtml(s) {
-    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   }
 
   init();

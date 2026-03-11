@@ -65,13 +65,12 @@ class SessionWatcher:
                 continue
 
             # Skip already-finished sessions, unless the user explicitly
-            # restarted them (manifest status set back to active).
+            # restarted them (status.json status set back to active).
             if session_id in self._finished:
-                try:
-                    status = json.loads(manifest_path.read_text(encoding="utf-8")).get("status")
-                except Exception:
-                    continue
-                if status == "stopped" or status is None:
+                from nutshell.runtime.status import read_session_status
+                status_data = read_session_status(session_dir)
+                status = status_data.get("status", "active")
+                if status == "stopped":
                     continue
                 # status is active — user wants to restart a crashed session
                 self._finished.discard(session_id)
@@ -95,7 +94,8 @@ class SessionWatcher:
             except (json.JSONDecodeError, OSError):
                 continue
 
-            if manifest.get("status") == "stopped":
+            from nutshell.runtime.status import read_session_status
+            if read_session_status(session_dir).get("status") == "stopped":
                 continue
 
             discovered.append(session_id)

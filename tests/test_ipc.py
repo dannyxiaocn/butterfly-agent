@@ -14,13 +14,13 @@ class MockProvider(Provider):
     def __init__(self, responses):
         self._responses = iter(responses)
 
-    async def complete(self, messages, tools, system_prompt, model):
+    async def complete(self, messages, tools, system_prompt, model, *, on_text_chunk=None):
         return next(self._responses)
 
 
 def _write_manifest(session_dir):
     (session_dir / "manifest.json").write_text(
-        json.dumps({"session_id": session_dir.name, "status": "active"}, ensure_ascii=False),
+        json.dumps({"session_id": session_dir.name}, ensure_ascii=False),
         encoding="utf-8",
     )
 
@@ -87,7 +87,7 @@ async def test_session_chat_writes_model_status_around_turn(tmp_path):
 @pytest.mark.asyncio
 async def test_session_chat_writes_idle_on_cancellation(tmp_path):
     class CancellingProvider(Provider):
-        async def complete(self, messages, tools, system_prompt, model):
+        async def complete(self, messages, tools, system_prompt, model, *, on_text_chunk=None):
             raise asyncio.CancelledError()
 
     agent = Agent(provider=CancellingProvider())

@@ -14,7 +14,7 @@ class MockProvider(Provider):
         # responses: list of (content, tool_calls) tuples
         self._responses = iter(responses)
 
-    async def complete(self, messages, tools, system_prompt, model):
+    async def complete(self, messages, tools, system_prompt, model, *, on_text_chunk=None):
         return next(self._responses)
 
 
@@ -90,7 +90,7 @@ async def test_skill_injected_into_system_prompt():
     captured = {}
 
     class CapturingProvider(Provider):
-        async def complete(self, messages, tools, system_prompt, model):
+        async def complete(self, messages, tools, system_prompt, model, *, on_text_chunk=None):
             captured["system_prompt"] = system_prompt
             return ("ok", [])
 

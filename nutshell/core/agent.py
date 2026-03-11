@@ -1,6 +1,6 @@
 from __future__ import annotations
 import asyncio
-from typing import Any, Literal
+from typing import Any, Callable, Literal
 
 from nutshell.abstract.agent import BaseAgent
 from nutshell.abstract.provider import Provider
@@ -68,7 +68,13 @@ class Agent(BaseAgent):
     def _tool_map(self) -> dict[str, Tool]:
         return {t.name: t for t in self.tools}
 
-    async def run(self, input: str, *, clear_history: bool = False) -> AgentResult:
+    async def run(
+        self,
+        input: str,
+        *,
+        clear_history: bool = False,
+        on_text_chunk: Callable[[str], None] | None = None,
+    ) -> AgentResult:
         """Run the agent with the given input and return an AgentResult.
 
         Args:
@@ -89,7 +95,11 @@ class Agent(BaseAgent):
                 tools=self.tools,
                 system_prompt=system,
                 model=self.model,
+                on_text_chunk=on_text_chunk,
             )
+            # Only stream the first completion; subsequent rounds (tool loops)
+            # don't stream since the user only cares about the final text.
+            on_text_chunk = None
 
             # Build assistant message content for Anthropic format
             assistant_content: Any = content

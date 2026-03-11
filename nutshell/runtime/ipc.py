@@ -26,13 +26,23 @@ from pathlib import Path
 from typing import Iterator
 
 
-def _to_display_events(event: dict) -> list[dict]:
-    """Convert a single context.jsonl event to zero or more UI display events."""
+def _to_display_events(event: dict, *, skip_partial: bool = False) -> list[dict]:
+    """Convert a single context.jsonl event to zero or more UI display events.
+
+    Args:
+        skip_partial: If True, omit ephemeral streaming events (partial_text).
+                      Use this for history loads to avoid replaying interim chunks.
+    """
     etype = event.get("type")
     ts = event.get("ts", "")
 
     if etype == "user_input":
         return [{"type": "user", "content": event.get("content", ""), "ts": ts}]
+
+    if etype == "partial_text":
+        if skip_partial:
+            return []
+        return [{"type": "partial_text", "content": event.get("content", ""), "ts": ts}]
 
     if etype == "turn":
         result: list[dict] = []
@@ -121,12 +131,16 @@ class FileIPC:
 
     # ── UI-side read ─────────────────────────────────────────────────
 
-    def tail_display(self, offset: int = 0) -> Iterator[tuple[dict, int]]:
+    def tail_display(self, offset: int = 0, *, skip_partial: bool = False) -> Iterator[tuple[dict, int]]:
         """Yield (display_event, line_end_offset) from context.jsonl starting at offset.
 
         Each raw event may expand to multiple display events (e.g. a turn with
         tool calls yields tool events + an agent event). All share the same
         line_end_offset so the UI can resume correctly.
+
+        Args:
+            skip_partial: Skip ephemeral partial_text events. Pass True when
+                          loading history to avoid replaying streaming chunks.
         """
         if not self.context_path.exists():
             return
@@ -142,7 +156,7 @@ class FileIPC:
                     continue
                 try:
                     event = json.loads(line)
-                    for display in _to_display_events(event):
+                    for display in _to_display_events(event, skip_partial=skip_partial):
                         yield display, line_end
                 except json.JSONDecodeError:
                     pass

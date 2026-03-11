@@ -1,6 +1,6 @@
-# Nutshell `v0.4.0`
+# Nutshell `v0.5.0`
 
-A minimal Python agent runtime. Agents run as persistent server-managed sessions with autonomous heartbeat ticking, accessible via TUI or web browser.
+A minimal Python agent runtime. Agents run as persistent server-managed sessions with autonomous heartbeat ticking, accessible via web browser.
 
 ---
 
@@ -8,11 +8,10 @@ A minimal Python agent runtime. Agents run as persistent server-managed sessions
 
 ```
 nutshell-server          ← always-on backend (manages all sessions)
-nutshell-tui             ← terminal UI
 nutshell-web             ← web UI (http://localhost:8080)
 ```
 
-Server and UIs communicate only through files — no sockets. You can open multiple UIs against the same server, attach and detach freely, and the server keeps running when you close a UI.
+Server and UI communicate only through files — no sockets. You can open multiple browser tabs against the same server, attach and detach freely, and the server keeps running when you close the browser.
 
 ---
 
@@ -23,8 +22,7 @@ pip install -e .
 export ANTHROPIC_API_KEY=sk-...
 
 nutshell-server                          # terminal 1: keep running
-nutshell-tui --create my-project         # terminal 2: TUI
-nutshell-web                             # or: web UI at http://localhost:8080
+nutshell-web                             # terminal 2: web UI at http://localhost:8080
 ```
 
 ---
@@ -37,12 +35,14 @@ A **session** is a running agent instance — a specific agent entity loaded int
 
 ```
 sessions/my-project/
-├── manifest.json    ← config + runtime state (entity, heartbeat, status, pid)
+├── manifest.json    ← static config (entity, heartbeat interval, created_at) — written once
+├── status.json      ← all dynamic state (model_state, pid, stopped/active, last_run_at)
 ├── tasks.md         ← task board (read/written by the agent)
 ├── context.jsonl    ← append-only event log: all conversation + IPC
-├── status.json      ← live model state (running/idle, source, updated_at)
 └── files/           ← attached files
 ```
+
+**Two-file state model**: `manifest.json` is immutable after creation. All runtime state — PID, running/idle, stopped/active, last run timestamp — lives in `status.json` and is updated continuously by the daemon.
 
 `context.jsonl` is the single source of truth. It is strictly append-only. All events flow through it:
 
@@ -50,14 +50,13 @@ sessions/my-project/
 |------|-----------|-------------|
 | `user_input` | UI | User message |
 | `turn` | Server | Completed agent turn (full Anthropic-format messages) |
+| `partial_text` | Server | Streaming text chunk (ephemeral — skipped on history replay) |
 | `model_status` | Server | Model state change: `{"state": "running\|idle", "source": "user\|heartbeat"}` |
 | `status` | Server | Session status changes (resumed, cancelled, heartbeat paused) |
 | `error` | Server | Runtime errors |
 | `heartbeat_finished` | Server | Agent signalled `SESSION_FINISHED` |
 
-The UI derives display events (`user`, `agent`, `tool`, `heartbeat_trigger`) by parsing `turn` events. `model_status` events drive live status indicators in both UIs — no polling required.
-
-`status.json` provides the same state as a plain file for UIs that poll rather than stream (e.g. the sidebar in the web UI).
+The UI derives display events (`user`, `agent`, `tool`, `heartbeat_trigger`) by parsing `turn` events. `model_status` events drive live status indicators — no polling required. `partial_text` events stream text chunks to the browser in real time during model output; they are skipped when replaying history.
 
 ### Entity
 
@@ -210,54 +209,6 @@ agent = AgentLoader(impl_registry={"search_web": my_search_fn}).load(Path("entit
 
 ---
 
-## Terminal UI
-
-```bash
-nutshell-tui --create my-project            # new session (timestamp ID if no name)
-nutshell-tui --attach my-project            # attach to existing
-nutshell-tui --entity entity/my-agent       # specify entity (default: entity/agent_core)
-nutshell-tui --sessions-dir ~/my-sessions
-```
-
-```
-┌──────────────────────────────────────┬──────────────────────────────┐
-│  Sessions         │  my-project      │  agent (heartbeat)           │
-│  ─────────────────│  running         │  I've finished the report.   │
-│  ► my-project     │                  │                              │
-│    tasks queued   │  you             │  Tasks                       │
-│  ─ old-project    │  Add one more.   │  ─────────────────────────   │
-│    idle           │                  │  - Write summary             │
-│                   │  agent           │                              │
-│                   │  Added to tasks. │                              │
-├───────────────────┴──────────────────┴──────────────────────────────┤
-│  session: my-project  |  state: tasks queued  |  model: idle        │
-├─────────────────────────────────────────────────────────────────────┤
-│  > Type a message or /tasks /status /stop /start /quit              │
-└─────────────────────────────────────────────────────────────────────┘
-```
-
-**Session states** (shown in sidebar and status bar):
-
-| State | Meaning |
-|-------|---------|
-| `running` | Agent actively generating (green) |
-| `tasks queued` | Tasks in `tasks.md`, heartbeat pending (yellow) |
-| `idle` | No pending tasks (dim) |
-| `stopped` | Heartbeat paused by user (red) |
-
-| Command / Binding | Action |
-|---------|--------|
-| `/tasks` | Show task board inline |
-| `/status` | Show session state |
-| `/stop` or `Ctrl+S` | Pause heartbeat |
-| `/start` or `Ctrl+G` | Resume heartbeat |
-| `Ctrl+N` | New session |
-| `Ctrl+J` | Focus session list |
-| `Ctrl+L` | Focus input |
-| `/exit` or `q` | Quit (server keeps running) |
-
----
-
 ## Web UI
 
 ```bash
@@ -266,7 +217,20 @@ nutshell-web --port 9000
 nutshell-web --sessions-dir ~/my-sessions
 ```
 
-3-column layout: session list (left, with live state dots), chat with SSE streaming (center), task editor (right). Stop/Start buttons per session. Header shows current session name and state indicator (running / tasks queued / idle / stopped).
+3-column layout: session list (left, with live state dots and sorted by activity), chat with SSE streaming (center), task editor (right). Stop/Start buttons per session. Header shows current session name and live state indicator.
+
+**Session states** (colour-coded in sidebar and header):
+
+| State | Meaning |
+|-------|---------|
+| `running` | Agent actively generating (green, pulsing) |
+| `tasks queued` | Tasks in `tasks.md`, heartbeat pending (yellow) |
+| `idle` | No pending tasks (dim) |
+| `stopped` | Heartbeat paused by user (red) |
+
+**Streaming**: While the agent generates text, a pulsing "thinking" bubble appears in real time. Text chunks stream into it via `partial_text` SSE events. Tool calls appear at the end of each turn. On history load, partial chunks are skipped — only complete turns are replayed.
+
+**Session ordering**: running > queued > idle > stopped. Within each group, most recently used sessions appear first.
 
 **API:**
 
@@ -309,7 +273,6 @@ nutshell/
 │       ├── bash.py    # create_bash_tool(): subprocess + PTY execution
 │       └── _registry.py  # Built-in tool registry (name → callable)
 └── ui/
-    ├── tui.py         # nutshell-tui (Textual)
     └── web.py         # nutshell-web (FastAPI + SSE)
 ```
 
@@ -324,6 +287,14 @@ pytest tests/    # uses MockProvider, no API key needed
 ---
 
 ## Changelog
+
+### v0.5.0
+- **Status-centric architecture** — `manifest.json` is now purely static config (written once at creation, never mutated). All dynamic runtime state (`pid`, `status`, `model_state`, `last_run_at`) lives in `status.json` and is updated continuously by the daemon. Eliminates the mixed-paradigm where half the state was in manifest and half in status.
+- **Streaming output** — `AnthropicProvider.complete()` now accepts an `on_text_chunk` callback; when provided it uses the Anthropic streaming API and emits `partial_text` events to `context.jsonl`. The web UI shows a real-time "thinking" bubble that fills with streamed text as it arrives.
+- **Markdown rendering** — Agent messages are rendered as Markdown (via `marked.js`): code blocks, lists, tables, headings, inline code, blockquotes.
+- **Session sorting** — Sessions in the sidebar are ordered by activity: running > tasks queued > idle > stopped, then by most-recently-run timestamp (most recent first), then by creation time.
+- **Removed TUI** — `nutshell-tui` and `textual` dependency removed. All UI effort goes into the web UI.
+- **`Provider.complete()` signature** — added `on_text_chunk: Callable[[str], None] | None = None` keyword argument to the abstract interface (backward compatible with `None` default).
 
 ### v0.4.0
 - **Restructured package layout** — `loaders/` and `tools/` moved into `runtime/` sub-packages; `infra/` renamed to `runtime/`. The package now has four clear layers: `abstract` (interfaces), `core` (pure agent logic), `llm` (providers), `runtime` (server + loaders + built-in tools), `ui` (interfaces).

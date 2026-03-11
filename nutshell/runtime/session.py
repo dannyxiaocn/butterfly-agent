@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 from nutshell.core.agent import Agent
 from nutshell.core.tool import tool
 from nutshell.core.types import AgentResult
-from nutshell.runtime.status import ensure_session_status, write_session_status
+from nutshell.runtime.status import ensure_session_status, read_session_status, write_session_status
 
 if TYPE_CHECKING:
     from nutshell.runtime.ipc import FileIPC
@@ -115,7 +115,10 @@ class Session:
         self._set_model_status("running", "user")
         try:
             async with self._agent_lock:
-                result = await self._agent.run(message)
+                result = await self._agent.run(
+                    message,
+                    on_text_chunk=self._make_text_chunk_callback(),
+                )
         except BaseException:
             self._set_model_status("idle", "user")
             raise
@@ -150,7 +153,10 @@ class Session:
         trigger_ts = self._set_model_status("running", "heartbeat")
         try:
             async with self._agent_lock:
-                result = await self._agent.run(prompt)
+                result = await self._agent.run(
+                    prompt,
+                    on_text_chunk=self._make_text_chunk_callback(),
+                )
         except BaseException:
             self._set_model_status("idle", "heartbeat")
             raise
@@ -176,58 +182,21 @@ class Session:
 
     # ── Stop / Start ───────────────────────────────────────────────
 
-    @property
-    def manifest_path(self) -> Path:
-        return self.session_dir / "manifest.json"
-
     def is_stopped(self) -> bool:
-        """True if manifest has status=stopped."""
-        if not self.manifest_path.exists():
-            return False
-        try:
-            manifest = json.loads(self.manifest_path.read_text(encoding="utf-8"))
-            return manifest.get("status") == "stopped"
-        except Exception:
-            return False
+        """True if status.json has status=stopped."""
+        return read_session_status(self.session_dir).get("status") == "stopped"
 
     def set_status(self, status: str) -> None:
-        """Write status field to manifest.json."""
-        if not self.manifest_path.exists():
-            return
-        try:
-            manifest = json.loads(self.manifest_path.read_text(encoding="utf-8"))
-            manifest["status"] = status
-            self.manifest_path.write_text(
-                json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
-            )
-        except Exception:
-            pass
+        """Write status field to status.json."""
+        write_session_status(self.session_dir, status=status)
 
     def _write_pid(self) -> None:
-        """Write current process PID into manifest.json."""
-        if not self.manifest_path.exists():
-            return
-        try:
-            manifest = json.loads(self.manifest_path.read_text(encoding="utf-8"))
-            manifest["pid"] = os.getpid()
-            self.manifest_path.write_text(
-                json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
-            )
-        except Exception:
-            pass
+        """Write current process PID into status.json."""
+        write_session_status(self.session_dir, pid=os.getpid())
 
     def _clear_pid(self) -> None:
-        """Clear PID from manifest.json when daemon stops."""
-        if not self.manifest_path.exists():
-            return
-        try:
-            manifest = json.loads(self.manifest_path.read_text(encoding="utf-8"))
-            manifest["pid"] = None
-            self.manifest_path.write_text(
-                json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
-            )
-        except Exception:
-            pass
+        """Clear PID from status.json when daemon stops."""
+        write_session_status(self.session_dir, pid=None)
 
     # ── Server loop ────────────────────────────────────────────────
 
@@ -324,11 +293,32 @@ class Session:
     def _set_model_status(self, state: str, source: str) -> str:
         ts = datetime.now().isoformat()
         self._append_context({"type": "model_status", "state": state, "source": source, "ts": ts})
-        try:
-            write_session_status(self.session_dir, model_state=state, model_source=source)
-        except Exception:
-            pass
+        updates: dict = {"model_state": state, "model_source": source}
+        if state == "idle":
+            updates["last_run_at"] = ts
+        write_session_status(self.session_dir, **updates)
         return ts
+
+    def _make_text_chunk_callback(self):
+        """Return a sync callback that writes throttled partial_text events.
+
+        Chunks are buffered and flushed every ~150 characters to limit
+        write frequency while still giving the UI near-real-time feedback.
+        """
+        buf: list[str] = []
+        buf_len: list[int] = [0]
+        FLUSH_THRESHOLD = 150
+
+        def on_chunk(chunk: str) -> None:
+            buf.append(chunk)
+            buf_len[0] += len(chunk)
+            if buf_len[0] >= FLUSH_THRESHOLD:
+                accumulated = "".join(buf)
+                self._append_context({"type": "partial_text", "content": accumulated})
+                buf.clear()
+                buf_len[0] = 0
+
+        return on_chunk
 
     def _serialize_turn_messages(self, messages: list) -> list[dict]:
         serialized: list[dict] = []
