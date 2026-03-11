@@ -12,11 +12,9 @@ from nutshell.core.types import AgentResult, Message, ToolCall
 # Abstract base classes
 from nutshell.abstract.agent import BaseAgent
 from nutshell.abstract.tool import BaseTool
-from nutshell.abstract.skill import BaseSkill
 from nutshell.abstract.loader import BaseLoader
 
 # External file loaders
-from nutshell.loaders.prompt import PromptLoader
 from nutshell.loaders.tool import ToolLoader
 from nutshell.loaders.skill import SkillLoader
 from nutshell.loaders.agent import AgentLoader
@@ -38,10 +36,8 @@ __all__ = [
     # Abstract base classes
     "BaseAgent",
     "BaseTool",
-    "BaseSkill",
     "BaseLoader",
     # Loaders
-    "PromptLoader",
     "ToolLoader",
     "SkillLoader",
     "AgentLoader",

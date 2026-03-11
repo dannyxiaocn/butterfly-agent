@@ -8,7 +8,7 @@ This example shows how the nutshell daemon and chat UI work together:
     Terminal 2 — create an instance and chat:
         python chat.py --create demo --entity entity/agent_core
 
-    Terminal 2 — re-attach (full history replayed from outbox):
+    Terminal 2 — re-attach (full history replayed from context.jsonl):
         python chat.py --attach demo
 
     Terminal 2 — list all instances:
@@ -41,25 +41,21 @@ def create_manifest(instances_dir: Path, instance_id: str, entity: str = "entity
 
 
 async def send_and_watch(instances_dir: Path, instance_id: str, message: str) -> None:
-    """Send a message to a running instance and watch the outbox for the reply."""
+    """Send a message to a running instance and watch context for the reply."""
     from nutshell.core.ipc import FileIPC
 
     instance_dir = instances_dir / instance_id
     ipc = FileIPC(instance_dir)
 
-    if not ipc.is_daemon_alive():
-        print("Daemon is not running. Start with: python -m nutshell.daemon")
-        return
-
-    offset = ipc.outbox_size()
+    offset = ipc.size()
     msg_id = ipc.send_message(message)
     print(f"Sent message [{msg_id[:8]}]: {message!r}")
     print("Waiting for reply...")
 
-    # Poll outbox for the reply
+    # Poll context for the reply
     for _ in range(30):  # up to 15 seconds
         await asyncio.sleep(0.5)
-        for event, new_offset in ipc.tail_outbox(offset):
+        for event, new_offset in ipc.tail_display(offset):
             offset = new_offset
             if event.get("type") == "agent":
                 print(f"Reply: {event['content']}")

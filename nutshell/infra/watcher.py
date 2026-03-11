@@ -136,8 +136,8 @@ class InstanceWatcher:
         instance = Instance(agent, instance_id=instance_id, base_dir=base_dir, heartbeat=heartbeat)
 
         # Always load history (needed for user messages even when kanban is empty)
-        context_path = instance_dir / "context.json"
-        if context_path.exists() and context_path.stat().st_size > 2:
+        context_path = instance_dir / "context.jsonl"
+        if context_path.exists() and context_path.stat().st_size > 0:
             instance.load_history()
 
         # Only announce if kanban has pending work — empty/idle instances are silent
@@ -152,4 +152,4 @@ class InstanceWatcher:
             raise
         except Exception as exc:
             print(f"[server] Instance {instance_id} crashed: {exc}")
-            ipc.append_outbox({"type": "error", "content": str(exc)})
+            ipc.append({"type": "error", "content": str(exc)})

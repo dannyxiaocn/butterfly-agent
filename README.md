@@ -1,4 +1,4 @@
-# Nutshell `v0.1.1`
+# Nutshell `v0.2.0`
 
 A minimal Python agent runtime. Agents run as persistent server-managed instances, accessible via a terminal UI or web browser — no Python required to create or run an agent.
 
@@ -43,14 +43,25 @@ An **instance** is a running agent session. Every instance has its own directory
 
 ```
 instances/my-agent/
-├── manifest.json    ← created by UI; tells server which entity to load
+├── manifest.json    ← config + runtime state (entity, heartbeat, status, pid)
 ├── kanban.md        ← task board (read/written by the agent)
-├── context.json     ← conversation log: "turn" events with full Anthropic-format messages
-├── inbox.jsonl      ← UI → server (append-only)
-├── outbox.jsonl     ← server → UI (append-only, tailed by UI)
-├── daemon.pid       ← server PID while instance is running
+├── context.jsonl    ← append-only event log: all conversation + IPC events
 └── files/           ← attached files
 ```
+
+`context.jsonl` is the single source of truth. It is strictly append-only and never rewritten. All IPC — both user messages inbound and agent output outbound — flows through this one file.
+
+**Event types in `context.jsonl`:**
+
+| Type | Written by | Description |
+|------|-----------|-------------|
+| `user_input` | UI | User message (replaces inbox.jsonl) |
+| `turn` | Server | Completed agent turn with full Anthropic-format messages |
+| `status` | Server | Status changes (resumed, cancelled, heartbeat paused) |
+| `error` | Server | Runtime errors |
+| `heartbeat_finished` | Server | Agent responded `INSTANCE_FINISHED` |
+
+The UI derives display events (`user`, `agent`, `tool`, `heartbeat_trigger`) by parsing `turn` events — no separate outbox needed.
 
 ### States
 
@@ -70,7 +81,7 @@ instances/my-agent/
 
 ### What wakes an instance
 
-1. **User message** — UI writes to `inbox.jsonl`; instance picks it up within 0.5s. A stopped instance is automatically un-stopped when a user message arrives.
+1. **User message** — UI appends a `user_input` event to `context.jsonl`; instance picks it up within 0.5s. A stopped instance is automatically un-stopped when a user message arrives.
 2. **Heartbeat** — every `heartbeat_interval` seconds (default: 10s), the server checks if `kanban.md` is non-empty. If so, it invokes the agent to continue work.
 
 ### Heartbeat timing
@@ -95,7 +106,7 @@ A user message always wakes a stopped instance regardless of status.
 
 On startup, the server scans all `instances/` subdirectories. Any instance with a `manifest.json` (and `status != stopped`) is resumed automatically:
 
-- **Conversation history** is restored from `context.json` — the agent remembers the full prior conversation including tool calls.
+- **Conversation history** is restored from `context.jsonl` — the agent remembers the full prior conversation including tool calls.
 - **Heartbeat** resumes immediately if `kanban.md` has pending tasks.
 - Instances with an empty kanban start silently (no log noise); instances with pending work log `Resumed: <id> (N messages, kanban pending)`.
 - Stopped instances (`status: stopped`) are skipped until the user clicks ▶ Start.
@@ -129,6 +140,7 @@ max_iterations: 20
 
 prompts:
   system: prompts/system.md
+  heartbeat: prompts/heartbeat.md  # optional: heartbeat behavior instructions
 
 skills:
   - skills/coding.md
@@ -158,6 +170,21 @@ Use write_kanban to update the board when you finish each activation:
 - Leave unfinished tasks with notes on next steps.
 - Call write_kanban("") when all work is done.
 An empty kanban means no outstanding work remains.
+```
+
+### `prompts/heartbeat.md` (optional)
+
+Instructions injected into every heartbeat activation prompt. If omitted, a generic fallback is used. This is where you define how the agent should behave during autonomous ticks:
+
+```markdown
+When activated by the heartbeat, continue working on your kanban tasks.
+
+After each heartbeat:
+- Call write_kanban("") when ALL tasks are finished.
+- Update kanban with progress notes if work remains.
+- Summarize what you did.
+
+If all work is complete, respond with exactly: INSTANCE_FINISHED
 ```
 
 ### `skills/*.md`
@@ -275,8 +302,8 @@ nutshell-web --instances-dir ~/work/instances
 |--------|------|-------------|
 | `GET` | `/api/instances` | List all instances (with alive/stopped/kanban status) |
 | `POST` | `/api/instances` | Create instance |
-| `GET` | `/api/instances/{id}/history` | Full outbox dump + current byte offset (for attach) |
-| `GET` | `/api/instances/{id}/events?since=N` | SSE stream from byte offset (new events only) |
+| `GET` | `/api/instances/{id}/history` | All display events derived from context.jsonl + current byte offset |
+| `GET` | `/api/instances/{id}/events?since=N` | SSE stream of display events from byte offset (new events only) |
 | `POST` | `/api/instances/{id}/messages` | Send user message |
 | `GET` | `/api/instances/{id}/kanban` | Read kanban |
 | `PUT` | `/api/instances/{id}/kanban` | Write kanban |
@@ -293,18 +320,16 @@ nutshell/
 │   ├── abstract/          # ABC interfaces
 │   │   ├── agent.py       # BaseAgent
 │   │   ├── tool.py        # BaseTool
-│   │   ├── skill.py       # BaseSkill
 │   │   └── loader.py      # BaseLoader
 │   ├── core/              # Runtime
 │   │   ├── agent.py       # Agent — LLM loop
 │   │   ├── instance.py    # Instance — persistent session + heartbeat
-│   │   ├── ipc.py         # FileIPC — inbox/outbox file communication
+│   │   ├── ipc.py         # FileIPC — context.jsonl read/write + event derivation
 │   │   ├── tool.py        # Tool + @tool decorator
 │   │   ├── skill.py       # Skill
 │   │   └── types.py       # Message, ToolCall, AgentResult
 │   ├── loaders/           # Entity file loaders
 │   │   ├── agent.py       # AgentLoader: entity/ → Agent
-│   │   ├── prompt.py      # PromptLoader: .md → str
 │   │   ├── tool.py        # ToolLoader: .json → Tool
 │   │   └── skill.py       # SkillLoader: .md → Skill
 │   ├── llm/               # LLM backends
@@ -320,17 +345,17 @@ nutshell/
 ├── entity/                # Agent definitions (plain files, edit these)
 │   └── agent_core/        # Default general-purpose agent
 │       ├── agent.yaml
-│       ├── prompts/system.md
+│       ├── prompts/
+│       │   ├── system.md
+│       │   └── heartbeat.md
 │       ├── skills/reasoning.md
 │       └── tools/echo.json
 │
 ├── instances/             # Runtime state (auto-created)
 │   └── <id>/
-│       ├── manifest.json
+│       ├── manifest.json  ← config + pid
 │       ├── kanban.md
-│       ├── context.json
-│       ├── inbox.jsonl
-│       ├── outbox.jsonl
+│       ├── context.jsonl  ← single append-only event log
 │       └── files/
 │
 └── tests/
@@ -412,15 +437,21 @@ pytest tests/    # uses MockProvider, no API key needed
 
 ## Changelog
 
+### v0.2.0
+- **Single-file IPC** — `context.jsonl` replaces `inbox.jsonl`, `outbox.jsonl`, and `daemon.pid`. All events flow through one append-only file; UI derives display events from it via `_to_display_events()`. Instance files: 3 total (`manifest.json`, `kanban.md`, `context.jsonl`) down from 6.
+- **Append-only context** — `context.jsonl` is a JSONL file; every append is O(1). The old `context.json` (JSON array with read-modify-write) is gone.
+- **PID in manifest** — `daemon.pid` file eliminated; PID stored in `manifest.json["pid"]`, cleared on shutdown.
+- **Heartbeat prompt in entity** — heartbeat behavior instructions moved from hardcoded Python to `prompts/heartbeat.md` in the entity directory. Configurable per agent via `agent.yaml`.
+- **Dead code removed** — `BaseSkill` + `Skill.to_prompt_fragment()` (never called), `PromptLoader` (was just `path.read_text()`), `Instance.is_done()`, `Instance.close()`, `.nutshell_log` system log.
+
 ### v0.1.1
-- **History resume** — agent restores full conversation history (including tool calls) from `context.json` on server restart; no more "who are you?" on reconnect
-- **Lossless context storage** — `context.json` now stores `"turn"` events with complete Anthropic-format messages (tool_use IDs + tool_result content preserved)
-- **Inbox replay prevention** — `inbox_offset` initialized to current file size; old messages are not replayed when the server restarts
-- **Heartbeat ghost output fix** — if the user stops an instance while a heartbeat is in-flight, the heartbeat result is silently discarded from the UI
-- **Stop/Start indicator** — instance dot is green only when daemon is running, not stopped, and kanban has work; turns grey immediately on stop
-- **Crashed instance restart** — instances that crashed can be restarted via ▶ Start without restarting the server
-- **Server startup log** — discovered instances printed as one line: `Discovered: A, B, C [total N]`
-- **Heartbeat UI styling** — heartbeat-triggered agent responses show `⏱ agent` label with distinct color
+- **History resume** — agent restores full conversation history (including tool calls) from `context.json` on server restart
+- **Lossless context storage** — `"turn"` events store complete Anthropic-format messages (tool_use IDs + tool_result content preserved)
+- **Inbox replay prevention** — `inbox_offset` initialized to current file size; old messages not replayed on restart
+- **Heartbeat ghost output fix** — heartbeat result discarded if instance is stopped while tick is in-flight
+- **Stop/Start indicator** — instance dot green only when daemon running, not stopped, and kanban has work
+- **Crashed instance restart** — crashed instances restartable via ▶ Start without restarting the server
+- **Heartbeat UI styling** — heartbeat-triggered responses show `⏱ agent` label
 
 ### v0.1.0
 - Initial release: server + TUI + web UI, persistent instances, heartbeat, kanban

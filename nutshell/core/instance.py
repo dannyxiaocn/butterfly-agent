@@ -1,6 +1,7 @@
 from __future__ import annotations
 import asyncio
 import json
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -21,12 +22,9 @@ class Instance:
     """Agent persistent run context (server mode only).
 
     Disk layout: instances/<id>/
+        manifest.json    — config + runtime state (entity, heartbeat, status, pid)
         kanban.md        — free-form task notes (plain file read/write)
-        context.json     — conversation log: list of "turn" events (Anthropic-format messages)
-        .nutshell_log    — system operations log (JSONL, append-only)
-        inbox.jsonl      — UI → server
-        outbox.jsonl     — server → UI
-        daemon.pid       — server PID
+        context.jsonl    — append-only log: user_input, turn, status, error, heartbeat_finished
         files/           — associated files directory
 
     Usage:
@@ -58,7 +56,7 @@ class Instance:
         if not self.kanban_path.exists():
             self.kanban_path.write_text("", encoding="utf-8")
         if not self._context_path.exists():
-            self._context_path.write_text("[]", encoding="utf-8")
+            self._context_path.touch()
 
         self._inject_kanban_tools(agent)
 
@@ -80,54 +78,48 @@ class Instance:
     # ── History persistence ────────────────────────────────────────
 
     def load_history(self) -> None:
-        """Restore agent._history from context.json on resume.
+        """Restore agent._history from context.jsonl on resume.
 
-        Reads "turn" events and flattens their messages directly into
-        agent._history, preserving full Anthropic-format content including
+        Reads "turn" events in order, flattening their messages into
+        agent._history. Preserves full Anthropic-format content including
         tool_use IDs and tool_result blocks.
         """
         if not self._context_path.exists():
             return
-        try:
-            events: list = json.loads(self._context_path.read_text(encoding="utf-8"))
-        except Exception:
-            return
-
         from nutshell.core.types import Message
         history: list[Message] = []
-        for event in events:
-            if event.get("type") == "turn":
-                for m in event.get("messages", []):
-                    history.append(Message(role=m["role"], content=m["content"]))
-
+        try:
+            with self._context_path.open("r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        event = json.loads(line)
+                        if event.get("type") == "turn":
+                            for m in event.get("messages", []):
+                                history.append(Message(role=m["role"], content=m["content"]))
+                    except json.JSONDecodeError:
+                        pass
+        except Exception:
+            pass
         self._agent._history = history
 
     # ── Activation ────────────────────────────────────────────────
 
-    async def chat(self, message: str, reply_to: str | None = None) -> AgentResult:
+    async def chat(self, message: str) -> AgentResult:
         """Run agent with user message. Holds agent lock — blocks heartbeat tick."""
         old_len = len(self._agent._history)
         async with self._agent_lock:
             result = await self._agent.run(message)
 
-        # Store the full turn as a single event: Anthropic-format messages
-        # (includes user, any tool_use/tool_result pairs with IDs, final assistant).
-        # result.messages[old_len:] is exactly the new messages added in this run.
+        # Append full turn (the user_input event was already written by the UI
+        # via send_message before the server picked it up).
         self._append_context({
             "type": "turn",
             "triggered_by": "user",
             "messages": [{"role": m.role, "content": m.content} for m in result.messages[old_len:]],
         })
-
-        if self._ipc is not None:
-            self._ipc.append_outbox({"type": "user", "content": message})
-            for tc in result.tool_calls:
-                self._ipc.append_outbox({"type": "tool", "name": tc.name, "input": tc.input})
-            agent_event: dict = {"type": "agent", "content": result.content}
-            if reply_to:
-                agent_event["reply_to"] = reply_to
-            self._ipc.append_outbox(agent_event)
-
         return result
 
     async def tick(self) -> AgentResult | None:
@@ -144,19 +136,9 @@ class Instance:
         history_snapshot = list(self._agent._history)
         old_len = len(self._agent._history)
 
-        prompt = (
-            f"Check your kanban and continue working.\n\n"
-            f"--- Kanban ---\n{kanban_content}\n---\n\n"
-            f"When you finish ALL tasks, you MUST call write_kanban(\"\") to clear the board. "
-            f"This is the only way to signal completion. Do not just say tasks are done — "
-            f"you must actually call write_kanban(\"\").\n\n"
-            f"After completing your work, summarize what you did in your response — "
-            f"show your reasoning, results, and any notable steps so the user can follow along.\n\n"
-            f"If all work is done and there is nothing remaining, respond with exactly: {INSTANCE_FINISHED}\n"
-            f"This will clear the kanban and end this instance."
-        )
+        heartbeat_instructions = self._agent.heartbeat_prompt or "Continue working on your tasks."
+        prompt = f"Heartbeat activation.\n\nCurrent kanban:\n{kanban_content}\n\n{heartbeat_instructions}"
 
-        self._syslog({"event": "heartbeat_triggered", "interval": self._heartbeat_interval})
         async with self._agent_lock:
             result = await self._agent.run(prompt)
 
@@ -164,24 +146,16 @@ class Instance:
             # Clear kanban, prune heartbeat history so it doesn't pollute context
             self.kanban_path.write_text("", encoding="utf-8")
             self._agent._history = history_snapshot
-            self._syslog({"event": "heartbeat_finished", "reason": INSTANCE_FINISHED})
-            if self._ipc is not None:
-                self._ipc.append_outbox({"type": "heartbeat_finished"})
+            self._append_context({"type": "heartbeat_finished"})
         else:
-            # Store full turn to context.json (same format as chat turns)
-            self._append_context({
-                "type": "turn",
-                "triggered_by": "heartbeat",
-                "messages": [{"role": m.role, "content": m.content} for m in result.messages[old_len:]],
-            })
-            # Only push to outbox if instance is still active — skip if user stopped
+            # Only log to context if instance is still active — skip if user stopped
             # the instance while this heartbeat was in-flight (avoids ghost output in UI)
-            if self._ipc is not None and not self.is_stopped():
-                self._ipc.append_outbox({"type": "heartbeat_trigger"})
-                for tc in result.tool_calls:
-                    self._ipc.append_outbox({"type": "tool", "name": tc.name, "input": tc.input})
-                if result.content:
-                    self._ipc.append_outbox({"type": "agent", "content": result.content, "triggered_by": "heartbeat"})
+            if not self.is_stopped():
+                self._append_context({
+                    "type": "turn",
+                    "triggered_by": "heartbeat",
+                    "messages": [{"role": m.role, "content": m.content} for m in result.messages[old_len:]],
+                })
 
         return result
 
@@ -214,12 +188,38 @@ class Instance:
         except Exception:
             pass
 
+    def _write_pid(self) -> None:
+        """Write current process PID into manifest.json."""
+        if not self.manifest_path.exists():
+            return
+        try:
+            manifest = json.loads(self.manifest_path.read_text(encoding="utf-8"))
+            manifest["pid"] = os.getpid()
+            self.manifest_path.write_text(
+                json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
+            )
+        except Exception:
+            pass
+
+    def _clear_pid(self) -> None:
+        """Clear PID from manifest.json when daemon stops."""
+        if not self.manifest_path.exists():
+            return
+        try:
+            manifest = json.loads(self.manifest_path.read_text(encoding="utf-8"))
+            manifest["pid"] = None
+            self.manifest_path.write_text(
+                json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
+            )
+        except Exception:
+            pass
+
     # ── Server loop ────────────────────────────────────────────────
 
     async def run_daemon_loop(self, ipc: "FileIPC") -> None:
         """Run as a server-managed instance.
 
-        Polls inbox.jsonl for user messages every 0.5s.
+        Polls context.jsonl for user_input events every 0.5s.
         Fires heartbeat ticks every heartbeat_interval seconds.
 
         Heartbeat is skipped when:
@@ -231,44 +231,36 @@ class Instance:
         never eats into the next interval.
         """
         self._ipc = ipc
-        ipc.write_pid()
-        self._syslog({"event": "instance_started", "id": self._instance_id})
+        self._write_pid()
 
-        # Skip existing inbox messages — they were already processed in a prior
-        # session. Starting at the current file size prevents replay on restart.
-        inbox_offset = ipc.inbox_path.stat().st_size if ipc.inbox_path.exists() else 0
+        # Skip existing context events — only process new user_input events.
+        # Starting at current file size prevents replay of prior session messages.
+        input_offset = ipc.size()
         last_tick_time = asyncio.get_event_loop().time()
 
         try:
             while True:
-                # Poll inbox — user messages always processed, even when stopped
-                msgs, inbox_offset = ipc.poll_inbox(inbox_offset)
-                for msg in msgs:
-                    if msg.get("type") == "user":
-                        content = msg.get("content", "")
-                        msg_id = msg.get("id")
-                        self._syslog({"event": "user_message", "id": msg_id})
-                        # User message wakes a stopped instance
-                        if self.is_stopped():
-                            self.set_status("active")
-                            ipc.append_outbox({"type": "status", "value": "resumed"})
-                        try:
-                            await self.chat(content, reply_to=msg_id)
-                        except Exception as exc:
-                            ipc.append_outbox({"type": "error", "content": str(exc)})
+                # Poll for new user_input events
+                inputs, input_offset = ipc.poll_inputs(input_offset)
+                for msg in inputs:
+                    content = msg.get("content", "")
+                    # User message wakes a stopped instance
+                    if self.is_stopped():
+                        self.set_status("active")
+                        self._append_context({"type": "status", "value": "resumed"})
+                    try:
+                        await self.chat(content)
+                    except Exception as exc:
+                        self._append_context({"type": "error", "content": str(exc)})
 
                 # Heartbeat timer — check elapsed since last tick COMPLETED
                 now = asyncio.get_event_loop().time()
                 if now - last_tick_time >= self._heartbeat_interval:
-                    if self.is_stopped():
-                        self._syslog({"event": "heartbeat_skipped", "reason": "stopped"})
-                    elif self._agent_lock.locked():
-                        self._syslog({"event": "heartbeat_skipped", "reason": "agent_busy"})
-                    else:
+                    if not self.is_stopped() and not self._agent_lock.locked():
                         try:
                             await self.tick()
                         except Exception as exc:
-                            self._syslog({"event": "heartbeat_error", "error": str(exc)})
+                            self._append_context({"type": "error", "content": str(exc)})
                     # Reset timer AFTER tick completes (not before),
                     # so tick duration never cuts into the next interval.
                     last_tick_time = asyncio.get_event_loop().time()
@@ -276,24 +268,12 @@ class Instance:
                 await asyncio.sleep(0.5)
 
         except asyncio.CancelledError:
-            ipc.append_outbox({"type": "status", "value": "cancelled"})
-            ipc.clear_pid()
-            self._syslog({"event": "instance_closed", "status": "cancelled"})
+            self._append_context({"type": "status", "value": "cancelled"})
+            self._clear_pid()
             raise
 
-        ipc.append_outbox({"type": "status", "value": "stopped"})
-        ipc.clear_pid()
-        self._syslog({"event": "instance_closed", "status": "done"})
-
-    # ── Status ─────────────────────────────────────────────────────
-
-    def is_done(self) -> bool:
-        """True when kanban is empty."""
-        return not self.kanban_path.read_text(encoding="utf-8").strip()
-
-    def close(self, status: str = "done") -> None:
-        """Write final status event to context.json."""
-        self._append_context({"type": "status", "value": status})
+        self._append_context({"type": "status", "value": "stopped"})
+        self._clear_pid()
 
     # ── Properties ─────────────────────────────────────────────────
 
@@ -311,25 +291,15 @@ class Instance:
 
     @property
     def _context_path(self) -> Path:
-        return self.instance_dir / "context.json"
-
-    @property
-    def _syslog_path(self) -> Path:
-        return self.instance_dir / ".nutshell_log"
+        return self.instance_dir / "context.jsonl"
 
     # ── Internal ───────────────────────────────────────────────────
 
     def _append_context(self, event: dict) -> None:
-        """Append an event to context.json."""
-        event.setdefault("ts", datetime.now().isoformat())
-        events: list = json.loads(self._context_path.read_text(encoding="utf-8"))
-        events.append(event)
-        self._context_path.write_text(
-            json.dumps(events, indent=2, ensure_ascii=False), encoding="utf-8"
-        )
-
-    def _syslog(self, event: dict) -> None:
-        """Append to .nutshell_log (system operations, JSONL)."""
-        event.setdefault("ts", datetime.now().isoformat())
-        with self._syslog_path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(event, ensure_ascii=False) + "\n")
+        """Append an event to context.jsonl (O(1), append-only)."""
+        if self._ipc is not None:
+            self._ipc.append(event)
+        else:
+            event.setdefault("ts", datetime.now().isoformat())
+            with self._context_path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(event, ensure_ascii=False) + "\n")

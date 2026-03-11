@@ -10,6 +10,7 @@ max_iterations: 20
 
 prompts:
   system: prompts/system.md
+  heartbeat: prompts/heartbeat.md
 
 tools:
   - tools/echo.json

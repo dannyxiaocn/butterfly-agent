@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import AsyncIterator
@@ -24,6 +25,16 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 INSTANCES_DIR = Path("instances")
 _DEFAULT_ENTITY = "entity/agent_core"
 _DEFAULT_PORT = 8080
+
+
+def _pid_alive(pid: int | None) -> bool:
+    if not pid:
+        return False
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except (ProcessLookupError, PermissionError, ValueError, OSError):
+        return False
 
 
 # ── FastAPI app ────────────────────────────────────────────────────────────
@@ -54,7 +65,6 @@ def create_app(instances_dir: Path) -> FastAPI:
                 manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             except Exception:
                 manifest = {}
-            pid_path = d / "daemon.pid"
             is_stopped = manifest.get("status") == "stopped"
             kanban_path = d / "kanban.md"
             has_kanban = kanban_path.exists() and bool(kanban_path.read_text(encoding="utf-8").strip())
@@ -63,7 +73,7 @@ def create_app(instances_dir: Path) -> FastAPI:
                 "entity": manifest.get("entity", "?"),
                 "created_at": manifest.get("created_at", ""),
                 # Green only when daemon is running, not stopped, and has pending work
-                "alive": pid_path.exists() and not is_stopped and has_kanban,
+                "alive": _pid_alive(manifest.get("pid")) and not is_stopped and has_kanban,
             })
         return result
 
@@ -76,6 +86,7 @@ def create_app(instances_dir: Path) -> FastAPI:
         instance_dir = instances_dir / instance_id
         instance_dir.mkdir(parents=True, exist_ok=True)
         (instance_dir / "files").mkdir(exist_ok=True)
+        (instance_dir / "context.jsonl").touch(exist_ok=True)
 
         manifest = {
             "instance_id": instance_id,
@@ -113,13 +124,13 @@ def create_app(instances_dir: Path) -> FastAPI:
             ipc = FileIPC(instance_dir)
             offset = since
             # Yield existing events first
-            for event, new_offset in ipc.tail_outbox(offset):
+            for event, new_offset in ipc.tail_display(offset):
                 offset = new_offset
                 yield _sse_format(event)
             # Then stream new events
             while True:
                 await asyncio.sleep(0.3)
-                for event, new_offset in ipc.tail_outbox(offset):
+                for event, new_offset in ipc.tail_display(offset):
                     offset = new_offset
                     yield _sse_format(event)
 
@@ -136,24 +147,18 @@ def create_app(instances_dir: Path) -> FastAPI:
 
     @app.get("/api/instances/{instance_id}/history")
     async def get_history(instance_id: str):
-        """Return all outbox events as JSON array + current byte offset.
+        """Return all display events derived from context.jsonl + current byte offset.
 
         JS loads this once on attach to render full history instantly,
         then starts SSE from the returned offset for new events only.
         """
-        outbox_path = instances_dir / instance_id / "outbox.jsonl"
+        from nutshell.core.ipc import FileIPC
+        ipc = FileIPC(instances_dir / instance_id)
         events: list[dict] = []
         size = 0
-        if outbox_path.exists():
-            raw = outbox_path.read_bytes()
-            size = len(raw)
-            for line in raw.decode("utf-8", errors="replace").splitlines():
-                line = line.strip()
-                if line:
-                    try:
-                        events.append(json.loads(line))
-                    except json.JSONDecodeError:
-                        pass
+        for event, offset in ipc.tail_display(0):
+            events.append(event)
+            size = offset
         return {"events": events, "offset": size}
 
     # ── Stop / Start ──────────────────────────────────────────────────────
@@ -164,7 +169,7 @@ def create_app(instances_dir: Path) -> FastAPI:
         instance_dir = instances_dir / instance_id
         _set_manifest_status(instance_dir / "manifest.json", "stopped")
         if instance_dir.exists():
-            FileIPC(instance_dir).append_outbox(
+            FileIPC(instance_dir).append(
                 {"type": "status", "value": "heartbeat paused — use ▶ Start to resume"}
             )
         return {"ok": True}
@@ -175,7 +180,7 @@ def create_app(instances_dir: Path) -> FastAPI:
         instance_dir = instances_dir / instance_id
         _set_manifest_status(instance_dir / "manifest.json", "active")
         if instance_dir.exists():
-            FileIPC(instance_dir).append_outbox(
+            FileIPC(instance_dir).append(
                 {"type": "status", "value": "heartbeat resumed"}
             )
         return {"ok": True}

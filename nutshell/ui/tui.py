@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 from datetime import datetime
 from pathlib import Path
 
@@ -25,6 +26,16 @@ from textual.widgets import Footer, Header, Input, Label, ListItem, ListView, Ma
 
 INSTANCES_DIR = Path("instances")
 _DEFAULT_ENTITY = "entity/agent_core"
+
+
+def _pid_alive(pid: int | None) -> bool:
+    if not pid:
+        return False
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except (ProcessLookupError, PermissionError, ValueError, OSError):
+        return False
 
 
 # ── Utility ────────────────────────────────────────────────────────────────
@@ -54,11 +65,10 @@ def _load_instances(instances_dir: Path) -> list[dict]:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         except Exception:
             manifest = {}
-        pid_path = d / "daemon.pid"
         result.append({
             "id": d.name,
             "entity": manifest.get("entity", "?"),
-            "alive": pid_path.exists(),
+            "alive": _pid_alive(manifest.get("pid")),
         })
     return result
 
@@ -67,6 +77,7 @@ def _create_instance(instances_dir: Path, instance_id: str, entity: str, heartbe
     instance_dir = instances_dir / instance_id
     instance_dir.mkdir(parents=True, exist_ok=True)
     (instance_dir / "files").mkdir(exist_ok=True)
+    (instance_dir / "context.jsonl").touch(exist_ok=True)
     manifest = {
         "instance_id": instance_id,
         "entity": entity,
@@ -242,7 +253,7 @@ class NutshellTUI(App):
         self._entity = entity
         self._instance_id: str | None = instance_id
         self._ipc = None
-        self._outbox_offset = 0
+        self._context_offset = 0
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -268,11 +279,11 @@ class NutshellTUI(App):
         instance_dir = self._instances_dir / instance_id
         self._instance_id = instance_id
         self._ipc = FileIPC(instance_dir)
-        self._outbox_offset = 0
-        # Replay existing outbox
+        self._context_offset = 0
+        # Replay existing context
         chat = self.query_one("#chat", ChatView)
-        for event, offset in self._ipc.tail_outbox(0):
-            self._outbox_offset = offset
+        for event, offset in self._ipc.tail_display(0):
+            self._context_offset = offset
             chat.add_event(event)
 
     @work(exclusive=False)
@@ -283,8 +294,8 @@ class NutshellTUI(App):
             if self._ipc is None:
                 continue
             chat = self.query_one("#chat", ChatView)
-            for event, offset in self._ipc.tail_outbox(self._outbox_offset):
-                self._outbox_offset = offset
+            for event, offset in self._ipc.tail_display(self._context_offset):
+                self._context_offset = offset
                 self.call_from_thread(chat.add_event, event)
 
     @work(exclusive=False)
@@ -309,7 +320,14 @@ class NutshellTUI(App):
 
         # Status bar
         status = self.query_one("#status", StatusBar)
-        alive = self._ipc.is_daemon_alive() if self._ipc else False
+        alive = False
+        if self._instance_id:
+            try:
+                manifest_path = self._instances_dir / self._instance_id / "manifest.json"
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                alive = _pid_alive(manifest.get("pid"))
+            except Exception:
+                pass
         status.set_status(self._instance_id, alive)
 
     @on(Input.Submitted, "#input")
@@ -332,8 +350,16 @@ class NutshellTUI(App):
             return
 
         if text.lower() == "/status":
-            alive = self._ipc.is_daemon_alive() if self._ipc else False
-            pid = self._ipc.read_pid() if self._ipc else None
+            pid = None
+            alive = False
+            if self._instance_id:
+                try:
+                    manifest_path = self._instances_dir / self._instance_id / "manifest.json"
+                    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                    pid = manifest.get("pid")
+                    alive = _pid_alive(pid)
+                except Exception:
+                    pass
             msg = f"server: {'running (pid ' + str(pid) + ')' if alive else 'not running'}"
             chat = self.query_one("#chat", ChatView)
             chat.add_event({"type": "status", "value": msg})

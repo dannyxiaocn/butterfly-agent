@@ -4,16 +4,19 @@ from typing import Callable
 
 from nutshell.abstract.loader import BaseLoader
 from nutshell.core.agent import Agent
-from nutshell.loaders.prompt import PromptLoader
 from nutshell.loaders.skill import SkillLoader
 from nutshell.loaders.tool import ToolLoader
+
+
+def _load_prompt(path: Path) -> str:
+    return path.read_text(encoding="utf-8").strip()
 
 
 class AgentLoader(BaseLoader[Agent]):
     """Load a complete Agent from an entity directory containing agent.yaml.
 
-    Reads the manifest (agent.yaml) and uses PromptLoader, SkillLoader, and
-    ToolLoader to assemble a fully configured Agent instance.
+    Reads the manifest (agent.yaml) and uses SkillLoader and ToolLoader to
+    assemble a fully configured Agent instance.
 
     Args:
         impl_registry: Optional dict mapping tool name -> callable, passed
@@ -42,12 +45,16 @@ class AgentLoader(BaseLoader[Agent]):
             raise FileNotFoundError(f"agent.yaml not found in: {path}")
 
         manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
+        prompts_cfg = manifest.get("prompts", {}) or {}
 
-        # Load system prompt
+        # Load prompts
         system_prompt = ""
-        prompts_cfg = manifest.get("prompts", {})
-        if isinstance(prompts_cfg, dict) and "system" in prompts_cfg:
-            system_prompt = PromptLoader().load(path / prompts_cfg["system"])
+        if "system" in prompts_cfg:
+            system_prompt = _load_prompt(path / prompts_cfg["system"])
+
+        heartbeat_prompt = ""
+        if "heartbeat" in prompts_cfg:
+            heartbeat_prompt = _load_prompt(path / prompts_cfg["heartbeat"])
 
         # Load skills
         skills_cfg = manifest.get("skills", []) or []
@@ -65,6 +72,7 @@ class AgentLoader(BaseLoader[Agent]):
             model=manifest.get("model", "claude-sonnet-4-6"),
             release_policy=manifest.get("release_policy", "persistent"),
             max_iterations=manifest.get("max_iterations", 20),
+            heartbeat_prompt=heartbeat_prompt,
         )
 
     def load_dir(self, directory: Path) -> list[Agent]:

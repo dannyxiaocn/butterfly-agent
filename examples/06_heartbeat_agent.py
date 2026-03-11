@@ -43,9 +43,9 @@ async def main():
 
     print(f"Instance created: {instance_id}")
     print(f"Directory:        {instance_dir.absolute()}")
-    print("Watching outbox for server output (Ctrl+C to stop)...\n")
+    print("Watching context for server output (Ctrl+C to stop)...\n")
 
-    # Tail outbox — observe server output as it arrives
+    # Tail context.jsonl — observe server output as it arrives
     from nutshell.core.ipc import FileIPC
 
     ipc = FileIPC(instance_dir)
@@ -53,7 +53,7 @@ async def main():
 
     try:
         while True:
-            for event, new_offset in ipc.tail_outbox(offset):
+            for event, new_offset in ipc.tail_display(offset):
                 offset = new_offset
                 etype = event.get("type")
                 if etype == "agent":

@@ -40,6 +40,7 @@ class Agent(BaseAgent):
         provider: Provider | None = None,
         release_policy: ReleasePolicy = "persistent",
         max_iterations: int = 20,
+        heartbeat_prompt: str = "",
     ) -> None:
         self.system_prompt = system_prompt
         self.tools: list[Tool] = tools or []
@@ -47,6 +48,7 @@ class Agent(BaseAgent):
         self.model = model
         self.release_policy = release_policy
         self.max_iterations = max_iterations
+        self.heartbeat_prompt = heartbeat_prompt
         self._provider = provider
         self._history: list[Message] = []
 
