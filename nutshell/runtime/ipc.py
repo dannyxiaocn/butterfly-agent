@@ -1,22 +1,37 @@
 """FileIPC: file-based IPC between nutshell daemon and chat UI.
 
-All communication flows through a single append-only context.jsonl file.
+Two files per session:
 
-Event types written to context.jsonl:
-  user_input       — UI → daemon: {"type": "user_input", "content": "...", "id": "...", "ts": "..."}
-  turn             — daemon → UI: {"type": "turn", "triggered_by": "user|heartbeat", "messages": [...], "ts": "..."}
-  model_status     — daemon → UI: {"type": "model_status", "state": "running|idle", "source": "user|heartbeat", "ts": "..."}
-  status           — daemon → UI: {"type": "status", "value": "...", "ts": "..."}
-  error            — daemon → UI: {"type": "error", "content": "...", "ts": "..."}
-  heartbeat_finished — daemon → UI: {"type": "heartbeat_finished", "ts": "..."}
+  context.jsonl  — PURE conversation history (user_input + turn only).
+                   Sole purpose: restore the full conversation so the daemon
+                   can reconstruct agent._history and send correct context to
+                   Claude on every new run. Nothing else lives here.
 
-Display events derived for the UI from context.jsonl:
-  user             — from user_input
-  agent            — from turn (last assistant message)
-  tool             — from turn (tool_use blocks in assistant messages)
-  model_status     — passed through as-is
-  heartbeat_trigger — from turn with triggered_by="heartbeat"
-  heartbeat_finished, status, error — passed through as-is
+  events.jsonl   — ALL runtime / UI signalling events:
+                   model_status, partial_text, tool_call, heartbeat_trigger,
+                   heartbeat_finished, status, error.
+                   Consumed by the SSE stream; never used by load_history().
+
+context.jsonl event types:
+  user_input   — UI → daemon: {"type": "user_input", "content": "...", "id": "...", "ts": "..."}
+  turn         — daemon → UI: {"type": "turn", "triggered_by": "user|heartbeat",
+                               "messages": [...], "ts": "..."}
+
+events.jsonl event types:
+  model_status       — {"type": "model_status", "state": "running|idle", "source": "...", "ts": "..."}
+  partial_text       — {"type": "partial_text", "content": "...", "ts": "..."}
+  tool_call          — {"type": "tool_call", "name": "...", "input": {...}, "ts": "..."}
+  heartbeat_trigger  — {"type": "heartbeat_trigger", "ts": "..."}
+  heartbeat_finished — {"type": "heartbeat_finished", "ts": "..."}
+  status             — {"type": "status", "value": "...", "ts": "..."}
+  error              — {"type": "error", "content": "...", "ts": "..."}
+
+Display events derived for the UI:
+  user             — from user_input (context)
+  agent            — from turn last assistant message (context)
+  tool             — from turn tool_use blocks (context) OR streaming tool_call (events)
+  heartbeat_trigger — from heartbeat_trigger (events) OR old-format turn (context, backward compat)
+  model_status, partial_text, heartbeat_finished, status, error — pass-through (events)
 """
 from __future__ import annotations
 import json
@@ -26,12 +41,17 @@ from pathlib import Path
 from typing import Iterator
 
 
-def _to_display_events(event: dict, *, skip_partial: bool = False) -> list[dict]:
-    """Convert a single context.jsonl event to zero or more UI display events.
+# ── Display event converters ──────────────────────────────────────────────────
+
+def _context_event_to_display(event: dict, *, for_history: bool = False) -> list[dict]:
+    """Convert a context.jsonl event (user_input or turn) to display events.
 
     Args:
-        skip_partial: If True, omit ephemeral streaming events (partial_text).
-                      Use this for history loads to avoid replaying interim chunks.
+        for_history: When True (history endpoint), always emit tools and
+                     heartbeat_trigger from turn content — the streaming events
+                     in events.jsonl are not available for history replay.
+                     When False (SSE live tail), respect has_streaming_tools /
+                     pre_triggered flags to avoid duplicating live-streamed items.
     """
     etype = event.get("type")
     ts = event.get("ts", "")
@@ -39,24 +59,32 @@ def _to_display_events(event: dict, *, skip_partial: bool = False) -> list[dict]
     if etype == "user_input":
         return [{"type": "user", "content": event.get("content", ""), "ts": ts}]
 
-    if etype == "partial_text":
-        if skip_partial:
-            return []
-        return [{"type": "partial_text", "content": event.get("content", ""), "ts": ts}]
-
     if etype == "turn":
         result: list[dict] = []
         triggered_by = event.get("triggered_by", "user")
-        if triggered_by == "heartbeat":
+
+        # Heartbeat trigger marker: always emit for history; for SSE only when
+        # the trigger was NOT pre-emitted to events.jsonl (old-format turns).
+        if triggered_by == "heartbeat" and (for_history or not event.get("pre_triggered")):
             result.append({"type": "heartbeat_trigger", "ts": ts})
-        # Tool calls from assistant messages
-        for msg in event.get("messages", []):
-            if msg["role"] == "assistant":
-                content = msg["content"]
-                if isinstance(content, list):
-                    for block in content:
-                        if isinstance(block, dict) and block.get("type") == "tool_use":
-                            result.append({"type": "tool", "name": block["name"], "input": block.get("input", {}), "ts": ts})
+
+        # Tool calls: always emit for history; for SSE only when NOT already
+        # streamed live via tool_call events (has_streaming_tools flag).
+        if for_history or not event.get("has_streaming_tools"):
+            for msg in event.get("messages", []):
+                if msg["role"] == "assistant":
+                    content = msg["content"]
+                    if isinstance(content, list):
+                        for block in content:
+                            if isinstance(block, dict) and block.get("type") == "tool_use":
+                                block_ts = block.get("ts", ts)
+                                result.append({
+                                    "type": "tool",
+                                    "name": block["name"],
+                                    "input": block.get("input", {}),
+                                    "ts": block_ts,
+                                })
+
         # Final assistant text (last assistant message)
         for msg in reversed(event.get("messages", [])):
             if msg["role"] == "assistant":
@@ -70,46 +98,74 @@ def _to_display_events(event: dict, *, skip_partial: bool = False) -> list[dict]
                         ev["triggered_by"] = "heartbeat"
                     result.append(ev)
                 break
+
         return result
 
-    if etype in ("model_status", "heartbeat_finished", "status", "error"):
+    # Anything else (old-format context.jsonl with mixed events) — silently ignored.
+    return []
+
+
+def _runtime_event_to_display(event: dict) -> list[dict]:
+    """Convert an events.jsonl event to display events.
+
+    All runtime events pass through or are transformed for the SSE stream.
+    """
+    etype = event.get("type")
+    ts = event.get("ts", "")
+
+    if etype == "partial_text":
+        return [{"type": "partial_text", "content": event.get("content", ""), "ts": ts}]
+
+    if etype == "tool_call":
+        return [{"type": "tool", "name": event.get("name"), "input": event.get("input", {}), "ts": ts}]
+
+    if etype in ("model_status", "heartbeat_trigger", "heartbeat_finished", "status", "error"):
         return [event]
 
     return []
 
 
-class FileIPC:
-    """File-based IPC for a single session via a single append-only context.jsonl.
+# ── FileIPC ───────────────────────────────────────────────────────────────────
 
-    Layout inside session_dir/:
-        context.jsonl — all events (user_input, turn, status, error, heartbeat_finished)
+class FileIPC:
+    """File-based IPC for a single session.
+
+    Two files:
+        context.jsonl — conversation history only (user_input, turn)
+        events.jsonl  — runtime/UI events (model_status, partial_text, etc.)
     """
 
     def __init__(self, session_dir: Path) -> None:
         self.session_dir = session_dir
         self.context_path = session_dir / "context.jsonl"
+        self.events_path = session_dir / "events.jsonl"
 
-    # ── Write ────────────────────────────────────────────────────────
+    # ── Write ────────────────────────────────────────────────────────────────
 
-    def append(self, event: dict) -> None:
-        """Append an event to context.jsonl (always O(1))."""
+    def append_context(self, event: dict) -> None:
+        """Append a conversation event (user_input or turn) to context.jsonl."""
         event.setdefault("ts", datetime.now().isoformat())
         with self.context_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(event, ensure_ascii=False) + "\n")
 
+    def append_event(self, event: dict) -> None:
+        """Append a runtime/UI event to events.jsonl."""
+        event.setdefault("ts", datetime.now().isoformat())
+        with self.events_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(event, ensure_ascii=False) + "\n")
+
     def send_message(self, content: str, msg_id: str | None = None) -> str:
-        """Append a user_input event. Returns message id."""
+        """Append a user_input event to context.jsonl. Returns message id."""
         msg_id = msg_id or str(uuid.uuid4())
-        self.append({"type": "user_input", "content": content, "id": msg_id})
+        self.append_context({"type": "user_input", "content": content, "id": msg_id})
         return msg_id
 
-    # ── Daemon-side read ──────────────────────────────────────────────
+    # ── Daemon-side read ─────────────────────────────────────────────────────
 
     def poll_inputs(self, offset: int) -> tuple[list[dict], int]:
         """Read new user_input events from context.jsonl starting at byte offset.
 
         Returns (user_input_events, new_offset).
-        The daemon uses this to discover incoming user messages.
         """
         if not self.context_path.exists():
             return [], offset
@@ -129,22 +185,15 @@ class FileIPC:
                     pass
         return events, new_offset
 
-    # ── UI-side read ─────────────────────────────────────────────────
+    # ── UI-side read ─────────────────────────────────────────────────────────
 
-    def tail_display(self, offset: int = 0, *, skip_partial: bool = False) -> Iterator[tuple[dict, int]]:
-        """Yield (display_event, line_end_offset) from context.jsonl starting at offset.
-
-        Each raw event may expand to multiple display events (e.g. a turn with
-        tool calls yields tool events + an agent event). All share the same
-        line_end_offset so the UI can resume correctly.
-
-        Args:
-            skip_partial: Skip ephemeral partial_text events. Pass True when
-                          loading history to avoid replaying streaming chunks.
-        """
-        if not self.context_path.exists():
+    def _readline_loop(
+        self, path: Path, offset: int, converter
+    ) -> Iterator[tuple[dict, int]]:
+        """Shared readline loop: yield (display_event, line_end_offset) from path."""
+        if not path.exists():
             return
-        with self.context_path.open("r", encoding="utf-8") as f:
+        with path.open("r", encoding="utf-8") as f:
             f.seek(offset)
             while True:
                 line = f.readline()
@@ -156,13 +205,47 @@ class FileIPC:
                     continue
                 try:
                     event = json.loads(line)
-                    for display in _to_display_events(event, skip_partial=skip_partial):
+                    for display in converter(event):
                         yield display, line_end
                 except json.JSONDecodeError:
                     pass
 
-    def size(self) -> int:
-        """Current context.jsonl size in bytes."""
+    def tail_history(self, offset: int = 0) -> Iterator[tuple[dict, int]]:
+        """Yield display events from context.jsonl for the history endpoint.
+
+        Always emits tools and heartbeat markers from turn content (for_history=True),
+        since events.jsonl is not consulted for history replay.
+        """
+        yield from self._readline_loop(
+            self.context_path, offset,
+            lambda e: _context_event_to_display(e, for_history=True),
+        )
+
+    def tail_context(self, offset: int = 0) -> Iterator[tuple[dict, int]]:
+        """Yield display events from context.jsonl for the live SSE stream.
+
+        Respects has_streaming_tools / pre_triggered flags to avoid duplicating
+        items already delivered via the events.jsonl stream.
+        """
+        yield from self._readline_loop(
+            self.context_path, offset,
+            lambda e: _context_event_to_display(e, for_history=False),
+        )
+
+    def tail_runtime_events(self, offset: int = 0) -> Iterator[tuple[dict, int]]:
+        """Yield display events from events.jsonl for the live SSE stream."""
+        yield from self._readline_loop(
+            self.events_path, offset, _runtime_event_to_display,
+        )
+
+    def context_size(self) -> int:
+        """Current context.jsonl size in bytes (used to initialize poll_inputs offset)."""
         if not self.context_path.exists():
             return 0
         return self.context_path.stat().st_size
+
+    def events_size(self) -> int:
+        """Current events.jsonl size in bytes (used to initialize SSE events offset)."""
+        if not self.events_path.exists():
+            return 0
+        return self.events_path.stat().st_size

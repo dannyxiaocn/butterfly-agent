@@ -1,4 +1,4 @@
-# Nutshell `v0.5.0`
+# Nutshell `v0.5.5`
 
 A minimal Python agent runtime. Agents run as persistent server-managed sessions with autonomous heartbeat ticking, accessible via web browser.
 
@@ -287,6 +287,23 @@ pytest tests/    # uses MockProvider, no API key needed
 ---
 
 ## Changelog
+
+### v0.5.5
+- **Critical bugfix: `400 Extra inputs are not permitted`** — `_serialize_message_content` was injecting a `ts` field into every Anthropic content block (text, tool_use, tool_result). These blocks were stored in `context.jsonl` and reloaded into `_history` on session resume, causing the API to reject them. Fix: content blocks are now stored as plain copies without extra fields. `load_history()` also runs a allow-list cleaner (`_clean_content_for_api`) to strip any non-API fields from existing sessions on disk.
+
+### v0.5.4
+- **Editable heartbeat interval** — `heartbeat_interval` moved from `manifest.json` to `status.json`. Edit `sessions/<id>/status.json` directly to change the interval; the daemon reads it fresh each tick without restarting. Old sessions are auto-migrated on first start (manifest value copied to status.json). Tasks panel now shows `updated HH:MM · every Xm`.
+- **watcher.py bugfix** — `ipc.append()` → `ipc.append_event()` (crashed on session error since v0.5.3 removed the old append API).
+
+### v0.5.3
+- **Context/events split** — `context.jsonl` is now a pure conversation log containing only `user_input` and `turn` events. All runtime/UI signalling (`model_status`, `partial_text`, `tool_call`, `heartbeat_trigger`, `heartbeat_finished`, `status`, `error`) moves to a new `events.jsonl`. The sole purpose of `context.jsonl` is to restore the full agent conversation history and send correct context to Claude on every run. `FileIPC` gains `append_context`/`append_event`, `tail_history`/`tail_context`/`tail_runtime_events`, and `events_size()`. History endpoint returns `{context_offset, events_offset}`; SSE endpoint accepts both offsets separately. Old sessions degrade gracefully (existing mixed `context.jsonl` still loads as history; absent `events.jsonl` silently skipped).
+
+### v0.5.2
+- **Tool streaming** — `Agent.run()` now accepts `on_tool_call` callback; each tool invocation is streamed to `context.jsonl` as a `tool_call` event before execution, so tools appear one by one in the UI with their own timestamps. Turns are marked `has_streaming_tools=True` to avoid duplicating tool events from history replay.
+- **Heartbeat trigger ordering fix** — `heartbeat_trigger` event is now written to `context.jsonl` *before* the heartbeat run starts, so the "⏱ heartbeat — checking tasks" box appears in the UI before the thinking bubble (not after the agent turn completes).
+- **User re-input from stopped state** — UI now optimistically transitions from red (stopped) to green (running) immediately when user sends a message, without waiting for the daemon poll cycle. Backend also reshapes history to remove orphaned trailing user messages (e.g., interrupted heartbeat prompts) before processing new input.
+- **Tasks last update time** — `status.json` now tracks `tasks_updated_at`; displayed in the tasks panel header whenever tasks are written (by agent or by user).
+- **Heartbeat interval** — default changed from 10 seconds to 10 minutes (600s).
 
 ### v0.5.0
 - **Status-centric architecture** — `manifest.json` is now purely static config (written once at creation, never mutated). All dynamic runtime state (`pid`, `status`, `model_state`, `last_run_at`) lives in `status.json` and is updated continuously by the daemon. Eliminates the mixed-paradigm where half the state was in manifest and half in status.

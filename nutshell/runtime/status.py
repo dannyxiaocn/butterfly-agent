@@ -9,12 +9,14 @@ from typing import Any
 # Static session config lives in manifest.json.
 # All runtime/dynamic state lives here.
 DEFAULT_SESSION_STATUS: dict[str, Any] = {
-    "model_state": "idle",    # "running" | "idle"
-    "model_source": "system", # "user" | "heartbeat" | "system"
+    "model_state": "idle",        # "running" | "idle"
+    "model_source": "system",     # "user" | "heartbeat" | "system"
     "updated_at": None,
-    "last_run_at": None,      # ISO timestamp of last model run completion
-    "pid": None,              # Daemon process PID (int | None)
-    "status": "active",       # "active" | "stopped"
+    "last_run_at": None,          # ISO timestamp of last model run completion
+    "pid": None,                  # Daemon process PID (int | None)
+    "status": "active",           # "active" | "stopped"
+    "tasks_updated_at": None,     # ISO timestamp of last tasks.md write
+    "heartbeat_interval": 600.0,  # Seconds between heartbeat ticks — edit to change at runtime
 }
 
 

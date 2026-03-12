@@ -133,8 +133,17 @@ class SessionWatcher:
         """Load agent from manifest and run server loop."""
         from nutshell.runtime.session import Session
         from nutshell.runtime.ipc import FileIPC
+        from nutshell.runtime.status import read_session_status, write_session_status
 
-        heartbeat = float(manifest.get("heartbeat", 10.0))
+        # Read heartbeat_interval from status.json (user-editable at runtime).
+        # Fall back to manifest.json for old sessions and migrate the value into status.
+        status_data = read_session_status(session_dir)
+        heartbeat = status_data.get("heartbeat_interval")
+        if heartbeat is None:
+            heartbeat = float(manifest.get("heartbeat", 600.0))
+            write_session_status(session_dir, heartbeat_interval=heartbeat)
+        else:
+            heartbeat = float(heartbeat)
         base_dir = session_dir.parent
 
         try:
@@ -172,4 +181,4 @@ class SessionWatcher:
             raise
         except Exception as exc:
             print(f"[server] Session {session_id} crashed: {exc}")
-            ipc.append({"type": "error", "content": str(exc)})
+            ipc.append_event({"type": "error", "content": str(exc)})

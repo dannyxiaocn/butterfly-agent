@@ -15,7 +15,7 @@ if TYPE_CHECKING:
     from nutshell.runtime.ipc import FileIPC
 
 SESSIONS_DIR = Path("sessions")
-DEFAULT_HEARTBEAT_INTERVAL = 10.0  # seconds
+DEFAULT_HEARTBEAT_INTERVAL = 600.0  # 10 minutes
 SESSION_FINISHED = "SESSION_FINISHED"
 
 
@@ -58,7 +58,14 @@ class Session:
             self.tasks_path.write_text("", encoding="utf-8")
         if not self._context_path.exists():
             self._context_path.touch()
+        if not self._events_path.exists():
+            self._events_path.touch()
         ensure_session_status(self.session_dir)
+        # Write heartbeat_interval to status.json so it can be edited at runtime.
+        # Only sets it if not already present (allows user edits to persist across restarts).
+        current = read_session_status(self.session_dir)
+        if current.get("heartbeat_interval") is None:
+            write_session_status(self.session_dir, heartbeat_interval=heartbeat)
 
         self._inject_task_tools(agent)
 
@@ -73,11 +80,41 @@ class Session:
         @tool(description="Overwrite the task list. Pass empty string to clear all tasks.")
         def write_tasks(content: str) -> str:
             tasks_path.write_text(content, encoding="utf-8")
+            write_session_status(self.session_dir, tasks_updated_at=datetime.now().isoformat())
             return "Tasks updated."
 
         agent.tools.extend([read_tasks, write_tasks])
 
     # ── History persistence ────────────────────────────────────────
+
+    @staticmethod
+    def _clean_content_for_api(content):
+        """Strip storage-only fields from message content blocks.
+
+        Older sessions stored extra fields (e.g. 'ts') inside content blocks.
+        The Anthropic API rejects any unrecognised fields with a 400 error, so
+        we allow-list the fields that are valid for each known block type and
+        drop everything else.
+        """
+        if not isinstance(content, list):
+            return content
+        _ALLOWED: dict[str, set] = {
+            "text":        {"type", "text"},
+            "tool_use":    {"type", "id", "name", "input"},
+            "tool_result": {"type", "tool_use_id", "content", "is_error"},
+            "image":       {"type", "source"},
+        }
+        cleaned = []
+        for block in content:
+            if isinstance(block, dict):
+                allowed = _ALLOWED.get(block.get("type", ""))
+                cleaned.append(
+                    {k: v for k, v in block.items() if k in allowed}
+                    if allowed else dict(block)
+                )
+            else:
+                cleaned.append(block)
+        return cleaned
 
     def load_history(self) -> None:
         """Restore agent._history from context.jsonl on resume.
@@ -100,7 +137,8 @@ class Session:
                         event = json.loads(line)
                         if event.get("type") == "turn":
                             for m in event.get("messages", []):
-                                history.append(Message(role=m["role"], content=m["content"]))
+                                content = self._clean_content_for_api(m["content"])
+                                history.append(Message(role=m["role"], content=content))
                     except json.JSONDecodeError:
                         pass
         except Exception:
@@ -113,11 +151,13 @@ class Session:
         """Run agent with user message. Holds agent lock — blocks heartbeat tick."""
         old_len = len(self._agent._history)
         self._set_model_status("running", "user")
+        tool_call_cb, get_tool_call_count = self._make_tool_call_callback()
         try:
             async with self._agent_lock:
                 result = await self._agent.run(
                     message,
                     on_text_chunk=self._make_text_chunk_callback(),
+                    on_tool_call=tool_call_cb,
                 )
         except BaseException:
             self._set_model_status("idle", "user")
@@ -125,11 +165,14 @@ class Session:
 
         # Append full turn (the user_input event was already written by the UI
         # via send_message before the server picked it up).
-        self._append_context({
+        turn: dict = {
             "type": "turn",
             "triggered_by": "user",
             "messages": self._serialize_turn_messages(result.messages[old_len:]),
-        })
+        }
+        if get_tool_call_count() > 0:
+            turn["has_streaming_tools"] = True
+        self._append_context(turn)
         self._set_model_status("idle", "user")
         return result
 
@@ -150,12 +193,18 @@ class Session:
         heartbeat_instructions = self._agent.heartbeat_prompt or "Continue working on your tasks."
         prompt = f"Heartbeat activation.\n\nCurrent tasks:\n{tasks_content}\n\n{heartbeat_instructions}"
 
-        trigger_ts = self._set_model_status("running", "heartbeat")
+        # Write heartbeat_trigger event BEFORE starting so it appears in the UI
+        # before the thinking bubble (not after the agent turn is complete)
+        trigger_ts = datetime.now().isoformat()
+        self._append_event({"type": "heartbeat_trigger", "ts": trigger_ts})
+        self._set_model_status("running", "heartbeat")
+        tool_call_cb, get_tool_call_count = self._make_tool_call_callback()
         try:
             async with self._agent_lock:
                 result = await self._agent.run(
                     prompt,
                     on_text_chunk=self._make_text_chunk_callback(),
+                    on_tool_call=tool_call_cb,
                 )
         except BaseException:
             self._set_model_status("idle", "heartbeat")
@@ -165,17 +214,21 @@ class Session:
             # Clear tasks, prune heartbeat history so it doesn't pollute context
             self.tasks_path.write_text("", encoding="utf-8")
             self._agent._history = history_snapshot
-            self._append_context({"type": "heartbeat_finished"})
+            self._append_event({"type": "heartbeat_finished"})
         else:
             # Only log to context if session is still active — skip if user stopped
             # the session while this heartbeat was in-flight (avoids ghost output in UI)
             if not self.is_stopped():
-                self._append_context({
+                turn: dict = {
                     "type": "turn",
                     "triggered_by": "heartbeat",
+                    "pre_triggered": True,  # heartbeat_trigger was pre-emitted
                     "trigger_ts": trigger_ts,
                     "messages": self._serialize_turn_messages(result.messages[old_len:]),
-                })
+                }
+                if get_tool_call_count() > 0:
+                    turn["has_streaming_tools"] = True
+                self._append_context(turn)
 
         self._set_model_status("idle", "heartbeat")
         return result
@@ -224,7 +277,7 @@ class Session:
 
         # Skip existing context events — only process new user_input events.
         # Starting at current file size prevents replay of prior session messages.
-        input_offset = ipc.size()
+        input_offset = ipc.context_size()
         last_tick_time = asyncio.get_event_loop().time()
 
         try:
@@ -236,11 +289,14 @@ class Session:
                     # User message wakes a stopped session
                     if self.is_stopped():
                         self.set_status("active")
-                        self._append_context({"type": "status", "value": "resumed"})
+                        self._append_event({"type": "status", "value": "resumed"})
+                    # Context reshape: clean up any orphaned user message at history tail
+                    # (e.g., a heartbeat prompt interrupted mid-run)
+                    content = self._reshape_history(content)
                     try:
                         await self.chat(content)
                     except Exception as exc:
-                        self._append_context({"type": "error", "content": str(exc)})
+                        self._append_event({"type": "error", "content": str(exc)})
 
                 # Auto-expire stopped sessions after 5 hours
                 if self.is_stopped():
@@ -252,18 +308,23 @@ class Session:
                             if elapsed >= 5 * 3600:
                                 self.tasks_path.write_text("", encoding="utf-8")
                                 write_session_status(self.session_dir, status="active", stopped_at=None)
-                                self._append_context({"type": "status", "value": "auto-expired after 5h stopped"})
+                                self._append_event({"type": "status", "value": "auto-expired after 5h stopped"})
                         except Exception:
                             pass
 
-                # Heartbeat timer — check elapsed since last tick COMPLETED
+                # Heartbeat timer — read interval fresh from status.json each cycle
+                # so edits to status.json take effect without restarting the daemon.
                 now = asyncio.get_event_loop().time()
-                if now - last_tick_time >= self._heartbeat_interval:
+                current_interval = (
+                    read_session_status(self.session_dir).get("heartbeat_interval")
+                    or self._heartbeat_interval
+                )
+                if now - last_tick_time >= current_interval:
                     if not self.is_stopped() and not self._agent_lock.locked():
                         try:
                             await self.tick()
                         except Exception as exc:
-                            self._append_context({"type": "error", "content": str(exc)})
+                            self._append_event({"type": "error", "content": str(exc)})
                     # Reset timer AFTER tick completes (not before),
                     # so tick duration never cuts into the next interval.
                     last_tick_time = asyncio.get_event_loop().time()
@@ -272,12 +333,12 @@ class Session:
 
         except asyncio.CancelledError:
             self._set_model_status("idle", "system")
-            self._append_context({"type": "status", "value": "cancelled"})
+            self._append_event({"type": "status", "value": "cancelled"})
             self._clear_pid()
             raise
 
         self._set_model_status("idle", "system")
-        self._append_context({"type": "status", "value": "stopped"})
+        self._append_event({"type": "status", "value": "stopped"})
         self._clear_pid()
 
     # ── Properties ─────────────────────────────────────────────────
@@ -298,25 +359,76 @@ class Session:
     def _context_path(self) -> Path:
         return self.session_dir / "context.jsonl"
 
+    @property
+    def _events_path(self) -> Path:
+        return self.session_dir / "events.jsonl"
+
     # ── Internal ───────────────────────────────────────────────────
 
     def _append_context(self, event: dict) -> None:
-        """Append an event to context.jsonl (O(1), append-only)."""
+        """Append a conversation event (user_input or turn) to context.jsonl."""
         if self._ipc is not None:
-            self._ipc.append(event)
+            self._ipc.append_context(event)
         else:
             event.setdefault("ts", datetime.now().isoformat())
             with self._context_path.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(event, ensure_ascii=False) + "\n")
 
+    def _append_event(self, event: dict) -> None:
+        """Append a runtime/UI event to events.jsonl."""
+        if self._ipc is not None:
+            self._ipc.append_event(event)
+        else:
+            event.setdefault("ts", datetime.now().isoformat())
+            with self._events_path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(event, ensure_ascii=False) + "\n")
+
     def _set_model_status(self, state: str, source: str) -> str:
         ts = datetime.now().isoformat()
-        self._append_context({"type": "model_status", "state": state, "source": source, "ts": ts})
+        self._append_event({"type": "model_status", "state": state, "source": source, "ts": ts})
         updates: dict = {"model_state": state, "model_source": source}
         if state == "idle":
             updates["last_run_at"] = ts
         write_session_status(self.session_dir, **updates)
         return ts
+
+    def _make_tool_call_callback(self):
+        """Return (callback, counter) pair for streaming tool call events.
+
+        The callback writes a tool_call event to context.jsonl for each tool
+        invoked, giving the UI real-time visibility before results return.
+        The counter reports how many tool calls were streamed (used to mark
+        the turn with has_streaming_tools=True so history doesn't duplicate them).
+        """
+        count: list[int] = [0]
+
+        def on_tool_call(name: str, input: dict) -> None:
+            count[0] += 1
+            self._append_event({"type": "tool_call", "name": name, "input": input})
+
+        def get_count() -> int:
+            return count[0]
+
+        return on_tool_call, get_count
+
+    def _reshape_history(self, new_content: str) -> str:
+        """Clean up orphaned trailing user message before processing new user input.
+
+        If the agent history ends with an unresponded user message (e.g., a
+        heartbeat prompt interrupted mid-run), we either drop it (if it was a
+        heartbeat prompt) or merge it with the new message (if it was a real
+        user message), to prevent consecutive user messages which the API rejects.
+        """
+        if not self._agent._history or self._agent._history[-1].role != "user":
+            return new_content
+        last = self._agent._history[-1]
+        last_content = last.content if isinstance(last.content, str) else ""
+        self._agent._history.pop()
+        if "Heartbeat activation" in last_content:
+            # Orphaned heartbeat prompt — drop it, use new message as-is
+            return new_content
+        # Orphaned real user message — merge with new input
+        return f"{last_content}\n\n{new_content}"
 
     def _make_text_chunk_callback(self):
         """Return a sync callback that writes throttled partial_text events.
@@ -333,7 +445,7 @@ class Session:
             buf_len[0] += len(chunk)
             if buf_len[0] >= FLUSH_THRESHOLD:
                 accumulated = "".join(buf)
-                self._append_context({"type": "partial_text", "content": accumulated})
+                self._append_event({"type": "partial_text", "content": accumulated})
                 buf.clear()
                 buf_len[0] = 0
 
@@ -353,12 +465,6 @@ class Session:
     def _serialize_message_content(self, content):
         if not isinstance(content, list):
             return content
-        blocks: list = []
-        for block in content:
-            if isinstance(block, dict):
-                payload = dict(block)
-                payload.setdefault("ts", datetime.now().isoformat())
-                blocks.append(payload)
-            else:
-                blocks.append(block)
-        return blocks
+        # Return plain dict copies. Do NOT add extra fields (e.g. ts) that the
+        # Anthropic API rejects when these blocks are loaded back into history.
+        return [dict(block) if isinstance(block, dict) else block for block in content]

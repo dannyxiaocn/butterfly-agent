@@ -74,6 +74,7 @@ class Agent(BaseAgent):
         *,
         clear_history: bool = False,
         on_text_chunk: Callable[[str], None] | None = None,
+        on_tool_call: Callable[[str, dict], None] | None = None,
     ) -> AgentResult:
         """Run the agent with the given input and return an AgentResult.
 
@@ -117,6 +118,11 @@ class Agent(BaseAgent):
 
             if not tool_calls:
                 break
+
+            # Notify about each tool call before executing (for real-time streaming)
+            if on_tool_call:
+                for tc in tool_calls:
+                    on_tool_call(tc.name, tc.input)
 
             # Execute tools and append results
             tool_results = await _execute_tools(tool_calls, tool_map)

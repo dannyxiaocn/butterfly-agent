@@ -5,7 +5,7 @@ import pytest
 
 from nutshell.abstract.provider import Provider
 from nutshell.core.agent import Agent
-from nutshell.runtime.ipc import FileIPC, _to_display_events
+from nutshell.runtime.ipc import FileIPC, _context_event_to_display, _runtime_event_to_display
 from nutshell.runtime.session import Session
 from nutshell.runtime.status import read_session_status
 
@@ -25,7 +25,8 @@ def _write_manifest(session_dir):
     )
 
 
-def test_to_display_events_expands_turn_and_passes_model_status():
+def test_context_event_to_display_expands_turn():
+    """turn events are expanded into heartbeat_trigger + tool + agent display events."""
     turn = {
         "type": "turn",
         "triggered_by": "heartbeat",
@@ -41,8 +42,8 @@ def test_to_display_events_expands_turn_and_passes_model_status():
         ],
     }
 
-    events = _to_display_events(turn)
-
+    # for_history=True: always emit heartbeat_trigger and tools
+    events = _context_event_to_display(turn, for_history=True)
     assert events == [
         {"type": "heartbeat_trigger", "ts": "2026-03-11T12:00:00"},
         {"type": "tool", "name": "bash", "input": {"cmd": "ls"}, "ts": "2026-03-11T12:00:00"},
@@ -54,12 +55,34 @@ def test_to_display_events_expands_turn_and_passes_model_status():
         },
     ]
 
+    # for_history=False with pre_triggered=True: suppress heartbeat_trigger (already in events.jsonl)
+    pre_triggered_turn = dict(turn, pre_triggered=True)
+    sse_events = _context_event_to_display(pre_triggered_turn, for_history=False)
+    assert sse_events[0]["type"] == "tool"  # no heartbeat_trigger at front
+
+    # for_history=False with has_streaming_tools=True: suppress tools (already in events.jsonl)
+    streamed_turn = dict(turn, has_streaming_tools=True)
+    sse_events2 = _context_event_to_display(streamed_turn, for_history=False)
+    assert not any(e["type"] == "tool" for e in sse_events2)
+
+
+def test_runtime_event_to_display_passes_through():
+    """model_status and other runtime events pass through unchanged."""
     model_status = {"type": "model_status", "state": "running", "source": "user", "ts": "2026-03-11T12:00:01"}
-    assert _to_display_events(model_status) == [model_status]
+    assert _runtime_event_to_display(model_status) == [model_status]
+
+    partial = {"type": "partial_text", "content": "hello", "ts": "T"}
+    assert _runtime_event_to_display(partial) == [{"type": "partial_text", "content": "hello", "ts": "T"}]
+
+    tool_call = {"type": "tool_call", "name": "bash", "input": {"cmd": "ls"}, "ts": "T"}
+    assert _runtime_event_to_display(tool_call) == [
+        {"type": "tool", "name": "bash", "input": {"cmd": "ls"}, "ts": "T"}
+    ]
 
 
 @pytest.mark.asyncio
-async def test_session_chat_writes_model_status_around_turn(tmp_path):
+async def test_session_chat_writes_turn_to_context_and_status_to_events(tmp_path):
+    """chat() writes turn to context.jsonl and model_status to events.jsonl."""
     provider = MockProvider([("**done**", [])])
     agent = Agent(provider=provider)
     session = Session(agent=agent, session_id="demo", base_dir=tmp_path)
@@ -69,16 +92,27 @@ async def test_session_chat_writes_model_status_around_turn(tmp_path):
 
     await session.chat("hello")
 
-    events = [
+    context_events = [
         json.loads(line)
         for line in (session.session_dir / "context.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    runtime_events = [
+        json.loads(line)
+        for line in (session.session_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
     ]
 
-    assert [event["type"] for event in events] == ["model_status", "turn", "model_status"]
-    assert events[0]["state"] == "running"
-    assert events[0]["source"] == "user"
-    assert events[2]["state"] == "idle"
-    assert events[2]["source"] == "user"
+    # context.jsonl: only the turn
+    assert [e["type"] for e in context_events] == ["turn"]
+
+    # events.jsonl: model_status running + idle
+    assert [e["type"] for e in runtime_events] == ["model_status", "model_status"]
+    assert runtime_events[0]["state"] == "running"
+    assert runtime_events[0]["source"] == "user"
+    assert runtime_events[1]["state"] == "idle"
+    assert runtime_events[1]["source"] == "user"
+
     status = read_session_status(session.session_dir)
     assert status["model_state"] == "idle"
     assert status["model_source"] == "user"
@@ -86,6 +120,7 @@ async def test_session_chat_writes_model_status_around_turn(tmp_path):
 
 @pytest.mark.asyncio
 async def test_session_chat_writes_idle_on_cancellation(tmp_path):
+    """On cancellation, model_status(idle) is written to events.jsonl; context.jsonl is empty."""
     class CancellingProvider(Provider):
         async def complete(self, messages, tools, system_prompt, model, *, on_text_chunk=None):
             raise asyncio.CancelledError()
@@ -99,13 +134,24 @@ async def test_session_chat_writes_idle_on_cancellation(tmp_path):
     with pytest.raises(asyncio.CancelledError):
         await session.chat("hello")
 
-    events = [
+    context_events = [
         json.loads(line)
         for line in (session.session_dir / "context.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    runtime_events = [
+        json.loads(line)
+        for line in (session.session_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
     ]
 
-    assert [event["type"] for event in events] == ["model_status", "model_status"]
-    assert events[0]["state"] == "running"
-    assert events[1]["state"] == "idle"
+    # context.jsonl: empty (no completed turn)
+    assert context_events == []
+
+    # events.jsonl: model_status running + idle
+    assert [e["type"] for e in runtime_events] == ["model_status", "model_status"]
+    assert runtime_events[0]["state"] == "running"
+    assert runtime_events[1]["state"] == "idle"
+
     status = read_session_status(session.session_dir)
     assert status["model_state"] == "idle"

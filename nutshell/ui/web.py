@@ -64,6 +64,8 @@ def _read_session_info(session_dir: Path) -> dict | None:
         "model_state": status_payload.get("model_state", "idle"),
         "model_source": status_payload.get("model_source"),
         "last_run_at": status_payload.get("last_run_at"),
+        "tasks_updated_at": status_payload.get("tasks_updated_at"),
+        "heartbeat_interval": status_payload.get("heartbeat_interval") or manifest.get("heartbeat", 600.0),
         "alive": pid_alive and status != "stopped",
     }
 
@@ -118,12 +120,13 @@ def create_app(sessions_dir: Path) -> FastAPI:
     async def create_session(body: dict):
         session_id = body.get("id") or datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         entity = body.get("entity", _DEFAULT_ENTITY)
-        heartbeat = float(body.get("heartbeat", 10.0))
+        heartbeat = float(body.get("heartbeat", 600.0))
 
         session_dir = sessions_dir / session_id
         session_dir.mkdir(parents=True, exist_ok=True)
         (session_dir / "files").mkdir(exist_ok=True)
         (session_dir / "context.jsonl").touch(exist_ok=True)
+        (session_dir / "events.jsonl").touch(exist_ok=True)
         (session_dir / "tasks.md").touch(exist_ok=True)
 
         # manifest.json is purely static config — written once, never mutated
@@ -136,8 +139,9 @@ def create_app(sessions_dir: Path) -> FastAPI:
         (session_dir / "manifest.json").write_text(
             json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
         )
-        # status.json holds all runtime/dynamic state
+        # status.json holds all runtime/dynamic state (including editable heartbeat_interval)
         ensure_session_status(session_dir)
+        write_session_status(session_dir, heartbeat_interval=heartbeat)
         return {"id": session_id, "entity": entity}
 
     # ── Messages ──────────────────────────────────────────────────────────
@@ -155,7 +159,7 @@ def create_app(sessions_dir: Path) -> FastAPI:
     # ── SSE events ────────────────────────────────────────────────────────
 
     @app.get("/api/sessions/{session_id}/events")
-    async def stream_events(session_id: str, since: int = 0):
+    async def stream_events(session_id: str, context_since: int = 0, events_since: int = 0):
         session_dir = sessions_dir / session_id
         if not session_dir.exists():
             raise HTTPException(404, f"Session not found: {session_id}")
@@ -163,16 +167,26 @@ def create_app(sessions_dir: Path) -> FastAPI:
         async def generator() -> AsyncIterator[str]:
             from nutshell.runtime.ipc import FileIPC
             ipc = FileIPC(session_dir)
-            offset = since
-            # Yield events that appeared before the SSE connection was established
-            for event, new_offset in ipc.tail_display(offset):
-                offset = new_offset
+            ctx_offset = context_since
+            evt_offset = events_since
+            # Drain events that appeared between history load and SSE connect
+            for event, new_offset in ipc.tail_context(ctx_offset):
+                ctx_offset = new_offset
                 yield _sse_format(event)
-            # Then stream new events as they arrive
+            for event, new_offset in ipc.tail_runtime_events(evt_offset):
+                evt_offset = new_offset
+                yield _sse_format(event)
+            # Stream new events as they arrive.
+            # Context-first per poll cycle: model_status(idle) is written to events.jsonl
+            # AFTER the turn is written to context.jsonl, so reading context first ensures
+            # the agent message renders before the thinking bubble is cleared.
             while True:
                 await asyncio.sleep(0.3)
-                for event, new_offset in ipc.tail_display(offset):
-                    offset = new_offset
+                for event, new_offset in ipc.tail_context(ctx_offset):
+                    ctx_offset = new_offset
+                    yield _sse_format(event)
+                for event, new_offset in ipc.tail_runtime_events(evt_offset):
+                    evt_offset = new_offset
                     yield _sse_format(event)
 
         return StreamingResponse(
@@ -188,20 +202,25 @@ def create_app(sessions_dir: Path) -> FastAPI:
 
     @app.get("/api/sessions/{session_id}/history")
     async def get_history(session_id: str):
-        """Return all display events derived from context.jsonl + current byte offset.
+        """Return all display events from context.jsonl + both file offsets.
 
-        JS loads this once on attach to render full history instantly,
-        then starts SSE from the returned offset for new events only.
-        Partial text (streaming chunks) are skipped — only complete turns appear.
+        JS loads this once on attach to render full history instantly, then
+        starts SSE from the returned offsets for new events only.
+        Only context.jsonl is read (pure conversation history); events.jsonl
+        ephemeral streaming events are not replayed.
         """
         from nutshell.runtime.ipc import FileIPC
         ipc = FileIPC(sessions_dir / session_id)
         events: list[dict] = []
-        size = 0
-        for event, offset in ipc.tail_display(0, skip_partial=True):
+        context_offset = 0
+        for event, off in ipc.tail_history(0):
             events.append(event)
-            size = offset
-        return {"events": events, "offset": size}
+            context_offset = off
+        return {
+            "events": events,
+            "context_offset": context_offset,
+            "events_offset": ipc.events_size(),
+        }
 
     # ── Stop / Start ──────────────────────────────────────────────────────
 
@@ -211,7 +230,7 @@ def create_app(sessions_dir: Path) -> FastAPI:
         session_dir = sessions_dir / session_id
         write_session_status(session_dir, status="stopped", stopped_at=datetime.now().isoformat())
         if session_dir.exists():
-            FileIPC(session_dir).append(
+            FileIPC(session_dir).append_event(
                 {"type": "status", "value": "heartbeat paused — use ▶ Start to resume"}
             )
         return {"ok": True}
@@ -222,7 +241,7 @@ def create_app(sessions_dir: Path) -> FastAPI:
         session_dir = sessions_dir / session_id
         write_session_status(session_dir, status="active", stopped_at=None)
         if session_dir.exists():
-            FileIPC(session_dir).append(
+            FileIPC(session_dir).append_event(
                 {"type": "status", "value": "heartbeat resumed"}
             )
         return {"ok": True}
@@ -243,6 +262,7 @@ def create_app(sessions_dir: Path) -> FastAPI:
             raise HTTPException(404, f"Session not found: {session_id}")
         tasks_path = session_dir / "tasks.md"
         tasks_path.write_text(body.get("content", ""), encoding="utf-8")
+        write_session_status(session_dir, tasks_updated_at=datetime.now().isoformat())
         return {"ok": True}
 
     return app
@@ -430,6 +450,7 @@ _HTML = r"""<!DOCTYPE html>
   <div id="tasks-panel">
     <div class="panel-header">
       Tasks
+      <span id="tasks-updated-ts" style="font-size:10px; color: var(--muted); margin-right: auto; margin-left: 6px;"></span>
       <button id="tasks-edit-btn" onclick="toggleTasksEdit()">edit</button>
     </div>
     <div id="tasks-content">(no session selected)</div>
@@ -524,17 +545,19 @@ _HTML = r"""<!DOCTYPE html>
     document.getElementById('msg-input').disabled = false;
     document.getElementById('send-btn').disabled = false;
 
-    // Load full history instantly (partial_text events are skipped server-side)
+    // Load full history from context.jsonl (pure conversation: user + tool + agent events)
     const histRes = await fetch(`/api/sessions/${id}/history`);
-    const { events, offset } = await histRes.json();
+    const { events, context_offset, events_offset } = await histRes.json();
     for (const event of events) appendEvent(event);
     syncModelStateFromMeta();
     renderSessionIndicator();
     // Restore thinking bubble if model is currently running
     if (modelState.state === 'running') showThinking();
 
-    // SSE from current offset — only new events from here on
-    eventSource = new EventSource(`/api/sessions/${id}/events?since=${offset}`);
+    // SSE from both offsets — context.jsonl for new turns, events.jsonl for runtime events
+    eventSource = new EventSource(
+      `/api/sessions/${id}/events?context_since=${context_offset}&events_since=${events_offset}`
+    );
     const types = ['agent','user','tool','model_status','partial_text','heartbeat_trigger','heartbeat_finished','status','error'];
     for (const t of types) {
       eventSource.addEventListener(t, e => appendEvent(JSON.parse(e.data)));
@@ -752,6 +775,18 @@ _HTML = r"""<!DOCTYPE html>
     if (!text || !currentSession) return;
     input.value = '';
 
+    // Optimistic UI update: if session is stopped, immediately show as running
+    // (daemon will pick up the message within 0.5s and auto-resume)
+    const meta = currentSessionMeta();
+    if (meta && meta.status === 'stopped') {
+      meta.status = 'active';
+      meta.model_state = 'running';
+      modelState = { state: 'running', source: 'user' };
+      renderSessionIndicator();
+      renderSessionList();
+      if (!thinkingEl) showThinking();
+    }
+
     await fetch(`/api/sessions/${currentSession}/messages`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
@@ -771,6 +806,15 @@ _HTML = r"""<!DOCTYPE html>
       document.getElementById('tasks-textarea').value = data.content || '';
       const meta = currentSessionMeta();
       if (meta) meta.has_tasks = Boolean(data.content?.trim());
+      // Show tasks last update time
+      const tsEl = document.getElementById('tasks-updated-ts');
+      const updatedAt = meta?.tasks_updated_at;
+      const interval = meta?.heartbeat_interval;
+      const intervalStr = interval
+        ? (interval >= 60 ? `every ${Math.round(interval / 60)}m` : `every ${interval}s`)
+        : '';
+      const updatedStr = updatedAt ? fmtDate(updatedAt) : '';
+      tsEl.textContent = [updatedStr, intervalStr].filter(Boolean).join(' · ');
       renderServerIndicator();
       renderSessionIndicator();
       renderSessionList();
