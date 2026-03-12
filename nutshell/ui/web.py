@@ -65,7 +65,7 @@ def _read_session_info(session_dir: Path) -> dict | None:
         "model_source": status_payload.get("model_source"),
         "last_run_at": status_payload.get("last_run_at"),
         "tasks_updated_at": status_payload.get("tasks_updated_at"),
-        "heartbeat_interval": status_payload.get("heartbeat_interval") or manifest.get("heartbeat", 600.0),
+        "heartbeat_interval": status_payload.get("heartbeat_interval", 600.0),
         "alive": pid_alive and status != "stopped",
     }
 
@@ -134,7 +134,6 @@ def create_app(sessions_dir: Path) -> FastAPI:
             "session_id": session_id,
             "entity": entity,
             "created_at": datetime.now().isoformat(),
-            "heartbeat": heartbeat,
         }
         (session_dir / "manifest.json").write_text(
             json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"

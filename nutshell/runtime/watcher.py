@@ -136,14 +136,9 @@ class SessionWatcher:
         from nutshell.runtime.status import read_session_status, write_session_status
 
         # Read heartbeat_interval from status.json (user-editable at runtime).
-        # Fall back to manifest.json for old sessions and migrate the value into status.
+        # Fall back to 600s default for old sessions that predate this field.
         status_data = read_session_status(session_dir)
-        heartbeat = status_data.get("heartbeat_interval")
-        if heartbeat is None:
-            heartbeat = float(manifest.get("heartbeat", 600.0))
-            write_session_status(session_dir, heartbeat_interval=heartbeat)
-        else:
-            heartbeat = float(heartbeat)
+        heartbeat = float(status_data.get("heartbeat_interval") or 600.0)
         base_dir = session_dir.parent
 
         try:
