@@ -15,18 +15,26 @@ def _load_prompt(path: Path) -> str:
 class AgentLoader(BaseLoader[Agent]):
     """Load a complete Agent from an entity directory containing agent.yaml.
 
-    Reads the manifest (agent.yaml) and uses SkillLoader and ToolLoader to
-    assemble a fully configured Agent instance.
+    Supports entity inheritance via the ``extends`` field in agent.yaml.
+    agent.yaml always contains the full set of fields. A null value signals
+    "inherit from parent":
+
+        prompts:
+          system:          # null  → load from parent entity's prompts.system path
+          heartbeat:       # null  → inherit
+          session_context: prompts/session_context.md  # value → load from this entity
+
+        tools:             # null  → inherit parent's tools list
+        skills: []         # []    → explicitly no skills (do NOT inherit)
+
+    Rules:
+    - Prompts: null value → resolve path from parent manifest, load from parent dir.
+               string value → load from this entity's dir.
+    - tools/skills: None (key absent or null) → inherit parent's list, load files
+               from parent dir.  [] or a list → use as-is, load files from this dir.
 
     Args:
-        impl_registry: Optional dict mapping tool name -> callable, passed
-                       to ToolLoader so tool implementations are wired up.
-
-    Example::
-
-        agent = AgentLoader(impl_registry={"echo": lambda text: text}).load(
-            Path("entity/core_agent")
-        )
+        impl_registry: Optional dict mapping tool name -> callable.
     """
 
     def __init__(self, impl_registry: dict[str, Callable] | None = None) -> None:
@@ -45,30 +53,85 @@ class AgentLoader(BaseLoader[Agent]):
             raise FileNotFoundError(f"agent.yaml not found in: {path}")
 
         manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
-        prompts_cfg = manifest.get("prompts", {}) or {}
 
-        # Load prompts
-        system_prompt = ""
-        if "system" in prompts_cfg:
-            system_prompt = _load_prompt(path / prompts_cfg["system"])
+        # ── Resolve parent ────────────────────────────────────────────────────
+        parent_path: Path | None = None
+        parent_manifest: dict = {}
+        extends = manifest.get("extends")
+        if extends:
+            candidate = path.parent / extends
+            if not (candidate / "agent.yaml").exists():
+                raise FileNotFoundError(
+                    f"Entity '{path.name}' extends '{extends}' "
+                    f"but parent not found at: {candidate}"
+                )
+            parent_path = candidate
+            parent_manifest = yaml.safe_load(
+                (parent_path / "agent.yaml").read_text(encoding="utf-8")
+            ) or {}
 
-        heartbeat_prompt = ""
-        if "heartbeat" in prompts_cfg:
-            heartbeat_prompt = _load_prompt(path / prompts_cfg["heartbeat"])
+        child_prompts = manifest.get("prompts") or {}
+        parent_prompts = parent_manifest.get("prompts") or {}
 
-        session_context_template = ""
-        if "session_context" in prompts_cfg:
-            session_context_template = _load_prompt(path / prompts_cfg["session_context"])
+        # ── Prompts ──────────────────────────────────────────────────────────
+        def load_prompt_key(key: str) -> str:
+            rel = child_prompts.get(key)  # None if key absent or value is null
+            if rel:
+                # Explicit path → load from this entity's directory
+                p = path / rel
+                return _load_prompt(p) if p.exists() else ""
+            # Null/absent → inherit: use parent's path, load from parent's directory
+            parent_rel = parent_prompts.get(key)
+            if parent_rel and parent_path:
+                p = parent_path / parent_rel
+                return _load_prompt(p) if p.exists() else ""
+            return ""
 
-        # Load skills
-        skills_cfg = manifest.get("skills", []) or []
-        skills = [SkillLoader().load(path / s) for s in skills_cfg]
+        system_prompt = load_prompt_key("system")
+        heartbeat_prompt = load_prompt_key("heartbeat")
+        session_context_template = load_prompt_key("session_context")
 
-        # Load tools
-        tools_cfg = manifest.get("tools", []) or []
+        def resolve_file(rel: str) -> Path | None:
+            """Child directory first, then parent directory."""
+            p = path / rel
+            if p.exists():
+                return p
+            if parent_path:
+                p = parent_path / rel
+                if p.exists():
+                    return p
+            return None
+
+        # ── Tools ─────────────────────────────────────────────────────────────
+        # None (null/absent) → inherit parent's list. [] or explicit list → use as-is.
+        # Each path in the list resolves child-first, parent-fallback.
+        raw_tools = manifest.get("tools")
+        if raw_tools is None and parent_path:
+            tools_cfg = parent_manifest.get("tools") or []
+        else:
+            tools_cfg = raw_tools or []
+
         tool_loader = ToolLoader(impl_registry=self._impl_registry)
-        tools = [tool_loader.load(path / t) for t in tools_cfg]
+        tools = [
+            tool_loader.load(resolved)
+            for t in tools_cfg
+            if (resolved := resolve_file(t)) is not None
+        ]
 
+        # ── Skills ────────────────────────────────────────────────────────────
+        raw_skills = manifest.get("skills")
+        if raw_skills is None and parent_path:
+            skills_cfg = parent_manifest.get("skills") or []
+        else:
+            skills_cfg = raw_skills or []
+
+        skills = [
+            SkillLoader().load(resolved)
+            for s in skills_cfg
+            if (resolved := resolve_file(s)) is not None
+        ]
+
+        # ── Assemble ──────────────────────────────────────────────────────────
         agent = Agent(
             system_prompt=system_prompt,
             tools=tools,
@@ -80,13 +143,12 @@ class AgentLoader(BaseLoader[Agent]):
             session_context_template=session_context_template,
         )
 
-        # Set provider from agent.yaml (lazy import to avoid circular deps)
         provider_str = manifest.get("provider", "anthropic")
         try:
             from nutshell.runtime.provider_factory import resolve_provider
             agent._provider = resolve_provider(provider_str)
         except Exception:
-            pass  # fall back to lazy default (AnthropicProvider on first use)
+            pass
 
         return agent
 

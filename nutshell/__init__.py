@@ -4,7 +4,7 @@ from nutshell.core.agent import Agent
 from nutshell.runtime.session import Session, SESSION_FINISHED
 from nutshell.runtime.ipc import FileIPC
 from nutshell.abstract.provider import Provider
-from nutshell.llm.anthropic import AnthropicProvider
+from nutshell.providers.llm.anthropic import AnthropicProvider
 from nutshell.core.skill import Skill
 from nutshell.core.tool import Tool, tool
 from nutshell.core.types import AgentResult, Message, ToolCall

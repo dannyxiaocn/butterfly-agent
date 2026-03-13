@@ -2,8 +2,8 @@ from __future__ import annotations
 from nutshell.abstract.provider import Provider
 
 _REGISTRY: dict[str, tuple[str, str]] = {
-    "anthropic":        ("nutshell.llm.anthropic", "AnthropicProvider"),
-    "kimi-coding-plan": ("nutshell.llm.kimi",     "KimiForCodingProvider"),
+    "anthropic":        ("nutshell.providers.llm.anthropic", "AnthropicProvider"),
+    "kimi-coding-plan": ("nutshell.providers.llm.kimi",      "KimiForCodingProvider"),
 }
 
 

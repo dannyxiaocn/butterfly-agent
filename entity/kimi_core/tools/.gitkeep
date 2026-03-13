@@ -1,0 +1,2 @@
+# Inherited from agent_core.
+# Add tool .json files here and list them under `tools:` in agent.yaml to override.

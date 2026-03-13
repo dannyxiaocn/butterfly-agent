@@ -1,16 +1,16 @@
 name: kimi_core
-description: ""
+description: "Kimi model specialist."
 model: kimi-for-coding
 provider: kimi-coding-plan
+extends: agent_core
 release_policy: persistent
 max_iterations: 20
 
 prompts:
-  system: prompts/system.md
-  heartbeat: prompts/heartbeat.md
-  session_context: prompts/session_context.md
+  system:           # inherited from agent_core
+  heartbeat:        # inherited from agent_core
+  session_context:  # inherited from agent_core
 
-tools:
-  - tools/bash.json
+tools:    # inherited from agent_core
 
-skills: []
+skills:   # inherited from agent_core

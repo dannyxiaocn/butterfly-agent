@@ -46,7 +46,6 @@ class AnthropicProvider(Provider):
             kwargs["tools"] = api_tools
 
         if on_text_chunk is not None:
-            # Streaming mode — yields text chunks as they arrive
             async with self._client.messages.stream(**kwargs) as stream:
                 async for text in stream.text_stream:
                     on_text_chunk(text)
@@ -70,7 +69,6 @@ def _to_api_messages(messages: list[Message]) -> list[dict]:
     result = []
     for msg in messages:
         if msg.role == "tool":
-            # Tool results are appended as user messages with tool_result content
             result.append({"role": "user", "content": msg.content})
         else:
             result.append({"role": msg.role, "content": msg.content})

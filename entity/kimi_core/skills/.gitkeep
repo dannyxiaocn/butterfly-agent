@@ -1,0 +1,2 @@
+# Inherited from agent_core.
+# Add skill .md files here and list them under `skills:` in agent.yaml to override.
