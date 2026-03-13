@@ -1,7 +1,7 @@
 name: kimi_core
 description: ""
 model: kimi-for-coding
-provider: kimi
+provider: kimi-coding-plan
 release_policy: persistent
 max_iterations: 20
 

@@ -1,6 +1,5 @@
 from __future__ import annotations
 import inspect
-import functools
 from typing import Any, Callable, get_type_hints
 
 from nutshell.abstract.tool import BaseTool

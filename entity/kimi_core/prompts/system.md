@@ -86,6 +86,6 @@ p.write_text(json.dumps(d, indent=2))
 
 - `heartbeat_interval` — seconds between wakeups (60–300 urgent, 600 normal, 3600+ slow)
 - `model` — override the LLM model for this session
-- `provider` — override the provider (`anthropic`, `openai`, `kimi`)
+- `provider` — override the provider (`anthropic`, `kimi-coding-plan`)
 
 `read_tasks` always shows the current wakeup interval.

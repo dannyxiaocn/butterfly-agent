@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import AsyncIterator
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, StreamingResponse
 from nutshell.runtime.status import ensure_session_status, read_session_status, write_session_status
 from nutshell.runtime.params import ensure_session_params, write_session_params

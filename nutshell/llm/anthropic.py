@@ -11,12 +11,17 @@ if TYPE_CHECKING:
 class AnthropicProvider(Provider):
     """LLM provider backed by Anthropic Claude."""
 
-    def __init__(self, api_key: str | None = None, max_tokens: int = 8096) -> None:
+    def __init__(
+        self,
+        api_key: str | None = None,
+        max_tokens: int = 8096,
+        base_url: str | None = None,
+    ) -> None:
         try:
             import anthropic as _anthropic
         except ImportError:
             raise ImportError("Install anthropic: pip install anthropic") from None
-        self._client = _anthropic.AsyncAnthropic(api_key=api_key)
+        self._client = _anthropic.AsyncAnthropic(api_key=api_key, base_url=base_url)
         self.max_tokens = max_tokens
 
     async def complete(
