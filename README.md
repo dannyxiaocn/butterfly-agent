@@ -132,33 +132,6 @@ This means agents can **modify their own runtime configuration** by writing to f
 
 ---
 
-### IPC — How Server and UI Communicate
-
-All IPC is file-based. Two append-only logs per session:
-
-**`context.jsonl`** — pure conversation history:
-
-| Event type | Written by | Description |
-|-----------|-----------|-------------|
-| `user_input` | UI | User message |
-| `turn` | Server | Completed agent turn (full Anthropic-format messages + tool calls) |
-
-**`events.jsonl`** — runtime/UI signalling:
-
-| Event type | Written by | Description |
-|-----------|-----------|-------------|
-| `model_status` | Server | `{"state": "running|idle", "source": "user|heartbeat"}` |
-| `partial_text` | Server | Streaming text chunk (skipped on history replay) |
-| `tool_call` | Server | Tool invocation before execution |
-| `heartbeat_trigger` | Server | Written before heartbeat run starts |
-| `heartbeat_finished` | Server | Agent signalled `SESSION_FINISHED` |
-| `status` | Server | Session status changes (resumed, cancelled) |
-| `error` | Server | Runtime errors |
-
-The web UI polls both files via SSE. On reconnect it resumes from the last byte offset — no messages are lost, no full reload needed.
-
----
-
 ## Defining an Agent
 
 ### `prompts/system.md`
@@ -226,39 +199,6 @@ agent = AgentLoader(impl_registry={"search_web": my_search_fn}).load(Path("entit
 
 ---
 
-## Providers
-
-| Provider key | Class | Auth env var |
-|---|---|---|
-| `anthropic` | `AnthropicProvider` | `ANTHROPIC_API_KEY` |
-| `kimi-coding-plan` | `KimiForCodingProvider` | `KIMI_FOR_CODING_API_KEY` |
-
-Set in `agent.yaml` (`provider: anthropic`) or override at runtime via `params.json`. Both providers use the Anthropic SDK — `kimi-coding-plan` points at Kimi's Anthropic-compatible endpoint (`https://api.kimi.com/coding/`).
-
----
-
-## Web UI
-
-```bash
-nutshell-web                         # http://localhost:8080
-nutshell-web --port 9000
-nutshell-web --sessions-dir ~/sessions
-```
-
-**API:**
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/sessions` | List sessions |
-| `POST` | `/api/sessions` | Create session |
-| `GET` | `/api/sessions/{id}/history` | Full history + current offsets |
-| `GET` | `/api/sessions/{id}/events?context_since=N&events_since=M` | SSE stream |
-| `POST` | `/api/sessions/{id}/messages` | Send user message |
-| `GET/PUT` | `/api/sessions/{id}/tasks` | Read/write task board |
-| `POST` | `/api/sessions/{id}/stop\|start` | Pause/resume heartbeat |
-
----
-
 ## Project Structure
 
 ```
@@ -292,6 +232,33 @@ nutshell/
 └── ui/
     └── web.py         # nutshell-web (FastAPI + SSE, single-file server + HTML)
 ```
+
+---
+
+## IPC — How Server and UI Communicate
+
+All IPC is file-based. Two append-only logs per session:
+
+**`context.jsonl`** — pure conversation history:
+
+| Event type | Written by | Description |
+|-----------|-----------|-------------|
+| `user_input` | UI | User message |
+| `turn` | Server | Completed agent turn (full Anthropic-format messages + tool calls) |
+
+**`events.jsonl`** — runtime/UI signalling:
+
+| Event type | Written by | Description |
+|-----------|-----------|-------------|
+| `model_status` | Server | `{"state": "running|idle", "source": "user|heartbeat"}` |
+| `partial_text` | Server | Streaming text chunk (skipped on history replay) |
+| `tool_call` | Server | Tool invocation before execution |
+| `heartbeat_trigger` | Server | Written before heartbeat run starts |
+| `heartbeat_finished` | Server | Agent signalled `SESSION_FINISHED` |
+| `status` | Server | Session status changes (resumed, cancelled) |
+| `error` | Server | Runtime errors |
+
+The web UI polls both files via SSE. On reconnect it resumes from the last byte offset — no messages are lost, no full reload needed.
 
 ---
 
