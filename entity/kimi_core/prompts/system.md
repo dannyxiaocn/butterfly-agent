@@ -18,14 +18,21 @@ Users understand this model. When they say things like "next time you wake up", 
 
 ## Task Board
 
-You have a persistent task board (`tasks.md`) for tracking work across activations.
-Use `read_tasks` to check outstanding tasks and see your current wakeup interval.
-Use `write_tasks` to update the board before finishing each activation:
+You have a persistent task board at `sessions/YOUR_ID/tasks.md` for tracking work across activations.
+Read and write it via bash:
+
+```bash
+cat sessions/YOUR_ID/tasks.md          # read current tasks
+cat > sessions/YOUR_ID/tasks.md << 'EOF'
+- [ ] Task 1 — next steps...
+EOF
+echo -n > sessions/YOUR_ID/tasks.md    # clear the board when all done
+```
 
 - Remove tasks you have completed.
 - Leave unfinished tasks with clear notes on next steps — your future self will read these cold, with no memory of this session.
 - When deferring work, write enough context that you can resume without confusion.
-- Call `write_tasks("")` when all work is done to clear the board.
+- Clear the board (`echo -n > tasks.md`) when all work is done.
 
 An empty task board means no outstanding work remains.
 
@@ -88,4 +95,4 @@ p.write_text(json.dumps(d, indent=2))
 - `model` — override the LLM model for this session
 - `provider` — override the provider (`anthropic`, `kimi-coding-plan`)
 
-`read_tasks` always shows the current wakeup interval.
+The current wakeup interval is in `params.json` (`heartbeat_interval` field).

@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 from nutshell.core.agent import Agent
 from nutshell.core.skill import Skill
-from nutshell.core.tool import Tool, tool
+from nutshell.core.tool import Tool
 from nutshell.core.types import AgentResult
 from nutshell.runtime.params import ensure_session_params, read_session_params, write_session_params
 from nutshell.runtime.provider_factory import provider_name, resolve_provider
@@ -80,38 +80,11 @@ class Session:
         ensure_session_status(self.session_dir)
         ensure_session_params(self.session_dir, heartbeat_interval=heartbeat)
 
-        self._inject_task_tools(agent)
-
         # Baseline snapshot — _load_session_capabilities restores to these each activation
         self._entity_system_prompt: str = agent.system_prompt
         self._entity_skills: list[Skill] = list(agent.skills)
         self._entity_tools: list[Tool] = list(agent.tools)
         self._entity_model: str = agent.model
-
-    def _inject_task_tools(self, agent: Agent) -> None:
-        tasks_path = self.tasks_path
-        session_dir = self.session_dir
-
-        @tool(description="Read the current task list and current wakeup interval.")
-        def read_tasks() -> str:
-            content = tasks_path.read_text(encoding="utf-8").strip()
-            tasks_section = content or "(empty)"
-            interval = float(
-                read_session_params(session_dir).get("heartbeat_interval")
-                or DEFAULT_HEARTBEAT_INTERVAL
-            )
-            interval_desc = f"{interval:.0f}s"
-            if interval >= 60:
-                interval_desc += f" ({interval / 60:.0f}m)"
-            return f"{tasks_section}\n\n---\nCurrent wakeup interval: {interval_desc}"
-
-        @tool(description="Overwrite the task list. Pass empty string to clear all tasks.")
-        def write_tasks(content: str) -> str:
-            tasks_path.write_text(content, encoding="utf-8")
-            write_session_status(session_dir, tasks_updated_at=datetime.now().isoformat())
-            return "Tasks updated."
-
-        agent.tools.extend([read_tasks, write_tasks])
 
     # ── Capability loading ─────────────────────────────────────────
 

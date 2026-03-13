@@ -52,6 +52,10 @@ def _read_session_info(session_dir: Path) -> dict | None:
     status_payload = read_session_status(session_dir)
     tasks_path = session_dir / "tasks.md"
     has_tasks = tasks_path.exists() and bool(tasks_path.read_text(encoding="utf-8").strip())
+    tasks_mtime = (
+        datetime.fromtimestamp(tasks_path.stat().st_mtime).isoformat()
+        if tasks_path.exists() else None
+    )
     pid_alive = _pid_alive(status_payload.get("pid"))
     status = status_payload.get("status", "active")
     return {
@@ -65,7 +69,7 @@ def _read_session_info(session_dir: Path) -> dict | None:
         "model_state": status_payload.get("model_state", "idle"),
         "model_source": status_payload.get("model_source"),
         "last_run_at": status_payload.get("last_run_at"),
-        "tasks_updated_at": status_payload.get("tasks_updated_at"),
+        "tasks_updated_at": tasks_mtime,
         "heartbeat_interval": status_payload.get("heartbeat_interval", 600.0),
         "alive": pid_alive and status != "stopped",
     }
@@ -273,7 +277,6 @@ def create_app(sessions_dir: Path) -> FastAPI:
             raise HTTPException(404, f"Session not found: {session_id}")
         tasks_path = session_dir / "tasks.md"
         tasks_path.write_text(body.get("content", ""), encoding="utf-8")
-        write_session_status(session_dir, tasks_updated_at=datetime.now().isoformat())
         return {"ok": True}
 
     return app
@@ -413,6 +416,7 @@ _HTML = r"""<!DOCTYPE html>
   .tasks-actions { display: flex; gap: 6px; }
   #tasks-edit-btn { cursor: pointer; font-size: 11px; color: var(--muted); border: none; background: none; }
   #tasks-edit-btn:hover { color: var(--accent); }
+  #tasks-footer { padding: 5px 12px; border-top: 1px solid var(--border); text-align: right; font-size: 10px; color: var(--muted); }
 </style>
 </head>
 <body>
@@ -461,7 +465,6 @@ _HTML = r"""<!DOCTYPE html>
   <div id="tasks-panel">
     <div class="panel-header">
       Tasks
-      <span id="tasks-updated-ts" style="font-size:10px; color: var(--muted); margin-right: auto; margin-left: 6px;"></span>
       <button id="tasks-edit-btn" onclick="toggleTasksEdit()">edit</button>
     </div>
     <div id="tasks-content">(no session selected)</div>
@@ -472,6 +475,7 @@ _HTML = r"""<!DOCTYPE html>
         <button id="tasks-cancel" onclick="toggleTasksEdit()">Cancel</button>
       </div>
     </div>
+    <div id="tasks-footer"></div>
   </div>
 </div>
 
@@ -817,15 +821,15 @@ _HTML = r"""<!DOCTYPE html>
       document.getElementById('tasks-textarea').value = data.content || '';
       const meta = currentSessionMeta();
       if (meta) meta.has_tasks = Boolean(data.content?.trim());
-      // Show tasks last update time
-      const tsEl = document.getElementById('tasks-updated-ts');
+      // Show tasks last update time + heartbeat interval in footer
+      const footer = document.getElementById('tasks-footer');
       const updatedAt = meta?.tasks_updated_at;
       const interval = meta?.heartbeat_interval;
       const intervalStr = interval
         ? (interval >= 60 ? `every ${Math.round(interval / 60)}m` : `every ${interval}s`)
         : '';
-      const updatedStr = updatedAt ? fmtDate(updatedAt) : '';
-      tsEl.textContent = [updatedStr, intervalStr].filter(Boolean).join(' · ');
+      const updatedStr = updatedAt ? `updated ${fmtDate(updatedAt)}` : '';
+      footer.textContent = [updatedStr, intervalStr].filter(Boolean).join(' · ');
       renderServerIndicator();
       renderSessionIndicator();
       renderSessionList();

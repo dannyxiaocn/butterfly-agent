@@ -1,4 +1,4 @@
-# Nutshell `v0.6.0`
+# Nutshell `v0.6.1`
 
 A minimal Python agent runtime. Agents run as persistent server-managed sessions with autonomous heartbeat ticking, accessible via web browser.
 
@@ -84,7 +84,7 @@ A session is a running instance of an entity. Each session gets its own director
 ```
 sessions/<id>/
 ├── params.json             ← runtime overrides: model, provider, heartbeat_interval
-├── tasks.md                ← task board (agent reads/writes via injected tools)
+├── tasks.md                ← task board (agent reads/writes via bash)
 ├── files/                  ← attached files
 ├── prompts/
 │   └── memory.md           ← agent persistent memory (auto-appended to system prompt)
@@ -142,9 +142,8 @@ The agent's identity and rules. Include task board instructions if using heartbe
 You are a focused coding assistant.
 
 ## Task Board
-Use read_tasks to check outstanding tasks.
-Use write_tasks to update the board after each activation.
-Call write_tasks("") when all work is done.
+Read and write `sessions/YOUR_ID/tasks.md` via bash.
+Clear the file when all work is done.
 ```
 
 ### `prompts/heartbeat.md`
@@ -271,6 +270,12 @@ The web UI polls both files via SSE. On reconnect it resumes from the last byte 
 ---
 
 ## Changelog
+
+### v0.6.1
+- **Remove `read_tasks`/`write_tasks` injected tools** — task board is now managed directly via bash. `tasks.md` path is documented in the session context prompt. Removes two tool slots from every agent's context window.
+- **Tasks panel UI** — last-updated timestamp and heartbeat interval moved from the panel header to bottom-right footer. Timestamp is derived from `tasks.md` file mtime instead of a status.json field.
+- **`KimiForCodingProvider`** — Anthropic-compatible provider for Kimi For Coding (`https://api.kimi.com/coding/`). Thin wrapper over `AnthropicProvider` with custom base URL.
+- **Anthropic SDK unification** — all providers use a single Anthropic SDK path.
 
 ### v0.6.0
 - **`provider` field in `agent.yaml`** — entity manifests now declare a `provider` (`anthropic`, `kimi-coding-plan`). `AgentLoader` resolves and sets `agent._provider` on load.

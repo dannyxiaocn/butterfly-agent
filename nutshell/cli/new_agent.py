@@ -85,7 +85,7 @@ def create_entity(name: str, base_dir: Path) -> Path:
         heartbeat_md = (
             "Heartbeat activation.\n\nCurrent tasks:\n{tasks}\n\n"
             "Pick up where you left off.\n\n"
-            "If all tasks are done, call `write_tasks(\"\")` then respond: SESSION_FINISHED\n"
+            "If all tasks are done, clear the board via bash then respond: SESSION_FINISHED\n"
         )
     (entity_dir / "prompts" / "heartbeat.md").write_text(heartbeat_md, encoding="utf-8")
 

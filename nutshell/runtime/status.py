@@ -15,7 +15,6 @@ DEFAULT_SESSION_STATUS: dict[str, Any] = {
     "last_run_at": None,          # ISO timestamp of last model run completion
     "pid": None,                  # Daemon process PID (int | None)
     "status": "active",           # "active" | "stopped"
-    "tasks_updated_at": None,     # ISO timestamp of last tasks.md write
     "heartbeat_interval": None,   # Mirror of params.json heartbeat_interval (for UI/watcher)
 }
 
