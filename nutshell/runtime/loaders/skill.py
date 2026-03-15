@@ -21,28 +21,60 @@ def _parse_frontmatter(text: str) -> tuple[dict, str]:
     return meta, body
 
 
+def _load_skill_file(path: Path) -> Skill:
+    """Parse a SKILL.md (or legacy .md) file and return a Skill."""
+    text = path.read_text(encoding="utf-8")
+    meta, body = _parse_frontmatter(text)
+    # For SKILL.md inside a directory, default name = directory name.
+    # For a legacy flat .md file, default name = file stem.
+    default_name = path.parent.stem if path.name == "SKILL.md" else path.stem
+    name = meta.get("name") or default_name
+    description = meta.get("description") or ""
+    return Skill(name=name, description=description, body=body, location=path)
+
+
 class SkillLoader(BaseLoader[Skill]):
-    """Load a Markdown file with YAML frontmatter as a Skill.
+    """Load Agent Skills from the filesystem.
 
-    File format:
-        ---
-        name: skill-name
-        description: What this skill does
-        ---
+    Supports two layouts:
 
-        # Prompt injection content here...
+    1. **Directory layout** (preferred, per AgentSkills spec):
+       ``skills/reasoning/SKILL.md``
+       Pass the *directory* path; ``SKILL.md`` is discovered automatically.
+
+    2. **Legacy flat file** (backward-compatible):
+       ``skills/reasoning.md``
+       Pass the file path directly.
+
+    When ``location`` is set on the returned ``Skill``, the agent runtime
+    lists the skill in a catalog and the model reads the file on demand
+    (progressive disclosure).  When ``location`` is None (programmatic
+    construction), the body is injected inline into the system prompt.
     """
 
     def load(self, path: Path) -> Skill:
         path = Path(path)
+        if path.is_dir():
+            skill_md = path / "SKILL.md"
+            if not skill_md.exists():
+                raise FileNotFoundError(f"SKILL.md not found in directory: {path}")
+            return _load_skill_file(skill_md)
         if not path.exists():
             raise FileNotFoundError(f"Skill file not found: {path}")
-        text = path.read_text(encoding="utf-8")
-        meta, body = _parse_frontmatter(text)
-        name = meta.get("name") or path.stem
-        description = meta.get("description") or ""
-        return Skill(name=name, description=description, prompt_injection=body)
+        return _load_skill_file(path)
 
     def load_dir(self, directory: Path) -> list[Skill]:
+        """Load all skills from a directory.
+
+        Scans for:
+        - Subdirectories containing ``SKILL.md`` (preferred format).
+        - Legacy ``*.md`` files (backward-compatible).
+        """
         directory = Path(directory)
-        return [self.load(p) for p in sorted(directory.glob("*.md"))]
+        skills: list[Skill] = []
+        for p in sorted(directory.iterdir()):
+            if p.is_dir() and (p / "SKILL.md").exists():
+                skills.append(self.load(p))
+            elif p.is_file() and p.suffix == ".md":
+                skills.append(self.load(p))
+        return skills

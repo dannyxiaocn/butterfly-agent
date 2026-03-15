@@ -1,4 +1,4 @@
-# Nutshell `v0.7.0`
+# Nutshell `v0.8.0`
 
 A minimal Python agent runtime. Agents run as persistent server-managed sessions with autonomous heartbeat ticking, accessible via web browser.
 
@@ -336,6 +336,10 @@ The web UI polls both files via SSE. On reconnect it resumes from the last byte 
 ---
 
 ## Changelog
+
+### v0.8.0
+- **Skills redesign** — compliant with the [Agent Skills specification](https://agentskills.io/specification). Skills are now directories (`skills/<name>/SKILL.md`) instead of flat `.md` files. `Skill.prompt_injection` renamed to `Skill.body`; new `Skill.location` field (path to `SKILL.md`). File-backed skills use **progressive disclosure**: only name + description appear in a `<available_skills>` catalog in the system prompt; the model reads `SKILL.md` on demand via its bash/file tool. Inline skills (no `location`) retain the previous body-injection behavior for programmatic use.
+- **`skill-creator` skill** — the [Anthropic skill-creator](https://github.com/anthropics/skills/tree/main/skills/skill-creator) is now bundled in `agent_core`, enabling agents to create and iterate on new skills.
 
 ### v0.7.0
 - **Entity inheritance** — `extends: parent_name` in `agent.yaml`. Null field values signal "inherit from parent": prompts load from parent's directory, tools/skills inherit the parent's full list with per-file child-first fallback. `agent.yaml` always declares all fields for self-documentation.

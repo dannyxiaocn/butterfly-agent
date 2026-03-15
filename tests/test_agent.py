@@ -80,11 +80,12 @@ async def test_tool_call_loop():
 
 
 @pytest.mark.asyncio
-async def test_skill_injected_into_system_prompt():
+async def test_inline_skill_injected_into_system_prompt():
+    """Inline skills (no location) have their body injected directly."""
     skill = Skill(
         name="math",
         description="Math expert",
-        prompt_injection="You are a math genius.",
+        body="You are a math genius.",
     )
 
     captured = {}
@@ -100,7 +101,41 @@ async def test_skill_injected_into_system_prompt():
         provider=CapturingProvider(),
     )
     await agent.run("hello")
+    assert "Math expert" in captured["system_prompt"]
     assert "You are a math genius." in captured["system_prompt"]
+
+
+@pytest.mark.asyncio
+async def test_file_skill_uses_catalog_in_system_prompt(tmp_path):
+    """File-backed skills (with location) appear as a catalog entry, not inline."""
+    skill_dir = tmp_path / "math"
+    skill_dir.mkdir()
+    skill_md = skill_dir / "SKILL.md"
+    skill_md.write_text("---\nname: math\ndescription: Math expert\n---\n\nYou are a math genius.\n")
+
+    from nutshell.runtime.loaders.skill import SkillLoader
+    skill = SkillLoader().load(skill_dir)
+
+    captured = {}
+
+    class CapturingProvider(Provider):
+        async def complete(self, messages, tools, system_prompt, model, *, on_text_chunk=None):
+            captured["system_prompt"] = system_prompt
+            return ("ok", [])
+
+    agent = Agent(
+        system_prompt="Base prompt.",
+        skills=[skill],
+        provider=CapturingProvider(),
+    )
+    await agent.run("hello")
+    sp = captured["system_prompt"]
+    # Catalog metadata present
+    assert "math" in sp
+    assert "Math expert" in sp
+    assert str(skill_md) in sp
+    # Body NOT injected inline
+    assert "You are a math genius." not in sp
 
 
 @pytest.mark.asyncio

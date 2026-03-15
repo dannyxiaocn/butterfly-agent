@@ -19,8 +19,10 @@ class Agent(BaseAgent):
     Args:
         system_prompt: Defines the agent's identity and behavior.
         tools: List of Tool objects the agent can call.
-        skills: List of Skill objects whose prompt_injection is appended
-                to the system prompt.
+        skills: List of Skill objects. File-backed skills (with a ``location``)
+                are listed in a catalog so the model can activate them on
+                demand (progressive disclosure). Inline skills (no location)
+                have their body injected directly into the system prompt.
         model: Model identifier string (default: claude-sonnet-4-6).
         provider: LLM provider instance. If omitted, AnthropicProvider
                   is used with the ANTHROPIC_API_KEY environment variable.
@@ -63,8 +65,37 @@ class Agent(BaseAgent):
 
     def _build_system_prompt(self) -> str:
         parts = [self.system_prompt] if self.system_prompt else []
-        for skill in self.skills:
-            parts.append(f"\n\n# Skill: {skill.name}\n{skill.prompt_injection}")
+
+        # File-backed skills → progressive disclosure: catalog only.
+        # The model reads SKILL.md on demand via its file/bash tool.
+        file_skills = [s for s in self.skills if s.location is not None]
+        if file_skills:
+            catalog = ["<available_skills>"]
+            for s in file_skills:
+                catalog.append(
+                    f"  <skill>\n"
+                    f"    <name>{s.name}</name>\n"
+                    f"    <description>{s.description}</description>\n"
+                    f"    <location>{s.location}</location>\n"
+                    f"  </skill>"
+                )
+            catalog.append("</available_skills>")
+            parts.append(
+                "\n\n# Available Skills\n"
+                "When a task matches a skill's description, read the SKILL.md "
+                "at the listed location before proceeding.\n\n"
+                + "\n".join(catalog)
+            )
+
+        # Inline skills (no file on disk) → inject body directly.
+        for s in self.skills:
+            if s.location is not None:
+                continue
+            header = f"\n\n# Skill: {s.name}"
+            if s.description:
+                header += f"\n{s.description}"
+            parts.append(f"{header}\n\n{s.body}")
+
         return "\n".join(parts)
 
     def _tool_map(self) -> dict[str, Tool]:

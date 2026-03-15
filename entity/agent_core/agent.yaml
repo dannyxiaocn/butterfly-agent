@@ -18,4 +18,5 @@ tools:
   - tools/web_search.json
 
 skills:
-  - skills/reasoning.md
+  - skills/reasoning
+  - skills/skill-creator
