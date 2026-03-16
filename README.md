@@ -1,4 +1,4 @@
-# Nutshell `v0.9.1`
+# Nutshell `v0.9.2`
 
 A minimal Python agent runtime. Agents run as persistent server-managed sessions with autonomous heartbeat ticking, accessible via web browser.
 
@@ -345,6 +345,10 @@ The web UI polls both files via SSE. On reconnect it resumes from the last byte 
 ---
 
 ## Changelog
+
+### v0.9.2
+- **`kimi_core` cleanup** — redundant placeholder prompts/ directory removed; entity now has only `agent.yaml` + empty `tools/` and `skills/` dirs.
+- **`nutshell-new-agent` interactive picker** — running without `--extends`/`--standalone` now shows a numbered list of available entities to extend. Entity options are auto-detected from the entity directory. `-n NAME` flag is now optional (prompts interactively if omitted). Generated `agent.yaml` for inheriting entities is fully minimal (no redundant model/provider fields). `--no-inherit` kept as hidden backward-compat alias for `--standalone`.
 
 ### v0.9.1
 - **Deep entity inheritance** — `AgentLoader` now supports arbitrarily deep `extends` chains (A→B→C). Parent is loaded recursively; null fields inherit the parent's already-resolved values rather than re-reading YAML. `resolve_file` walks the full ancestor directory chain for child-first file resolution. model/provider also inherit correctly from parent when not set.
