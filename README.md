@@ -37,154 +37,81 @@ nutshell-new-agent -n my-agent
 
 ## Filesystem as Everything
 
-Nutshell's core design principle: **all state lives on disk**. There are two kinds of directories — `entity/` (agent definitions) and `sessions/` (live runtime state). The server reads both; nothing else is needed.
+Nutshell's core design principle: **all state lives on disk**. Two kinds of directories — `entity/` (agent definitions) and `sessions/` (live runtime state).
 
 ### Entity — Agent Definition
 
-An entity is a static agent definition. It never changes at runtime.
-
 ```
 entity/<name>/
-├── agent.yaml              ← name, model, provider, tools, skills, prompts
+├── agent.yaml              ← name, model, provider, tools, skills, extends
 ├── prompts/
 │   ├── system.md           ← agent identity and rules
 │   └── heartbeat.md        ← injected into every heartbeat prompt (optional)
 ├── skills/
-│   └── *.md                ← YAML frontmatter + body, injected into system prompt
+│   └── <name>/SKILL.md     ← YAML frontmatter + body
 └── tools/
     └── *.json              ← JSON Schema tool definitions
 ```
 
-`agent.yaml` is the manifest. All fields are always present:
+Entities can inherit from a parent with `extends: parent_name`. In `agent.yaml`, **null = inherit from parent**, `[]` = explicitly empty, an explicit list = override:
 
 ```yaml
 name: my-agent
-description: ""
-model: claude-sonnet-4-6
-provider: anthropic           # anthropic | kimi-coding-plan
-release_policy: persistent    # persistent | auto | manual
-max_iterations: 20
-
+extends: agent
+model: null          # inherit
+provider: null       # inherit
 prompts:
-  system: prompts/system.md
-  heartbeat: prompts/heartbeat.md
-  session_context: prompts/session_context.md
-
-skills:
-  - skills/coding.md
-
-tools:
-  - tools/bash.json
-  - tools/web_search.json
+  system: null       # load from parent's directory
+  heartbeat: prompts/heartbeat.md  # own file
+tools: null          # inherit parent's full list
+skills: null         # inherit parent's full list
 ```
 
-Multiple sessions can run from the same entity simultaneously.
-
-### Entity Inheritance
-
-Entities can extend a parent entity with `extends: parent_name`. `agent.yaml` always declares all fields — a **null value** means "inherit from parent":
-
-```yaml
-name: my-agent
-description: ""
-model: claude-sonnet-4-6
-provider: anthropic
-extends: agent                # parent entity
-release_policy: persistent
-max_iterations: 20
-
-prompts:
-  system:           # null → load from agent/prompts/system.md
-  heartbeat:        # null → inherit
-  session_context: prompts/session_context.md  # own file → load from here
-
-tools:    # null → inherit parent's full tools list
-skills:   # null → inherit parent's full skills list
-```
-
-**Rules:**
-- **Prompts** — null value → load file from parent's directory. String value → load from this entity's directory.
-- **tools / skills** — null (or absent) → inherit parent's entire list; each file resolves child-first, then parent-fallback. `[]` → explicitly empty (no inheritance).
-- **Scalar fields** (model, provider, etc.) — always taken from this entity's `agent.yaml`.
-
-When you override a single tool or skill, list all paths you want; files missing in the child directory fall back to the parent's copy automatically.
-
-`nutshell-new-agent` creates a minimal inheriting entity by default — full `agent.yaml`, empty `prompts/`/`tools/`/`skills/` dirs (with placeholder files), everything inherited from `agent`:
+Files missing in the child directory automatically fall back to the parent's copy.
 
 ```bash
-nutshell-new-agent -n my-agent                   # extends agent (default)
+nutshell-new-agent -n my-agent                    # extends agent (default)
 nutshell-new-agent -n my-agent --extends kimi_agent
-nutshell-new-agent -n my-agent --no-inherit      # standalone, copies agent files
+nutshell-new-agent -n my-agent --no-inherit       # standalone copy
 ```
-
----
 
 ### Session — Live Runtime State
 
-A session is a running instance of an entity. Each session has two sibling directories:
+Each session has two sibling directories:
 
 ```
 sessions/<id>/                ← agent-visible (agent reads/writes freely)
 ├── core/
-│   ├── system.md             ← system prompt (copied from entity at creation, editable)
+│   ├── system.md             ← system prompt (copied from entity, editable)
 │   ├── heartbeat.md          ← heartbeat prompt (editable)
-│   ├── session_context.md    ← session paths template (editable)
+│   ├── session_context.md    ← session paths template
 │   ├── memory.md             ← persistent memory (auto-appended to system prompt)
 │   ├── tasks.md              ← task board
 │   ├── params.json           ← runtime config: model, provider, heartbeat_interval, tool_providers
-│   ├── tools/
-│   │   ├── my_tool.json      ← tool schema (Anthropic JSON Schema)
-│   │   └── my_tool.sh        ← tool implementation (bash, reads JSON from stdin)
-│   └── skills/
-│       └── <name>/SKILL.md   ← skill directories (loaded each activation)
-├── docs/                     ← user-uploaded files (read-only from agent perspective)
+│   ├── tools/                ← agent-created tools: <name>.json + <name>.sh
+│   └── skills/               ← skill directories
+├── docs/                     ← user-uploaded files
 └── playground/               ← agent's free workspace
 
-_sessions/<id>/               ← system-only twin (agent never sees this)
-├── manifest.json             ← static: entity name, created_at (written once)
-├── status.json               ← dynamic: model_state, pid, stopped/active, last_run_at
-├── context.jsonl             ← append-only conversation history: user_input + turn events
+_sessions/<id>/               ← system-only (agent never sees this)
+├── manifest.json             ← static: entity, created_at (immutable)
+├── status.json               ← dynamic: model_state, pid, status, last_run_at
+├── context.jsonl             ← append-only conversation history
 └── events.jsonl              ← runtime/UI events: streaming, status, errors
 ```
 
-**Key invariants:**
-- `_sessions/<id>/manifest.json` is immutable — written once at session creation.
-- `core/params.json` is the source of truth for model, provider, heartbeat_interval, and tool_providers.
-- `_sessions/<id>/context.jsonl` is the sole source for conversation history — append-only, never rewritten.
-- Entity content is copied to `core/` at session creation. The entity directory is not accessed at runtime.
-
----
-
-### Config Loading — How It All Fits Together
-
-On every activation (user message or heartbeat tick), the server reloads capabilities fresh from `core/` in this order:
-
-```
-core/params.json                    → model, provider, heartbeat_interval, tool_providers
-        ↓
-core/system.md                      → base system prompt
-        ↓
-core/session_context.md             → session paths block (appended to system prompt)
-        ↓
-core/memory.md                      → persistent memory (appended to system prompt)
-        ↓
-core/skills/*/SKILL.md              → skills (all loaded from core/skills/)
-        ↓
-core/tools/*.json + *.sh            → tools (loaded from core/tools/, tool_providers overrides applied)
-```
-
-This means agents can **modify their own runtime configuration** by writing to files in `core/` — changing model, provider, heartbeat interval, system prompt, memory, skills, or tools — all without server restart.
-
-`params.json` schema:
+**`core/params.json`** is the source of truth for runtime config and is read fresh before every activation:
 
 ```json
 {
   "heartbeat_interval": 600.0,
-  "model": null,           // null → use agent.yaml default
-  "provider": null,        // null → use agent.yaml default
-  "tool_providers": {}     // e.g. {"web_search": "tavily"} — empty = use built-in defaults
+  "model": null,
+  "provider": null,
+  "tool_providers": {"web_search": "brave"}
 }
 ```
+
+Agents can modify their own configuration (model, provider, heartbeat interval, memory, skills, tools) by writing to `core/` — no server restart needed.
 
 ---
 
@@ -198,81 +125,25 @@ The agent's identity and rules. Include task board instructions if using heartbe
 You are a focused coding assistant.
 
 ## Task Board
-Read and write `sessions/YOUR_ID/tasks.md` via bash.
+Read and write `sessions/YOUR_ID/core/tasks.md` via bash.
 Clear the file when all work is done.
 ```
 
 ### `prompts/heartbeat.md`
 
-Injected into every heartbeat prompt. If omitted, a generic fallback is used:
-
 ```markdown
 Continue working on your tasks. When all tasks are done, respond with: SESSION_FINISHED
 ```
 
-### `skills/*.md`
+### Built-in Tools
 
-Skills inject context into the system prompt:
+**`bash`** — `command` (required), `timeout`, `workdir`, `pty` (PTY mode, Unix only)
 
-```markdown
----
-name: coding
-description: Expert coding practices
----
+**`web_search`** — `query` (required), `count` (1–10), `country`, `language`, `freshness` (day/week/month/year), `date_after`, `date_before` (YYYY-MM-DD). Default provider: Brave (`BRAVE_API_KEY`). Switch to Tavily by setting `tool_providers: {"web_search": "tavily"}` in `params.json`.
 
-Always write type-annotated Python. Prefer composition over inheritance.
-```
+Both are auto-wired by name — just declare them in `agent.yaml`, no Python needed.
 
-### `tools/*.json`
-
-Tool schemas in Anthropic JSON Schema format. Built-in tools are auto-wired by name — just declare them in `agent.yaml`, no Python needed.
-
-**Built-in: `bash`**
-
-```json
-{
-  "name": "bash",
-  "description": "Execute a shell command.",
-  "input_schema": {
-    "type": "object",
-    "properties": {
-      "command": { "type": "string" },
-      "timeout": { "type": "number" },
-      "workdir": { "type": "string" },
-      "pty": { "type": "boolean" }
-    },
-    "required": ["command"]
-  }
-}
-```
-
-**Built-in: `web_search`** — Pluggable web search. Default provider: Brave (`BRAVE_API_KEY`). Switch to Tavily (`TAVILY_API_KEY`) by setting `tool_providers: {"web_search": "tavily"}` in `params.json`.
-
-```json
-{
-  "name": "web_search",
-  "description": "Search the web using Brave Search.",
-  "input_schema": {
-    "type": "object",
-    "properties": {
-      "query":       { "type": "string" },
-      "count":       { "type": "number", "description": "1-10, default 5" },
-      "country":     { "type": "string", "description": "2-letter country code" },
-      "language":    { "type": "string", "description": "ISO 639-1 code" },
-      "freshness":   { "type": "string", "description": "day | week | month | year" },
-      "date_after":  { "type": "string", "description": "YYYY-MM-DD" },
-      "date_before": { "type": "string", "description": "YYYY-MM-DD" }
-    },
-    "required": ["query"]
-  }
-}
-```
-
-**Custom tools** — wire an implementation at load time:
-
-```python
-agent = AgentLoader(impl_registry={"my_tool": my_fn}).load(Path("entity/my-agent"))
-```
+**Session-scoped custom tools** — agents create tools at runtime by writing `core/tools/<name>.json` (schema) + `core/tools/<name>.sh` (implementation, reads JSON from stdin).
 
 ---
 
@@ -288,31 +159,34 @@ nutshell/
 │   └── types.py       # Message, ToolCall, AgentResult
 ├── providers/
 │   ├── llm/
-│   │   ├── anthropic.py   # AnthropicProvider (Anthropic SDK, supports custom base_url)
-│   │   └── kimi.py        # KimiForCodingProvider (thin wrapper over AnthropicProvider)
+│   │   ├── anthropic.py   # AnthropicProvider
+│   │   └── kimi.py        # KimiForCodingProvider
 │   └── tool/
-│       ├── web_search.py  # create_web_search_tool() — Brave Search (default)
-│       └── tavily.py      # create_web_search_tool() — Tavily Search
+│       ├── web_search.py  # Brave Search
+│       └── tavily.py      # Tavily Search
 ├── runtime/
-│   ├── session.py     # Session — persistent context + heartbeat daemon loop
-│   ├── ipc.py         # FileIPC — context.jsonl + events.jsonl read/write
-│   ├── status.py      # status.json read/write
-│   ├── params.py      # params.json read/write
-│   ├── provider_factory.py      # resolve LLM provider by name, reverse-lookup
-│   ├── tool_provider_factory.py # resolve tool impl by (tool_name, provider_name)
-│   ├── watcher.py     # SessionWatcher — polls sessions/ directory
-│   ├── server.py      # nutshell-server entry point
+│   ├── session.py          # Session — persistent context + heartbeat daemon loop
+│   ├── ipc.py              # FileIPC — context.jsonl + events.jsonl
+│   ├── status.py           # status.json read/write
+│   ├── params.py           # params.json read/write
+│   ├── provider_factory.py
+│   ├── tool_provider_factory.py
+│   ├── watcher.py          # SessionWatcher — polls _sessions/ directory
+│   ├── server.py           # nutshell-server entry point
 │   ├── loaders/
-│   │   ├── agent.py   # AgentLoader: entity/ dir → Agent (reads agent.yaml, handles extends)
-│   │   ├── tool.py    # ToolLoader: .json → Tool (auto-wires built-ins; .sh for shell-backed tools)
-│   │   └── skill.py   # SkillLoader: .md → Skill
+│   │   ├── agent.py        # AgentLoader: entity/ → Agent (handles extends chain)
+│   │   ├── tool.py         # ToolLoader: .json → Tool (.sh for shell-backed tools)
+│   │   └── skill.py        # SkillLoader: SKILL.md → Skill
 │   └── tools/
-│       ├── bash.py    # create_bash_tool(): subprocess + PTY execution
-│       └── _registry.py  # Built-in tool registry (name → callable)
+│       ├── bash.py         # create_bash_tool(): subprocess + PTY
+│       └── _registry.py    # Built-in tool registry
 ├── cli/
-│   └── new_agent.py   # nutshell-new-agent: scaffold a new entity directory
+│   └── new_agent.py        # nutshell-new-agent
 └── ui/
-    └── web.py         # nutshell-web (FastAPI + SSE, single-file server + HTML)
+    └── web/                # nutshell-web (FastAPI + SSE)
+        ├── app.py          # routes + entry point
+        ├── sessions.py     # session helpers
+        └── index.html      # frontend (HTML + CSS + JS)
 ```
 
 ---
@@ -326,131 +200,62 @@ All IPC is file-based. Two append-only logs per session:
 | Event type | Written by | Description |
 |-----------|-----------|-------------|
 | `user_input` | UI | User message |
-| `turn` | Server | Completed agent turn (full Anthropic-format messages + tool calls) |
+| `turn` | Server | Completed agent turn (full Anthropic-format messages) |
 
 **`events.jsonl`** — runtime/UI signalling:
 
 | Event type | Written by | Description |
 |-----------|-----------|-------------|
 | `model_status` | Server | `{"state": "running|idle", "source": "user|heartbeat"}` |
-| `partial_text` | Server | Streaming text chunk (skipped on history replay) |
+| `partial_text` | Server | Streaming text chunk |
 | `tool_call` | Server | Tool invocation before execution |
 | `heartbeat_trigger` | Server | Written before heartbeat run starts |
 | `heartbeat_finished` | Server | Agent signalled `SESSION_FINISHED` |
 | `status` | Server | Session status changes (resumed, cancelled) |
 | `error` | Server | Runtime errors |
 
-The web UI polls both files via SSE. On reconnect it resumes from the last byte offset — no messages are lost, no full reload needed.
+The web UI polls both files via SSE, resuming from the last byte offset on reconnect.
 
 ---
 
 ## TODO
 
-### LLM
-
-- **`thinking` block support** — `AnthropicProvider` and `KimiForCodingProvider` both silently discard `thinking` blocks returned by models that support extended thinking (e.g. `kimi-for-coding`, Claude with extended thinking). The reasoning process is never surfaced in the UI or stored in history. Fix: detect `block.type == "thinking"` in `complete()` and forward via a dedicated callback or prepend to `on_text_chunk`.
+- **`thinking` block support** — `AnthropicProvider` silently discards `thinking` blocks returned by models with extended thinking. Fix: detect `block.type == "thinking"` in `complete()` and forward via callback or prepend to `on_text_chunk`.
 
 ---
 
 ## Changelog
 
 ### v1.0.3
-- **Web UI refactor** — `ui/web.py` (1000 lines) split into `ui/web/` package: `app.py` (FastAPI routes + entry point), `sessions.py` (session helpers), `index.html` (frontend). Entry point `nutshell.ui.web:main` unchanged.
-- **`_write_if_absent` helper** — eliminates repeated `if not path.exists(): path.write_text(...)` pattern in `_init_session`.
-- **Entity load warning** — `_init_session` now logs a warning when `AgentLoader` fails instead of silently ignoring.
+- **Web UI refactor** — `ui/web.py` (1000 lines) split into `ui/web/` package: `app.py`, `sessions.py`, `index.html`. Entry point `nutshell.ui.web:main` unchanged.
+- **Code cleanup** — `_write_if_absent()` helper eliminates repeated pattern in `_init_session`; entity load failure now logs a warning.
 
 ### v1.0.2
-- **Bug fix: history load KeyError** — `session.py` `load_history()` now skips messages without a `content` key instead of crashing silently.
-- **Bug fix: heartbeat_interval validation** — `params.py` `read_session_params()` now clamps values below 1.0 to the default (600s), preventing runaway heartbeat firing on zero/negative config.
-- **Bug fix: YAML frontmatter type guard** — `skill.py` `_parse_frontmatter()` now handles YAML parse errors and non-dict frontmatter gracefully.
-- **Bug fix: SKILL.md invalid YAML** — fixed unquoted colon in `nutshell_dev` skill description that caused the entity loader to raise a YAML `ScannerError`.
-- **Narrowed exception handling** — `session.py` `_load_session_capabilities()` now logs a warning for unexpected skill/tool load failures instead of silently using empty lists.
-- **Watcher auto-expire logging** — `watcher.py` now logs auto-expire errors instead of silently passing.
+- **Bug fixes** — history load `KeyError` on missing `content` key; `heartbeat_interval` clamped to ≥ 1.0 (prevents runaway firing); YAML frontmatter type guard in `SkillLoader`; invalid YAML in `nutshell_dev` SKILL.md; narrowed exception handling in `_load_session_capabilities`; watcher auto-expire errors now logged.
 
-### v1.0.1
-- **Default tool provider** — `tool_providers` in `DEFAULT_PARAMS` now defaults to `{"web_search": "brave"}` instead of `{}`, making the active provider explicit in every new session's `params.json`.
-- **Session context docs** — `session_context.md` now lists available `web_search` providers (`brave` / `tavily`) so agents know they can switch backends by editing `params.json`.
+### v1.0.0 — v1.0.1
+- **Session layout refactor** — dual-directory layout: `sessions/<id>/` (agent-visible, with `core/`, `docs/`, `playground/`) + `_sessions/<id>/` (system-only). Entity content copied to `core/` at session creation; entity dir not accessed at runtime.
+- **Entity renames** — `agent_core` → `agent`, `kimi_core` → `kimi_agent`.
+- **Default tool provider** — `DEFAULT_PARAMS` now sets `tool_providers: {"web_search": "brave"}` explicitly; `session_context.md` documents available providers.
 
-### v1.0.0
-- **Session layout refactor** — agent-visible session dir is now `sessions/<id>/core/` (prompts, tools, skills, memory, tasks, params.json) + `docs/` + `playground/`. System internals moved to a parallel `_sessions/<id>/` twin (manifest, status, context, events). Agent has full ownership of its session dir; nothing is hidden inside it.
-- **Entity copy-on-create** — when a session is born, the resolved entity (full inheritance chain) is copied into `sessions/<id>/core/`. The agent reads/writes `core/` only at runtime; the entity directory is not accessed after session creation.
-- **Entity renames** — `agent_core` → `agent`, `kimi_core` → `kimi_agent`. `nutshell_dev` now extends `kimi_agent`.
-- **`reasoning` skill removed** — removed from `agent` and `nutshell_dev` entity skills lists.
+### v0.9.x
+- **Deep entity inheritance** — arbitrarily deep `extends` chains; child-first file resolution at every level.
+- **`nutshell-new-agent` interactive picker** — numbered entity list, optional `-n NAME`, auto-detected options.
+- **Tool provider layer** — pluggable `web_search` backend; `tool_provider_factory.py`; Tavily provider added.
+- **Shell-script session tools** — agents create `core/tools/<name>.json` + `.sh` pairs at runtime.
 
-### v0.9.2
-- **`kimi_core` cleanup** — redundant placeholder prompts/ directory removed; entity now has only `agent.yaml` + empty `tools/` and `skills/` dirs.
-- **`nutshell-new-agent` interactive picker** — running without `--extends`/`--standalone` now shows a numbered list of available entities to extend. Entity options are auto-detected from the entity directory. `-n NAME` flag is now optional (prompts interactively if omitted). Generated `agent.yaml` for inheriting entities is fully minimal (no redundant model/provider fields). `--no-inherit` kept as hidden backward-compat alias for `--standalone`.
+### v0.7.x — v0.8.x
+- **Entity inheritance** — `extends: parent_name` in `agent.yaml`; null fields inherit from parent.
+- **Skills redesign** — directory layout (`skills/<name>/SKILL.md`), progressive disclosure, `skill-creator` bundled.
+- **`web_search` built-in** — Brave Search API, added to base `agent` entity.
+- **`providers/` package** — LLM + tool providers unified under `nutshell/providers/`.
 
-### v0.9.1
-- **Deep entity inheritance** — `AgentLoader` now supports arbitrarily deep `extends` chains (A→B→C). Parent is loaded recursively; null fields inherit the parent's already-resolved values rather than re-reading YAML. `resolve_file` walks the full ancestor directory chain for child-first file resolution. model/provider also inherit correctly from parent when not set.
-- **`nutshell_dev` cleanup** — now extends `kimi_core` (3-level chain: nutshell_dev→kimi_core→agent_core). Redundant copies of prompts/ and tools/ removed; only the `nutshell` skill remains in the entity dir.
+### v0.5.x — v0.6.x
+- **Streaming output** — `on_text_chunk` callback, real-time thinking bubble in web UI, markdown via `marked.js`.
+- **Context/events split** — `context.jsonl` (history) + `events.jsonl` (runtime signals); SSE resumes from byte offset.
+- **Provider field in `agent.yaml`** — entities declare their LLM provider; `KimiForCodingProvider` added.
+- **Session capability reload** — `memory.md`, `skills/`, `params.json` all hot-reloaded per activation.
+- **TUI removed** — web UI only.
 
-### v0.9.0
-- **Tool provider layer** — `web_search` now has pluggable providers (Brave, Tavily). Set `tool_providers: {"web_search": "tavily"}` in `params.json` to switch. `nutshell/runtime/tool_provider_factory.py` mirrors the LLM `provider_factory.py` pattern; adding new providers requires only a one-line registry entry.
-- **Tavily Search provider** — `nutshell/providers/tool/tavily.py`. Requires `TAVILY_API_KEY`. Same `web_search` tool schema and output format as Brave.
-- **Shell-script-backed session tools** — agents can now create their own tools at session scope: write `sessions/<id>/tools/<name>.json` (schema) + `sessions/<id>/tools/<name>.sh` (implementation, receives JSON on stdin). Loaded fresh on every activation. `ToolLoader` detects `.sh` files automatically.
-
-### v0.8.0
-- **Skills redesign** — compliant with the [Agent Skills specification](https://agentskills.io/specification). Skills are now directories (`skills/<name>/SKILL.md`) instead of flat `.md` files. `Skill.prompt_injection` renamed to `Skill.body`; new `Skill.location` field (path to `SKILL.md`). File-backed skills use **progressive disclosure**: only name + description appear in a `<available_skills>` catalog in the system prompt; the model reads `SKILL.md` on demand via its bash/file tool. Inline skills (no `location`) retain the previous body-injection behavior for programmatic use.
-- **`skill-creator` skill** — the [Anthropic skill-creator](https://github.com/anthropics/skills/tree/main/skills/skill-creator) is now bundled in `agent_core`, enabling agents to create and iterate on new skills.
-
-### v0.7.0
-- **Entity inheritance** — `extends: parent_name` in `agent.yaml`. Null field values signal "inherit from parent": prompts load from parent's directory, tools/skills inherit the parent's full list with per-file child-first fallback. `agent.yaml` always declares all fields for self-documentation.
-- **`web_search` built-in tool** — Brave Search API (`BRAVE_API_KEY`). Added to `agent_core` and inherited by all child entities. Parameters: `query`, `count`, `country`, `language`, `freshness`, `date_after`, `date_before`.
-- **`providers/` package** — `nutshell/llm/` removed; LLM providers live in `nutshell/providers/llm/`, search tools in `nutshell/providers/tool/`.
-- **`nutshell-new-agent` revamp** — defaults to `--extends agent_core`, generating a minimal `agent.yaml` with empty override directories and placeholder files. `--no-inherit` retains old standalone behaviour.
-
-### v0.6.1
-- **Remove `read_tasks`/`write_tasks` injected tools** — task board is now managed directly via bash. `tasks.md` path is documented in the session context prompt. Removes two tool slots from every agent's context window.
-- **Tasks panel UI** — last-updated timestamp and heartbeat interval moved from the panel header to bottom-right footer. Timestamp is derived from `tasks.md` file mtime instead of a status.json field.
-- **`KimiForCodingProvider`** — Anthropic-compatible provider for Kimi For Coding (`https://api.kimi.com/coding/`). Thin wrapper over `AnthropicProvider` with custom base URL.
-- **Anthropic SDK unification** — all providers use a single Anthropic SDK path.
-
-### v0.6.0
-- **`provider` field in `agent.yaml`** — entity manifests now declare a `provider` (`anthropic`, `kimi-coding-plan`). `AgentLoader` resolves and sets `agent._provider` on load.
-- **`nutshell-new-agent` CLI** — scaffolds a new entity directory with `agent.yaml`, `prompts/system.md`, `prompts/heartbeat.md`, `skills/`, and `tools/bash.json`.
-- **Clean startup init order** — `watcher.py` uses provider/model from `agent.yaml` as baseline; `params.json` acts as override only when explicitly set. Actual values always written back so `params.json` reflects reality.
-
-### v0.5.9
-- **params.json is the strict authority for model and provider** — at session startup, `watcher.py` applies `params.json` values before running. Actual resolved values written back so `params.json` always shows what is running.
-
-### v0.5.8
-- **Session directory reorganization** — system internals (`manifest.json`, `status.json`, `context.jsonl`, `events.jsonl`) moved into `_system_log/`. `params.json` promoted to session root. Agent-facing files now cleanly separated from system internals.
-
-### v0.5.7
-- **Layered capability management** — session gains `prompts/memory.md`, `skills/`, `params.json`. Agent edits its own memory, skills, model, provider, and heartbeat interval via bash.
-- **Runtime provider switching** — `provider_factory.py` resolves provider by name. Setting `provider` in params.json switches provider on next activation without restart.
-
-### v0.5.6
-- **Long-running task awareness** — system prompt explains the heartbeat model. Dynamic wakeup scheduling via `write_tasks`.
-
-### v0.5.5
-- **Critical bugfix: `400 Extra inputs are not permitted`** — content blocks stored as plain copies without extra fields; `load_history()` runs allow-list cleaner on resume.
-
-### v0.5.4
-- **Editable heartbeat interval** — edit `sessions/<id>/status.json` to change interval; daemon reads it fresh each tick.
-
-### v0.5.3
-- **Context/events split** — `context.jsonl` is pure conversation history. Runtime/UI signalling moves to `events.jsonl`. SSE endpoint accepts separate offsets for both files.
-
-### v0.5.2
-- **Tool streaming** — `Agent.run()` accepts `on_tool_call`; tool invocations stream to UI before execution.
-- **Heartbeat trigger ordering** — `heartbeat_trigger` written before run starts.
-
-### v0.5.0
-- **Streaming output** — `AnthropicProvider.complete()` accepts `on_text_chunk`; web UI shows real-time thinking bubble.
-- **Markdown rendering** — agent messages rendered via `marked.js`.
-- **Removed TUI** — all UI effort in web UI.
-
-### v0.4.0
-- **`Instance` → `Session`** — rename throughout. `kanban.md` → `tasks.md`.
-- **Status-centric architecture** — `manifest.json` static, `status.json` dynamic.
-
-### v0.3.0
-- **Built-in `bash` tool** — `create_bash_tool()` factory, subprocess + PTY modes.
-
-### v0.2.0
-- **Single-file IPC** — `context.jsonl` replaces multiple files. Append-only.
-
-### v0.1.0
-- Initial release: server + web UI, persistent sessions, heartbeat, task board.
+### v0.1 — v0.4
+- Initial server + web UI, persistent sessions, heartbeat, task board, `bash` built-in tool, `context.jsonl` IPC.
