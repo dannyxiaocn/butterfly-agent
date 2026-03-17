@@ -78,38 +78,11 @@ class Agent(BaseAgent):
         return self._provider
 
     def _build_system_prompt(self) -> str:
+        from nutshell.skill_engine.renderer import build_skills_block
         parts = [self.system_prompt] if self.system_prompt else []
-
-        # File-backed skills → progressive disclosure: catalog only.
-        # The model reads SKILL.md on demand via its file/bash tool.
-        file_skills = [s for s in self.skills if s.location is not None]
-        if file_skills:
-            catalog = ["<available_skills>"]
-            for s in file_skills:
-                catalog.append(
-                    f"  <skill>\n"
-                    f"    <name>{s.name}</name>\n"
-                    f"    <description>{s.description}</description>\n"
-                    f"    <location>{s.location}</location>\n"
-                    f"  </skill>"
-                )
-            catalog.append("</available_skills>")
-            parts.append(
-                "\n\n# Available Skills\n"
-                "When a task matches a skill's description, read the SKILL.md "
-                "at the listed location before proceeding.\n\n"
-                + "\n".join(catalog)
-            )
-
-        # Inline skills (no file on disk) → inject body directly.
-        for s in self.skills:
-            if s.location is not None:
-                continue
-            header = f"\n\n# Skill: {s.name}"
-            if s.description:
-                header += f"\n{s.description}"
-            parts.append(f"{header}\n\n{s.body}")
-
+        skills_block = build_skills_block(self.skills)
+        if skills_block:
+            parts.append(skills_block)
         return "\n".join(parts)
 
     def _tool_map(self) -> dict[str, Tool]:
