@@ -1,4 +1,4 @@
-# Nutshell `v1.1.2`
+# Nutshell `v1.1.3`
 
 A minimal Python agent runtime. Agents run as persistent server-managed sessions with autonomous heartbeat ticking, accessible via web browser.
 
@@ -47,7 +47,8 @@ Nutshell's core design principle: **all state lives on disk**. Two kinds of dire
 entity/<name>/
 ├── agent.yaml              ← name, model, provider, tools, skills, extends
 ├── prompts/
-│   ├── system.md           ← agent identity and rules
+│   ├── system.md           ← agent identity and capabilities (concise)
+│   ├── session.md          ← session file guide — injected with real {session_id} each run
 │   └── heartbeat.md        ← injected into every heartbeat prompt (optional)
 ├── skills/
 │   └── <name>/SKILL.md     ← YAML frontmatter + body
@@ -86,14 +87,14 @@ sessions/<id>/                ← agent-visible (agent reads/writes freely)
 ├── core/
 │   ├── system.md             ← system prompt (copied from entity, editable)
 │   ├── heartbeat.md          ← heartbeat prompt (editable)
-│   ├── session_context.md    ← session paths template
+│   ├── session.md            ← session file guide (session_id substituted at load time)
 │   ├── memory.md             ← persistent memory (auto-appended to system prompt)
 │   ├── tasks.md              ← task board
 │   ├── params.json           ← runtime config: model, provider, heartbeat_interval, tool_providers
 │   ├── tools/                ← agent-created tools: <name>.json + <name>.sh
 │   └── skills/               ← skill directories
 ├── docs/                     ← user-uploaded files
-└── playground/               ← agent's free workspace
+└── playground/               ← agent's computer (tmp/, projects/, output/)
 
 _sessions/<id>/               ← system-only (agent never sees this)
 ├── manifest.json             ← static: entity, created_at (immutable)
@@ -121,15 +122,13 @@ Agents can modify their own configuration (model, provider, heartbeat interval, 
 
 ### `prompts/system.md`
 
-The agent's identity and rules. Include task board instructions if using heartbeat:
+The agent's identity and capabilities — keep it concise. Session-specific operational details (file paths, task board usage, tool/skill creation) belong in `session.md`, not here.
 
-```markdown
-You are a focused coding assistant.
+### `prompts/session.md`
 
-## Task Board
-Read and write `sessions/YOUR_ID/core/tasks.md` via bash.
-Clear the file when all work is done.
-```
+A template injected after `system.md` on every activation. The string `{session_id}` is substituted with the real session ID at load time. Use this to give the agent accurate, clickable paths to all its session files (`core/tasks.md`, `core/memory.md`, `core/tools/`, etc.).
+
+Old sessions with `session_context.md` continue to work — the runtime falls back automatically.
 
 ### `prompts/heartbeat.md`
 
@@ -275,6 +274,11 @@ The web UI polls both files via SSE, resuming from the last byte offset on recon
 ---
 
 ## Changelog
+
+### v1.1.3
+- **`session.md` replaces `session_context.md`** — the session operational guide (task board, memory, skills, tools, params, playground conventions) is now a first-class prompt file with `{session_id}` substituted at load time via `str.replace()` (replaces `.format()`, safe for JSON code examples). Old sessions with `session_context.md` continue to work via automatic fallback.
+- **`system.md` restructured** — agent identity and capability declaration only; all session-specific file documentation moved to `session.md`.
+- **Playground conventions** — `playground/` now has documented subdirectory conventions: `tmp/` (scratch), `projects/` (multi-session), `output/` (user-facing artifacts).
 
 ### v1.1.2
 - **System prompt assembly moved to `core/agent.py`** — `Agent` now owns all prompt composition: base + `session_context` + `memory` + skills. `runtime/session.py` only reads files and assigns the three fields; zero string formatting in runtime.

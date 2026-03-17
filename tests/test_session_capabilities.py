@@ -33,7 +33,7 @@ def make_session(tmp_path: Path, agent: Agent, session_id: str = "test") -> Sess
     (session.core_dir / "heartbeat.md").write_text(
         getattr(agent, "heartbeat_prompt", "") or "", encoding="utf-8"
     )
-    (session.core_dir / "session_context.md").write_text(
+    (session.core_dir / "session.md").write_text(
         getattr(agent, "session_context_template", "") or "", encoding="utf-8"
     )
     return session

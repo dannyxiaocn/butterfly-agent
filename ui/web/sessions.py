@@ -126,7 +126,7 @@ def _init_session(
     if agent is not None:
         _write_if_absent(core_dir / "system.md", agent.system_prompt or "")
         _write_if_absent(core_dir / "heartbeat.md", agent.heartbeat_prompt or "")
-        _write_if_absent(core_dir / "session_context.md", agent.session_context_template or "")
+        _write_if_absent(core_dir / "session.md", agent.session_context_template or "")
 
         for t in agent.tools:
             tool_json = core_dir / "tools" / f"{t.name}.json"
@@ -157,7 +157,7 @@ def _init_session(
         else:
             write_session_params(session_dir, heartbeat_interval=heartbeat)
     else:
-        for fname in ("system.md", "heartbeat.md", "session_context.md"):
+        for fname in ("system.md", "heartbeat.md", "session.md"):
             _write_if_absent(core_dir / fname, "")
         if not (core_dir / "params.json").exists():
             ensure_session_params(session_dir, heartbeat_interval=heartbeat)

@@ -30,7 +30,7 @@ max_iterations: 20
 prompts:
   system:           # inherited from {parent}
   heartbeat:        # inherited from {parent}
-  session_context:  # inherited from {parent}
+  session_context:   # inherited from {parent}
 
 tools:    # inherited from {parent}
 
@@ -48,7 +48,7 @@ max_iterations: 20
 prompts:
   system: prompts/system.md
   heartbeat: prompts/heartbeat.md
-  session_context: prompts/session_context.md
+  session_context: prompts/session.md
 
 tools:
   - tools/bash.json
@@ -156,16 +156,17 @@ def create_entity(name: str, base_dir: Path, parent: str | None) -> Path:
             "Pick up where you left off.\n\n"
             "If all tasks are done, clear the board via bash then respond: SESSION_FINISHED\n"
         )
-        session_context_md = _read_template("prompts/session_context.md", base_dir) or (
+        session_context_md = _read_template("prompts/session.md", base_dir) or (
             "## Session Files\n\nYour session directory: `sessions/{session_id}/`\n\n"
-            "- `params.json` — model, provider, heartbeat_interval\n"
-            "- `tasks.md` — task board\n"
-            "- `prompts/memory.md` — persistent memory\n"
-            "- `skills/` — session-level skills\n"
+            "- `core/params.json` — model, provider, heartbeat_interval\n"
+            "- `core/tasks.md` — task board\n"
+            "- `core/memory.md` — persistent memory\n"
+            "- `core/skills/` — session-level skills\n"
+            "- `core/tools/` — session-level tools\n"
         )
         (entity_dir / "prompts" / "system.md").write_text(system_md, encoding="utf-8")
         (entity_dir / "prompts" / "heartbeat.md").write_text(heartbeat_md, encoding="utf-8")
-        (entity_dir / "prompts" / "session_context.md").write_text(session_context_md, encoding="utf-8")
+        (entity_dir / "prompts" / "session.md").write_text(session_context_md, encoding="utf-8")
 
         for tool_file in ["tools/bash.json", "tools/web_search.json"]:
             content = _read_template(tool_file, base_dir)
@@ -230,7 +231,7 @@ def main() -> None:
     else:
         print(f"  prompts/system.md")
         print(f"  prompts/heartbeat.md")
-        print(f"  prompts/session_context.md")
+        print(f"  prompts/session.md")
         print(f"  tools/bash.json")
         print(f"  tools/web_search.json")
 
