@@ -540,7 +540,7 @@ class NutshellTUI(App):
                 return
             sid, entity = result
             try:
-                from nutshell.ui.web.sessions import _init_session
+                from ui.web.sessions import _init_session
                 _init_session(self._sdir, self._sys, sid, entity, 600.0)
             except Exception as exc:
                 self.query_one("#chat-log", RichLog).write(f"[red]Create failed: {exc}[/red]")

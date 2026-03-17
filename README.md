@@ -1,4 +1,4 @@
-# Nutshell `v1.0.5`
+# Nutshell `v1.0.6`
 
 A minimal Python agent runtime. Agents run as persistent server-managed sessions with autonomous heartbeat ticking, accessible via web browser.
 
@@ -152,7 +152,7 @@ Both are auto-wired by name — just declare them in `agent.yaml`, no Python nee
 ## Project Structure
 
 ```
-nutshell/
+nutshell/              ← Python library package
 ├── core/
 │   ├── agent.py       # Agent + BaseAgent — LLM loop, tool execution, history management
 │   ├── tool.py        # Tool + BaseTool + @tool decorator
@@ -166,31 +166,32 @@ nutshell/
 │   └── tool/
 │       ├── web_search.py  # Brave Search
 │       └── tavily.py      # Tavily Search
-├── runtime/
-│   ├── session.py          # Session — persistent context + heartbeat daemon loop
-│   ├── ipc.py              # FileIPC — context.jsonl + events.jsonl
-│   ├── status.py           # status.json read/write
-│   ├── params.py           # params.json read/write
-│   ├── provider_factory.py
-│   ├── tool_provider_factory.py
-│   ├── watcher.py          # SessionWatcher — polls _sessions/ directory
-│   ├── server.py           # nutshell-server entry point
-│   ├── loaders/
-│   │   ├── __init__.py     # BaseLoader ABC
-│   │   ├── agent.py        # AgentLoader: entity/ → Agent (handles extends chain)
-│   │   ├── tool.py         # ToolLoader: .json → Tool (.sh for shell-backed tools)
-│   │   └── skill.py        # SkillLoader: SKILL.md → Skill
-│   └── tools/
-│       ├── bash.py         # create_bash_tool(): subprocess + PTY
-│       └── _registry.py    # Built-in tool registry
-└── ui/
-    ├── web/                # nutshell-web (FastAPI + SSE)
-    │   ├── app.py          # routes + entry point
-    │   ├── sessions.py     # session helpers
-    │   └── index.html      # frontend (HTML + CSS + JS)
-    ├── tui.py              # nutshell-tui (Textual terminal UI)
-    └── dui/                # developer UI — entity management CLI tools
-        └── new_agent.py    # nutshell-new-agent
+└── runtime/
+    ├── session.py          # Session — persistent context + heartbeat daemon loop
+    ├── ipc.py              # FileIPC — context.jsonl + events.jsonl
+    ├── status.py           # status.json read/write
+    ├── params.py           # params.json read/write
+    ├── provider_factory.py
+    ├── tool_provider_factory.py
+    ├── watcher.py          # SessionWatcher — polls _sessions/ directory
+    ├── server.py           # nutshell-server entry point
+    ├── loaders/
+    │   ├── __init__.py     # BaseLoader ABC
+    │   ├── agent.py        # AgentLoader: entity/ → Agent (handles extends chain)
+    │   ├── tool.py         # ToolLoader: .json → Tool (.sh for shell-backed tools)
+    │   └── skill.py        # SkillLoader: SKILL.md → Skill
+    └── tools/
+        ├── bash.py         # create_bash_tool(): subprocess + PTY
+        └── _registry.py    # Built-in tool registry
+
+ui/                    ← UI applications (separate from library)
+├── web/                # nutshell-web (FastAPI + SSE)
+│   ├── app.py          # routes + entry point
+│   ├── sessions.py     # session helpers
+│   └── index.html      # frontend (HTML + CSS + JS)
+├── tui.py              # nutshell-tui (Textual terminal UI)
+└── dui/                # developer UI — entity management CLI tools
+    └── new_agent.py    # nutshell-new-agent
 ```
 
 ---
@@ -229,6 +230,9 @@ The web UI polls both files via SSE, resuming from the last byte offset on recon
 ---
 
 ## Changelog
+
+### v1.0.6
+- **Package separation** — `ui/` moved from `nutshell/ui/` to repo root alongside `nutshell/`. UI is now a distinct application package (`ui.*`) that consumes the library (`nutshell.*`).
 
 ### v1.0.5
 - **Package restructure** — removed `abstract/` module: `BaseAgent` inlined into `core/agent.py`, `BaseTool` into `core/tool.py`, `BaseLoader` into `runtime/loaders/__init__.py`, `Provider` into `providers/__init__.py`. No public API change.
