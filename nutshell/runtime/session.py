@@ -30,7 +30,7 @@ class Session:
           core/
             system.md               ← system prompt (copied from entity at creation)
             heartbeat.md            ← heartbeat prompt
-            session.md              ← session reference template
+            session_context.md      ← session paths template
             memory.md               ← persistent memory (auto-injected each activation)
             tasks.md                ← task board
             params.json             ← runtime config
@@ -117,7 +117,7 @@ class Session:
 
         # 2. prompts from core/
         system_md = self._read_core_text("system.md")
-        session_ctx_md = self._read_core_text("session.md")
+        session_ctx_md = self._read_core_text("session_context.md")
 
         self._agent.system_prompt = system_md
         self._agent.session_context = (

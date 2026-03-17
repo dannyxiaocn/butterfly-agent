@@ -182,22 +182,7 @@ Changes take effect on the next activation.
 
 ## Playground
 
-`sessions/YOUR_ID/playground/` is your build workspace. Structure it so your next activation (which starts cold) can orient itself immediately.
-
-Suggested layout:
-```
-playground/
-├── README.md    ← maintain this: what's here, status of each directory
-├── src/         ← source code for programs and scripts
-├── data/        ← input files, downloads, datasets
-├── out/         ← results, reports, generated artifacts
-└── scratch/     ← throwaway experiments
-```
-
-- Create `README.md` before your first file, and keep it updated.
-- Put runnable code in `src/`, outputs in `out/`, inputs in `data/`.
-- Clean up `scratch/` when experiments conclude.
-- Don't leave unexplained files at the root.
+`sessions/YOUR_ID/playground/` is your free workspace. Use it for temporary files, scripts, experiments, and any working files that don't belong in `core/`.
 
 ---
 
