@@ -1,8 +1,21 @@
 from __future__ import annotations
 import inspect
+from abc import ABC, abstractmethod
 from typing import Any, Callable, get_type_hints
 
-from nutshell.abstract.tool import BaseTool
+
+class BaseTool(ABC):
+    """Abstract interface for a tool an agent can call."""
+
+    @abstractmethod
+    async def execute(self, **kwargs: Any) -> str:
+        """Execute the tool and return a string result."""
+        ...
+
+    @abstractmethod
+    def to_api_dict(self) -> dict:
+        """Return the LLM API representation (Anthropic input_schema format)."""
+        ...
 
 
 def _python_type_to_json_schema(annotation: Any) -> dict:

@@ -1,7 +1,7 @@
 from __future__ import annotations
 from pathlib import Path
 
-from nutshell.abstract.loader import BaseLoader
+from nutshell.runtime.loaders import BaseLoader
 from nutshell.core.skill import Skill
 
 

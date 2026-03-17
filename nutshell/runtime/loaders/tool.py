@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Any, Callable
 
-from nutshell.abstract.loader import BaseLoader
+from nutshell.runtime.loaders import BaseLoader
 from nutshell.core.tool import Tool
 
 

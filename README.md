@@ -1,4 +1,4 @@
-# Nutshell `v1.0.4`
+# Nutshell `v1.0.5`
 
 A minimal Python agent runtime. Agents run as persistent server-managed sessions with autonomous heartbeat ticking, accessible via web browser.
 
@@ -153,13 +153,13 @@ Both are auto-wired by name — just declare them in `agent.yaml`, no Python nee
 
 ```
 nutshell/
-├── abstract/          # ABCs: BaseAgent, BaseTool, Provider, BaseLoader
 ├── core/
-│   ├── agent.py       # Agent — LLM loop, tool execution, history management
-│   ├── tool.py        # Tool + @tool decorator
+│   ├── agent.py       # Agent + BaseAgent — LLM loop, tool execution, history management
+│   ├── tool.py        # Tool + BaseTool + @tool decorator
 │   ├── skill.py       # Skill dataclass
 │   └── types.py       # Message, ToolCall, AgentResult
 ├── providers/
+│   ├── __init__.py    # Provider ABC
 │   ├── llm/
 │   │   ├── anthropic.py   # AnthropicProvider
 │   │   └── kimi.py        # KimiForCodingProvider
@@ -176,20 +176,21 @@ nutshell/
 │   ├── watcher.py          # SessionWatcher — polls _sessions/ directory
 │   ├── server.py           # nutshell-server entry point
 │   ├── loaders/
+│   │   ├── __init__.py     # BaseLoader ABC
 │   │   ├── agent.py        # AgentLoader: entity/ → Agent (handles extends chain)
 │   │   ├── tool.py         # ToolLoader: .json → Tool (.sh for shell-backed tools)
 │   │   └── skill.py        # SkillLoader: SKILL.md → Skill
 │   └── tools/
 │       ├── bash.py         # create_bash_tool(): subprocess + PTY
 │       └── _registry.py    # Built-in tool registry
-├── cli/
-│   └── new_agent.py        # nutshell-new-agent
 └── ui/
     ├── web/                # nutshell-web (FastAPI + SSE)
     │   ├── app.py          # routes + entry point
     │   ├── sessions.py     # session helpers
     │   └── index.html      # frontend (HTML + CSS + JS)
-    └── tui.py              # nutshell-tui (Textual terminal UI)
+    ├── tui.py              # nutshell-tui (Textual terminal UI)
+    └── dui/                # developer UI — entity management CLI tools
+        └── new_agent.py    # nutshell-new-agent
 ```
 
 ---
@@ -228,6 +229,10 @@ The web UI polls both files via SSE, resuming from the last byte offset on recon
 ---
 
 ## Changelog
+
+### v1.0.5
+- **Package restructure** — removed `abstract/` module: `BaseAgent` inlined into `core/agent.py`, `BaseTool` into `core/tool.py`, `BaseLoader` into `runtime/loaders/__init__.py`, `Provider` into `providers/__init__.py`. No public API change.
+- **DUI** — `cli/new_agent.py` moved to `ui/dui/new_agent.py` (developer UI, alongside web/tui frontends).
 
 ### v1.0.4
 - **Terminal UI** — `nutshell-tui`: Textual-based three-panel TUI (sessions | chat | tasks). Reads files directly via `FileIPC` — only `nutshell-server` required, `nutshell-web` not needed. Features: session list with status indicators, full history replay, real-time polling (0.5s), streaming thinking indicator, task editor, stop/start/new session.

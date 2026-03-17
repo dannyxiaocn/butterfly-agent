@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import AsyncMock
 from nutshell.core.agent import Agent
-from nutshell.abstract.provider import Provider
+from nutshell.providers import Provider
 from nutshell.core.skill import Skill
 from nutshell.core.tool import tool
 from nutshell.core.types import ToolCall

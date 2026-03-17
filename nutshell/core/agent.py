@@ -1,12 +1,26 @@
 from __future__ import annotations
 import asyncio
+from abc import ABC, abstractmethod
 from typing import Any, Callable, Literal
 
-from nutshell.abstract.agent import BaseAgent
-from nutshell.abstract.provider import Provider
+from nutshell.providers import Provider
 from nutshell.core.skill import Skill
 from nutshell.core.tool import Tool
 from nutshell.core.types import AgentResult, Message, ToolCall
+
+class BaseAgent(ABC):
+    """Abstract interface for an agent that processes messages."""
+
+    @abstractmethod
+    async def run(self, input: str, *, clear_history: bool = False) -> "AgentResult":
+        """Run the agent with a user input string and return a result."""
+        ...
+
+    @abstractmethod
+    def close(self) -> None:
+        """Release any held state (e.g., conversation history)."""
+        ...
+
 
 ReleasePolicy = Literal["auto", "manual", "persistent"]
 

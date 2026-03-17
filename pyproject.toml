@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "nutshell"
-version = "1.0.4"
+version = "1.0.5"
 description = "A minimal Python Agent library"
 requires-python = ">=3.11"
 dependencies = [
@@ -23,7 +23,7 @@ dev = ["pytest>=8.0.0", "pytest-asyncio>=0.24.0"]
 nutshell-server    = "nutshell.runtime.server:main"
 nutshell-web       = "nutshell.ui.web:main"
 nutshell-tui       = "nutshell.ui.tui:main"
-nutshell-new-agent = "nutshell.cli.new_agent:main"
+nutshell-new-agent = "nutshell.ui.dui.new_agent:main"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

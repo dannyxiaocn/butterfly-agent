@@ -1,5 +1,5 @@
 from __future__ import annotations
-from nutshell.abstract.provider import Provider
+from nutshell.providers import Provider
 
 _REGISTRY: dict[str, tuple[str, str]] = {
     "anthropic":        ("nutshell.providers.llm.anthropic", "AnthropicProvider"),
