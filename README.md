@@ -1,4 +1,4 @@
-# Nutshell `v1.1.2`
+# Nutshell `v1.1.3`
 
 A minimal Python agent runtime. Agents run as persistent server-managed sessions with autonomous heartbeat ticking, accessible via web browser.
 
@@ -275,6 +275,11 @@ The web UI polls both files via SSE, resuming from the last byte offset on recon
 ---
 
 ## Changelog
+
+### v1.1.3
+- **`session_context.md` → `session.md`** — session reference template renamed for clarity. Now lives at `entity/agent/prompts/session.md`; copied to `sessions/<id>/core/session.md` at session creation.
+- **Playground guidance** — `session.md` and `system.md` now specify a structured playground layout (`src/`, `data/`, `out/`, `scratch/`, `README.md`) with clear rules so agents orient themselves on cold start.
+- **Session file documentation** — `session.md` gives prescriptive per-file guidance (tasks.md, memory.md, params.json, tools/, skills/) so agents know exactly how to interact with each.
 
 ### v1.1.2
 - **System prompt assembly moved to `core/agent.py`** — `Agent` now owns all prompt composition: base + `session_context` + `memory` + skills. `runtime/session.py` only reads files and assigns the three fields; zero string formatting in runtime.
