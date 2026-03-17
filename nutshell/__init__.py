@@ -4,9 +4,9 @@ from nutshell.core.agent import Agent, BaseAgent
 from nutshell.core.tool import Tool, BaseTool, tool
 from nutshell.core.skill import Skill
 from nutshell.core.types import AgentResult, Message, ToolCall
-from nutshell.providers import Provider
+from nutshell.core.provider import Provider
 from nutshell.llm_engine.providers.anthropic import AnthropicProvider
-from nutshell.abstract import BaseLoader
+from nutshell.core.loader import BaseLoader
 from nutshell.runtime.session import Session, SESSION_FINISHED
 from nutshell.runtime.ipc import FileIPC
 from nutshell.tool_engine.loader import ToolLoader

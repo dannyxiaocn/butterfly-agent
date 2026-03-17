@@ -3,7 +3,7 @@ import asyncio
 from abc import ABC, abstractmethod
 from typing import Any, Callable, Literal
 
-from nutshell.providers import Provider
+from nutshell.core.provider import Provider
 from nutshell.core.skill import Skill
 from nutshell.core.tool import Tool
 from nutshell.core.types import AgentResult, Message, ToolCall

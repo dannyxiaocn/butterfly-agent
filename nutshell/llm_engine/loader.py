@@ -2,7 +2,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Callable
 
-from nutshell.abstract import BaseLoader
+from nutshell.core.loader import BaseLoader
 from nutshell.core.agent import Agent
 from nutshell.skill_engine.loader import SkillLoader
 from nutshell.tool_engine.loader import ToolLoader

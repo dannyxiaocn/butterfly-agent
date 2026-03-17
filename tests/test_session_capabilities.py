@@ -9,7 +9,7 @@ import json
 import pytest
 from pathlib import Path
 
-from nutshell.providers import Provider
+from nutshell.core.provider import Provider
 from nutshell.core.agent import Agent
 from nutshell.core.skill import Skill
 from nutshell.core.tool import tool

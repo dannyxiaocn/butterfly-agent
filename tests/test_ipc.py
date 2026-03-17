@@ -3,7 +3,7 @@ import asyncio
 
 import pytest
 
-from nutshell.providers import Provider
+from nutshell.core.provider import Provider
 from nutshell.core.agent import Agent
 from nutshell.runtime.ipc import FileIPC, _context_event_to_display, _runtime_event_to_display
 from nutshell.runtime.session import Session

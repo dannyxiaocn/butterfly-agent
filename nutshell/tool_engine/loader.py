@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from nutshell.core.tool import Tool
-from nutshell.abstract import BaseLoader
+from nutshell.core.loader import BaseLoader
 from nutshell.tool_engine.executor.bash import BashExecutor
 from nutshell.tool_engine.executor.shell import ShellExecutor
 

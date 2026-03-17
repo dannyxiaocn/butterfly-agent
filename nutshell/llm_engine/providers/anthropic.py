@@ -1,7 +1,7 @@
 from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Callable
 
-from nutshell.providers import Provider
+from nutshell.core.provider import Provider
 from nutshell.core.types import Message, ToolCall
 
 if TYPE_CHECKING:

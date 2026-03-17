@@ -1,7 +1,6 @@
 from __future__ import annotations
 from abc import ABC, abstractmethod
-from pathlib import Path
-from typing import TYPE_CHECKING, Callable, Generic, TypeVar
+from typing import TYPE_CHECKING, Callable
 
 if TYPE_CHECKING:
     from nutshell.core.types import Message, ToolCall
@@ -34,21 +33,4 @@ class Provider(ABC):
         ...
 
 
-T = TypeVar("T")
-
-
-class BaseLoader(ABC, Generic[T]):
-    """Abstract base for loaders that read external files into nutshell objects."""
-
-    @abstractmethod
-    def load(self, path: Path) -> T:
-        """Load a single file and return the constructed object."""
-        ...
-
-    @abstractmethod
-    def load_dir(self, directory: Path) -> list[T]:
-        """Load all relevant files from a directory."""
-        ...
-
-
-__all__ = ["Provider", "BaseLoader"]
+__all__ = ["Provider"]
