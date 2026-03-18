@@ -11,3 +11,4 @@ build/
 venv/
 .claude/
 sessions/
+_sessions/

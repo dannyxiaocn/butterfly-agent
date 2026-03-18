@@ -20,8 +20,9 @@ pytest tests/ -q          # must pass before anything else
 Then:
 1. Update `README.md` — relevant section + new Changelog entry under `## Changelog`
 2. Bump version in **both** `pyproject.toml` (`version = "X.Y.Z"`) **and** `README.md` heading (`# Nutshell \`vX.Y.Z\``)
-3. Commit: `git commit -m "vX.Y.Z: {short summary}"`
-4. Push: `git push`
+3. Check `.gitignore` — if new dirs/files were introduced (session dirs, cache dirs, build artifacts), add them
+4. Commit: `git commit -m "vX.Y.Z: {short summary}"`
+5. Push: `git push`
 
 **Versioning rules:**
 - Patch (1.0.X): bug fixes, no API change

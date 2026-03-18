@@ -1,6 +1,0 @@
-{"type": "model_status", "state": "running", "source": "user", "ts": "2026-03-17T15:13:58.529188"}
-{"type": "model_status", "state": "idle", "source": "user", "ts": "2026-03-17T15:14:05.634811"}
-{"type": "model_status", "state": "running", "source": "user", "ts": "2026-03-17T15:15:22.934082"}
-{"type": "tool_call", "name": "web_search", "input": {"query": "当前世界局势 2025年最新", "count": 10, "language": "zh-hans", "freshness": "week"}, "ts": "2026-03-17T15:15:31.795043"}
-{"type": "tool_call", "name": "web_search", "input": {"query": "world news today 2025 latest", "count": 10, "freshness": "week"}, "ts": "2026-03-17T15:15:31.795723"}
-{"type": "model_status", "state": "idle", "source": "user", "ts": "2026-03-17T15:15:55.101880"}

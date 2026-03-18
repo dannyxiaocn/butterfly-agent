@@ -1,9 +1,0 @@
-{
-  "model_state": "idle",
-  "model_source": "user",
-  "updated_at": "2026-03-17T15:15:55.102295",
-  "last_run_at": "2026-03-17T15:15:55.101880",
-  "pid": 13247,
-  "status": "active",
-  "heartbeat_interval": 600.0
-}
