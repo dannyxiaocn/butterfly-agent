@@ -149,6 +149,65 @@ rm -rf sessions/YOUR_ID/core/skills/my-skill
 
 ---
 
+## Task board
+
+`core/tasks.md` drives your heartbeat. Non-empty = next wakeup fires.
+
+```bash
+# Read tasks
+cat sessions/YOUR_ID/core/tasks.md
+
+# Update tasks
+cat > sessions/YOUR_ID/core/tasks.md << 'EOF'
+- [ ] Task 1 — in progress: completed step A, next is step B
+- [ ] Task 2 — blocked on X
+EOF
+
+# Clear when all done (required completion signal)
+echo -n > sessions/YOUR_ID/core/tasks.md
+```
+
+**Write progress notes your future self can resume from cold.** Remove completed items. Leave unfinished tasks with enough context to continue without memory of this session.
+
+---
+
+## Persistent memory
+
+`core/memory.md` is injected into your system prompt every activation.
+
+```bash
+# Append a fact
+echo "- User prefers Python over shell scripts" >> sessions/YOUR_ID/core/memory.md
+
+# Overwrite entirely
+cat > sessions/YOUR_ID/core/memory.md << 'EOF'
+- Project uses PostgreSQL
+- User prefers concise output
+EOF
+```
+
+Keep memory concise — it consumes context every activation. One fact per line. Avoid pasting large documents.
+
+---
+
+## Runtime config (params.json)
+
+`core/params.json` controls session runtime. Changes take effect on the next activation.
+
+```bash
+python3 << 'EOF'
+import json, pathlib
+p = pathlib.Path('sessions/YOUR_ID/core/params.json')
+d = json.loads(p.read_text())
+d['heartbeat_interval'] = 300   # 60-300 = urgent, 600 = normal, 3600+ = slow
+# d['model'] = 'claude-opus-4-6'
+# d['tool_providers'] = {'web_search': 'tavily'}
+p.write_text(json.dumps(d, indent=2))
+EOF
+```
+
+---
+
 ## The iteration loop
 
 ```
