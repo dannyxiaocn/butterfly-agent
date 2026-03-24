@@ -182,15 +182,26 @@ class Agent(BaseAgent):
         """Clear conversation history (for release_policy='manual')."""
         self._history = []
 
-    def as_tool(self, name: str, description: str) -> Tool:
+    def as_tool(
+        self,
+        name: str,
+        description: str,
+        *,
+        clear_history: bool = False,
+    ) -> Tool:
         """Wrap this agent as a Tool that can be used by another agent.
 
         The sub-agent receives the tool input as its user message.
+
+        Args:
+            clear_history: If True, clears the sub-agent history before each tool
+                invocation. Useful when you want a normally persistent agent to act
+                like a stateless worker in a multi-agent pipeline.
         """
         agent = self
 
         async def _run(input: str) -> str:
-            result = await agent.run(input)
+            result = await agent.run(input, clear_history=clear_history)
             if agent.release_policy == "auto":
                 agent.close()
             return result.content

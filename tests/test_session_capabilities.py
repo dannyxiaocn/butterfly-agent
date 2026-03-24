@@ -342,6 +342,27 @@ def test_no_memory_dir_backward_compat(tmp_path):
     assert agent.memory_layers == []
 
 
+def test_memory_layers_removed_on_next_reload(tmp_path):
+    """Removing core/memory/ files clears stale layers on the next capability reload."""
+    agent = Agent(system_prompt="Base.", provider=MockProvider([]))
+    session = make_session(tmp_path, agent)
+
+    memory_dir = session.core_dir / "memory"
+    memory_dir.mkdir()
+    layer_path = memory_dir / "facts.md"
+    layer_path.write_text("fact one")
+    session._load_session_capabilities()
+    assert agent.memory_layers == [("facts", "fact one")]
+
+    layer_path.unlink()
+    session._load_session_capabilities()
+
+    assert agent.memory_layers == []
+    full_prompt = agent._build_system_prompt()
+    assert "## Memory: facts" not in full_prompt
+    assert "fact one" not in full_prompt
+
+
 # ── Tool-provider override ────────────────────────────────────────────────────
 
 def test_tool_provider_override_switches_impl(tmp_path, monkeypatch):

@@ -149,6 +149,41 @@ async def test_as_tool():
 
 
 @pytest.mark.asyncio
+async def test_as_tool_clear_history_resets_persistent_subagent_each_call():
+    provider = MockProvider([
+        ("First", []),
+        ("Second", []),
+    ])
+    sub_agent = Agent(provider=provider, release_policy="persistent")
+    sub_tool = sub_agent.as_tool("summarize", "Summarize a topic", clear_history=True)
+
+    await sub_tool.execute(input="topic X")
+    assert len(sub_agent._history) == 2
+    assert sub_agent._history[0].content == "topic X"
+
+    await sub_tool.execute(input="topic Y")
+    assert len(sub_agent._history) == 2
+    assert sub_agent._history[0].content == "topic Y"
+
+
+@pytest.mark.asyncio
+async def test_as_tool_preserves_history_by_default_for_persistent_subagent():
+    provider = MockProvider([
+        ("First", []),
+        ("Second", []),
+    ])
+    sub_agent = Agent(provider=provider, release_policy="persistent")
+    sub_tool = sub_agent.as_tool("summarize", "Summarize a topic")
+
+    await sub_tool.execute(input="topic X")
+    await sub_tool.execute(input="topic Y")
+
+    assert len(sub_agent._history) == 4
+    assert sub_agent._history[0].content == "topic X"
+    assert sub_agent._history[2].content == "topic Y"
+
+
+@pytest.mark.asyncio
 async def test_unknown_tool_returns_error():
     bad_call = ToolCall(id="x", name="nonexistent", input={})
 

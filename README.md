@@ -1,4 +1,4 @@
-# Nutshell `v1.1.7`
+# Nutshell `v1.1.8`
 
 A minimal Python agent runtime. Agents run as persistent server-managed sessions with autonomous heartbeat ticking, accessible via web browser.
 
@@ -270,6 +270,12 @@ The web UI polls both files via SSE, resuming from the last byte offset on recon
 ---
 
 ## Changelog
+
+### v1.1.8
+- **`as_tool(clear_history=True)`** — persistent agents can now act as stateless workers in multi-agent pipelines. Pass `clear_history=True` to `as_tool()` to reset sub-agent history on each tool invocation.
+- **`reload_capabilities` summary** — tool now returns a detailed summary of loaded tools and skills (e.g., `"Tools (3): bash, web_search, fetch_url. Skills (1): creator-mode."`) instead of a bare confirmation.
+- **`nutshell-new-agent` parent validation** — creating an agent with `--extends <parent>` now fails immediately with a clear error if the parent entity does not exist, rather than silently creating a broken entity.
+- **Memory layer cleanup on reload** — removing a file from `core/memory/` is now reflected immediately on the next `reload_capabilities` call; stale layers no longer persist.
 
 ### v1.1.7
 - **Anthropic thinking block support** — `AnthropicProvider` now surfaces extended thinking: streaming path forwards `thinking_delta` events via `on_text_chunk`; non-streaming fallback extracts thinking from final message content blocks. Thinking appears in the UI thinking bubble, not in `content_text`.

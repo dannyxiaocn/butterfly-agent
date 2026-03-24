@@ -123,6 +123,9 @@ def create_entity(name: str, base_dir: Path, parent: str | None) -> Path:
         print(f"Error: entity '{name}' already exists at {entity_dir}", file=sys.stderr)
         sys.exit(1)
 
+    if parent is not None and not (base_dir / parent / "agent.yaml").exists():
+        raise ValueError(f"Parent entity '{parent}' not found in {base_dir}")
+
     (entity_dir / "prompts").mkdir(parents=True)
     (entity_dir / "skills").mkdir()
     (entity_dir / "tools").mkdir()
@@ -221,7 +224,11 @@ def main() -> None:
     else:
         parent = _ask_parent(entity_dir)
 
-    created = create_entity(name, entity_dir, parent)
+    try:
+        created = create_entity(name, entity_dir, parent)
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
 
     print(f"\nCreated: {created}/")
     print(f"  agent.yaml")
