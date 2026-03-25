@@ -1,4 +1,4 @@
-# Nutshell `v1.3.25`
+# Nutshell `v1.3.26`
 
 A minimal Python agent runtime. Agents run as persistent server-managed sessions with autonomous heartbeat ticking. **Primary interface: CLI.**
 
@@ -363,6 +363,13 @@ The web UI polls both files via SSE, resuming from the last byte offset on recon
 ---
 
 ## Changelog
+
+### v1.3.26
+- **receptionist agent entity** — new `entity/receptionist/` implementing the receptionist–worker pattern: a friendly front-desk agent handles user communication while delegating complex tasks to a background core agent
+- Custom system prompt focused on communication, summarisation, and task delegation
+- New `delegate` skill teaching spawn/monitor/collect lifecycle for worker agents
+- Tools scoped to read-only bash + multi-agent coordination (no git_checkpoint, no propose_entity_update)
+- 30 new tests in `test_entity_receptionist.py`; 390 total
 
 ### v1.3.25
 - **kanban**: `nutshell kanban` — unified task-board view across all sessions; shows entity, online/idle/offline status, and `tasks.md` content per session

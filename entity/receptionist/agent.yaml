@@ -1,0 +1,29 @@
+name: receptionist
+description: >
+  Receptionist agent — friendly front-desk assistant that communicates with users
+  and delegates complex work to a dedicated worker (core) agent. Keeps responses
+  concise, manages expectations, and monitors worker progress.
+version: 1.0.0
+extends: agent
+model: claude-sonnet-4-6
+provider: anthropic
+release_policy: persistent
+max_iterations: 20
+
+prompts:
+  system: prompts/system.md
+  heartbeat:                     # inherited from agent
+  session_context:               # inherited from agent
+
+tools:
+  - tools/bash.json
+  - tools/spawn_session.json
+  - tools/send_to_session.json
+  - tools/fetch_url.json
+  - tools/recall_memory.json
+  - tools/state_diff.json
+  - tools/app_notify.json
+
+skills:
+  - skills/multi-agent
+  - skills/delegate
