@@ -31,6 +31,49 @@ _DEFAULT_SESSIONS_BASE = _REPO_ROOT / "sessions"
 _DEFAULT_SYSTEM_BASE = _REPO_ROOT / "_sessions"
 
 
+# ── inject-memory helpers ─────────────────────────────────────────────────────
+
+def _parse_inject_memory(raw: list[str] | None) -> dict[str, str]:
+    """Parse --inject-memory KEY=VALUE / KEY=@FILE items into {key: content}.
+
+    Raises SystemExit on bad format or missing file.
+    """
+    if not raw:
+        return {}
+    result: dict[str, str] = {}
+    for item in raw:
+        eq = item.find("=")
+        if eq < 1:
+            print(f"Error: invalid --inject-memory format: {item!r}  (expected KEY=VALUE or KEY=@FILE)",
+                  file=sys.stderr)
+            sys.exit(2)
+        key = item[:eq]
+        value = item[eq + 1:]
+        if value.startswith("@"):
+            fpath = Path(value[1:])
+            if not fpath.exists():
+                print(f"Error: --inject-memory file not found: {fpath}", file=sys.stderr)
+                sys.exit(2)
+            value = fpath.read_text(encoding="utf-8")
+        result[key] = value
+    return result
+
+
+def _write_inject_memory(session_dir: Path, memories: dict[str, str]) -> None:
+    """Write memory layers to sessions/<id>/core/memory/<key>.md.
+
+    Overwrites any existing file with the same key (intentional: caller explicitly
+    wants this content injected).
+    """
+    if not memories:
+        return
+    mem_dir = session_dir / "core" / "memory"
+    mem_dir.mkdir(parents=True, exist_ok=True)
+    for key, value in memories.items():
+        (mem_dir / f"{key}.md").write_text(value, encoding="utf-8")
+
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _pid_alive(pid) -> bool:
@@ -120,12 +163,21 @@ def _add_chat_parser(subparsers) -> None:
                    help=argparse.SUPPRESS)
     p.add_argument("--sessions-base", type=Path, default=_DEFAULT_SESSIONS_BASE,
                    help=argparse.SUPPRESS)
+    p.add_argument("--inject-memory", action="append", metavar="KEY=VALUE",
+                   dest="inject_memory",
+                   help="Inject a memory layer: KEY=VALUE or KEY=@FILE (repeatable)")
     p.set_defaults(func=cmd_chat)
 
 
 def cmd_chat(args) -> int:
     from ui.cli.chat import _continue_session, _new_session
+    inject = _parse_inject_memory(getattr(args, "inject_memory", None))
     if args.session:
+        if inject:
+            # Write injected memory to existing session
+            session_dir = args.sessions_base / args.session
+            if session_dir.exists():
+                _write_inject_memory(session_dir, inject)
         return _continue_session(
             args.session, args.message,
             no_wait=args.no_wait, timeout=args.timeout,
@@ -136,6 +188,7 @@ def cmd_chat(args) -> int:
         no_wait=args.no_wait, timeout=args.timeout,
         system_base=args.system_base,
         sessions_base=args.sessions_base,
+        inject_memory=inject,
     )
 
 
@@ -217,6 +270,9 @@ def _add_new_parser(subparsers) -> None:
                    help=argparse.SUPPRESS)
     p.add_argument("--sessions-base", type=Path, default=_DEFAULT_SESSIONS_BASE,
                    help=argparse.SUPPRESS)
+    p.add_argument("--inject-memory", action="append", metavar="KEY=VALUE",
+                   dest="inject_memory",
+                   help="Inject a memory layer: KEY=VALUE or KEY=@FILE (repeatable)")
     p.set_defaults(func=cmd_new)
 
 
@@ -238,6 +294,9 @@ def cmd_new(args) -> int:
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
+    inject = _parse_inject_memory(getattr(args, "inject_memory", None))
+    if inject:
+        _write_inject_memory(args.sessions_base / session_id, inject)
     print(session_id)
     return 0
 

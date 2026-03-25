@@ -146,6 +146,7 @@ def _new_session(
     timeout: float,
     system_base: Path,
     sessions_base: Path,
+    inject_memory: dict[str, str] | None = None,
 ) -> int:
     """Handle new-session mode. Spawns daemon thread, returns exit code."""
     import asyncio
@@ -175,6 +176,13 @@ def _new_session(
     except Exception as exc:
         print(f"Error: failed to initialise session: {exc}", file=sys.stderr)
         return 1
+
+    # Write injected memory layers (before daemon starts reading memory)
+    if inject_memory:
+        mem_dir = sessions_base / session_id / "core" / "memory"
+        mem_dir.mkdir(parents=True, exist_ok=True)
+        for key, value in inject_memory.items():
+            (mem_dir / f"{key}.md").write_text(value, encoding="utf-8")
 
     session = Session(agent, session_id=session_id, base_dir=sessions_base, system_base=system_base)
     ipc = FileIPC(session.system_dir)

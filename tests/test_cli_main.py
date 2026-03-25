@@ -18,6 +18,8 @@ from ui.cli.main import (
     _fmt_ago,
     _session_tone,
     _fmt_msg_content,
+    _parse_inject_memory,
+    _write_inject_memory,
 )
 
 
@@ -424,3 +426,80 @@ def test_cmd_log_limits_turns(tmp_path, capsys):
     assert "reply4" in out
     assert "reply5" in out
     assert "reply1" not in out
+
+
+# ── inject-memory helpers ─────────────────────────────────────────────────────
+
+def test_parse_inject_memory_empty():
+    assert _parse_inject_memory(None) == {}
+    assert _parse_inject_memory([]) == {}
+
+
+def test_parse_inject_memory_value():
+    result = _parse_inject_memory(["foo=bar", "x=hello world"])
+    assert result == {"foo": "bar", "x": "hello world"}
+
+
+def test_parse_inject_memory_file(tmp_path):
+    f = tmp_path / "content.md"
+    f.write_text("# Track\n- item")
+    result = _parse_inject_memory([f"track=@{f}"])
+    assert result == {"track": "# Track\n- item"}
+
+
+def test_parse_inject_memory_bad_format():
+    with pytest.raises(SystemExit):
+        _parse_inject_memory(["noequals"])
+
+
+def test_parse_inject_memory_missing_file():
+    with pytest.raises(SystemExit):
+        _parse_inject_memory(["key=@/nonexistent/path/file.md"])
+
+
+def test_write_inject_memory(tmp_path):
+    session_dir = tmp_path / "sessions" / "test-session"
+    _write_inject_memory(session_dir, {"foo": "bar content", "baz": "qux"})
+    assert (session_dir / "core" / "memory" / "foo.md").read_text() == "bar content"
+    assert (session_dir / "core" / "memory" / "baz.md").read_text() == "qux"
+
+
+def test_write_inject_memory_overwrites(tmp_path):
+    session_dir = tmp_path / "s"
+    mem_dir = session_dir / "core" / "memory"
+    mem_dir.mkdir(parents=True)
+    (mem_dir / "key.md").write_text("old")
+    _write_inject_memory(session_dir, {"key": "new"})
+    assert (mem_dir / "key.md").read_text() == "new"
+
+
+def test_cmd_new_inject_memory(tmp_path):
+    """cmd_new with --inject-memory writes memory layers after session creation."""
+    import argparse
+    from ui.cli.main import _DEFAULT_SYSTEM_BASE, _DEFAULT_SESSIONS_BASE
+    from nutshell.runtime.session_factory import init_session
+
+    sessions = tmp_path / "sessions"
+    system = tmp_path / "_sessions"
+
+    # Use real entity "agent"
+    entity_dir = Path(__file__).parent.parent / "entity" / "agent"
+    args = argparse.Namespace(
+        session_id="inject-test",
+        entity="agent",
+        heartbeat=600.0,
+        sessions_base=sessions,
+        system_base=system,
+        inject_memory=["mykey=myvalue", "other=content here"],
+    )
+    from ui.cli.main import cmd_new
+    import unittest.mock as mock
+    with mock.patch("nutshell.runtime.session_factory.init_session") as m:
+        m.return_value = None
+        # cmd_new calls _write_inject_memory after init_session
+        # We need session dir to exist for mkdir to work on memory
+        (sessions / "inject-test" / "core" / "memory").mkdir(parents=True)
+        code = cmd_new(args)
+    assert code == 0
+    assert (sessions / "inject-test" / "core" / "memory" / "mykey.md").read_text() == "myvalue"
+    assert (sessions / "inject-test" / "core" / "memory" / "other.md").read_text() == "content here"

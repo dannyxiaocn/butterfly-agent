@@ -1,4 +1,4 @@
-# Nutshell `v1.3.7`
+# Nutshell `v1.3.8`
 
 A minimal Python agent runtime. Agents run as persistent server-managed sessions with autonomous heartbeat ticking. **Primary interface: CLI.**
 
@@ -31,7 +31,9 @@ nutshell chat "Plan a data pipeline"                      # new session (entity:
 nutshell chat --entity kimi_agent "Review this code"      # custom entity
 nutshell chat --session 2026-03-25_10-00-00 "Status?"     # continue session (server needed)
 nutshell chat --session <id> --no-wait "Run overnight"    # fire-and-forget
-nutshell chat --session <id> --timeout 60 "question"      # custom timeout (default: 120s)
+nutshell chat --session <id> --timeout 60 "question"      # custom timeout (default: 300s)
+nutshell chat --inject-memory key=value "message"         # inject memory layer before first turn
+nutshell chat --inject-memory track=@track.md "start"     # inject file contents as memory layer
 ```
 
 ### Session Management
@@ -43,6 +45,7 @@ nutshell sessions --json              # JSON output — machine-readable for age
 nutshell new                          # create session (entity: agent, auto-generated ID)
 nutshell new --entity kimi_agent      # specific entity
 nutshell new my-project --entity agent  # specific ID
+nutshell new --inject-memory key=value  # inject memory layer on creation
 
 nutshell stop SESSION_ID              # pause heartbeat
 nutshell start SESSION_ID             # resume heartbeat (server must be running)
@@ -331,6 +334,10 @@ The web UI polls both files via SSE, resuming from the last byte offset on recon
 ---
 
 ## Changelog
+
+### v1.3.8
+- **`--inject-memory KEY=VALUE / KEY=@FILE`** — `nutshell chat` and `nutshell new` accept one or more `--inject-memory` flags that write named memory layers (`core/memory/<KEY>.md`) before the first agent turn. Supports inline values (`key=hello`) and file references (`track=@track.md`). Enables dynamic context injection (e.g. live task list) when spawning agents from scripts.
+- 8 new tests in `test_cli_main.py`; 195 total.
 
 ### v1.3.7
 - **Chat timeout default increased** — `nutshell chat` and `nutshell-chat` default `--timeout` raised from 120s to 300s. Complex agent tasks (especially with `--entity`) no longer time out prematurely while the agent is still working.
