@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any, Callable, ClassVar
 
 from nutshell.core.provider import Provider
 from nutshell.core.types import Message, ToolCall
@@ -10,6 +10,8 @@ if TYPE_CHECKING:
 
 class AnthropicProvider(Provider):
     """LLM provider backed by Anthropic Claude."""
+
+    _supports_cache_control: ClassVar[bool] = True
 
     def __init__(
         self,
@@ -32,6 +34,7 @@ class AnthropicProvider(Provider):
         model: str,
         *,
         on_text_chunk: Callable[[str], None] | None = None,
+        cache_system_prefix: str = "",
     ) -> tuple[str, list[ToolCall]]:
         api_messages = _to_api_messages(messages)
         api_tools = [t.to_api_dict() for t in tools] if tools else []
@@ -39,7 +42,7 @@ class AnthropicProvider(Provider):
         kwargs: dict[str, Any] = {
             "model": model,
             "max_tokens": self.max_tokens,
-            "system": system_prompt,
+            "system": _build_system_param(cache_system_prefix, system_prompt, self._supports_cache_control),
             "messages": api_messages,
         }
         if api_tools:
@@ -98,6 +101,29 @@ def _extract_thinking_text(block: Any) -> str:
     if isinstance(text, str):
         return text
     return ""
+
+
+def _build_system_param(
+    cache_prefix: str,
+    dynamic: str,
+    supports_cache: bool,
+) -> str | list[dict]:
+    """Build the system param for the Anthropic API.
+
+    When caching is supported and a prefix is provided, returns a list of text
+    blocks with cache_control on the prefix. Otherwise returns a plain string.
+    """
+    if not cache_prefix:
+        return dynamic
+    if not supports_cache:
+        # Concatenate for providers that don't support cache_control
+        return (cache_prefix + "\n" + dynamic).strip() if dynamic else cache_prefix
+    blocks: list[dict] = [
+        {"type": "text", "text": cache_prefix, "cache_control": {"type": "ephemeral"}},
+    ]
+    if dynamic:
+        blocks.append({"type": "text", "text": dynamic})
+    return blocks
 
 
 def _to_api_messages(messages: list[Message]) -> list[dict]:

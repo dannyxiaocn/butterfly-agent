@@ -1,4 +1,4 @@
-# Nutshell `v1.1.9`
+# Nutshell `v1.2.0`
 
 A minimal Python agent runtime. Agents run as persistent server-managed sessions with autonomous heartbeat ticking, accessible via web browser.
 
@@ -293,6 +293,11 @@ The web UI polls both files via SSE, resuming from the last byte offset on recon
 ---
 
 ## Changelog
+
+### v1.2.0
+- **Anthropic prompt caching** — system prompt now split into a static prefix (system.md + session context) and a dynamic suffix (memory + skills). Anthropic provider sends the static prefix with `cache_control: {"type": "ephemeral"}`, saving ~90% of static-prefix token costs on cache hits. Kimi provider concatenates both parts as before (no cache_control).
+- **`Agent._build_system_parts()`** — new internal method returning `(static_prefix, dynamic_suffix)`. `_build_system_prompt()` stays backward-compatible.
+- **`Provider.complete(cache_system_prefix="")`** — new optional parameter on the Provider ABC. Concrete implementations use it to control caching behaviour.
 
 ### v1.1.9
 - **`nutshell-chat` CLI** — single-shot agent interaction from terminal. `nutshell-chat "message"` creates a new session (self-contained daemon, no server needed); `--session <id>` continues an existing one. Always prints agent response; new sessions also print `Session: <id>`. Supports `--no-wait`, `--timeout`, `--entity`.

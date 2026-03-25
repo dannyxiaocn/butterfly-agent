@@ -1,5 +1,6 @@
 from __future__ import annotations
 import os
+from typing import ClassVar
 
 from nutshell.llm_engine.providers.anthropic import AnthropicProvider
 
@@ -12,6 +13,9 @@ class KimiForCodingProvider(AnthropicProvider):
     Thin wrapper over AnthropicProvider pointing at Kimi's Anthropic-compatible
     messages API. Uses KIMI_FOR_CODING_API_KEY env var by default.
     """
+
+    # Kimi's API does not support Anthropic cache_control blocks.
+    _supports_cache_control: ClassVar[bool] = False
 
     def __init__(
         self,
