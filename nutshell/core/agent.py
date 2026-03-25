@@ -136,10 +136,12 @@ class Agent(BaseAgent):
         if clear_history:
             self._history = []
 
+        from nutshell.core.types import TokenUsage as _TokenUsage
         system_prefix, system_dynamic = self._build_system_parts()
         tool_map = self._tool_map()
         messages: list[Message] = [*self._history, Message(role="user", content=input)]
         all_tool_calls: list[ToolCall] = []
+        total_usage = _TokenUsage()
 
         # Cache history when provider supports it and we have prior turns
         _cache_history = bool(self._history) and getattr(
@@ -147,7 +149,7 @@ class Agent(BaseAgent):
         )
 
         for _ in range(self.max_iterations):
-            content, tool_calls = await self.provider.complete(
+            content, tool_calls, turn_usage = await self.provider.complete(
                 messages=messages,
                 tools=self.tools,
                 system_prompt=system_dynamic,
@@ -156,6 +158,7 @@ class Agent(BaseAgent):
                 cache_system_prefix=system_prefix,
                 cache_last_human_turn=_cache_history,
             )
+            total_usage = total_usage + turn_usage
             # Only stream the first completion; subsequent rounds (tool loops)
             # don't stream since the user only cares about the final text.
             on_text_chunk = None
@@ -192,6 +195,7 @@ class Agent(BaseAgent):
         result = AgentResult(
             content=content,
             tool_calls=all_tool_calls,
+            usage=total_usage,
             messages=list(messages),
         )
 

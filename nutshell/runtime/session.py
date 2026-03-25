@@ -265,6 +265,8 @@ class Session:
             turn["user_input_id"] = user_input_id
         if get_tool_call_count() > 0:
             turn["has_streaming_tools"] = True
+        if result.usage and result.usage.total_tokens > 0:
+            turn["usage"] = result.usage.as_dict()
         self._append_context(turn)
         self._set_model_status("idle", "user")
         return result
@@ -336,6 +338,8 @@ class Session:
                 }
                 if get_tool_call_count() > 0:
                     turn["has_streaming_tools"] = True
+                if result.usage and result.usage.total_tokens > 0:
+                    turn["usage"] = result.usage.as_dict()
                 self._append_context(turn)
 
         self._set_model_status("idle", "heartbeat")

@@ -304,3 +304,90 @@ async def test_kimi_provider_ignores_cache_last_human_turn():
     # Assistant message should be plain string, no cache_control blocks
     asst_content = api_msgs[1]["content"]
     assert isinstance(asst_content, str), "Kimi must not add cache_control blocks to messages"
+
+
+# ── Token usage tracking ────────────────────────────────────────────────────────
+
+def test_token_usage_dataclass_add():
+    from nutshell.core.types import TokenUsage
+    a = TokenUsage(input_tokens=100, output_tokens=50, cache_read_tokens=200, cache_write_tokens=10)
+    b = TokenUsage(input_tokens=30, output_tokens=20)
+    c = a + b
+    assert c.input_tokens == 130
+    assert c.output_tokens == 70
+    assert c.cache_read_tokens == 200
+    assert c.total_tokens == 200
+
+
+def test_token_usage_as_dict():
+    from nutshell.core.types import TokenUsage
+    u = TokenUsage(input_tokens=10, output_tokens=5, cache_read_tokens=100, cache_write_tokens=2)
+    d = u.as_dict()
+    assert d == {"input": 10, "output": 5, "cache_read": 100, "cache_write": 2}
+
+
+@pytest.mark.asyncio
+async def test_anthropic_provider_returns_usage():
+    """AnthropicProvider.complete() returns TokenUsage with token counts."""
+    from nutshell.core.types import TokenUsage
+
+    provider = AnthropicProvider.__new__(AnthropicProvider)
+    provider.max_tokens = 100
+    captured: list = []
+
+    async def _create(**kwargs):
+        captured.append(kwargs)
+        from types import SimpleNamespace
+        return SimpleNamespace(
+            content=[SimpleNamespace(type="text", text="ok")],
+            usage=SimpleNamespace(
+                input_tokens=50,
+                output_tokens=20,
+                cache_read_input_tokens=100,
+                cache_creation_input_tokens=5,
+            ),
+        )
+
+    provider._client = SimpleNamespace(messages=SimpleNamespace(create=_create))
+
+    _, _, usage = await provider.complete(
+        messages=[Message(role="user", content="hi")],
+        tools=[],
+        system_prompt="sys",
+        model="claude-test",
+    )
+
+    assert isinstance(usage, TokenUsage)
+    assert usage.input_tokens == 50
+    assert usage.output_tokens == 20
+    assert usage.cache_read_tokens == 100
+    assert usage.cache_write_tokens == 5
+    assert usage.total_tokens == 70
+
+
+@pytest.mark.asyncio
+async def test_agent_accumulates_usage_over_tool_loops():
+    """AgentResult.usage sums tokens across all tool-call iterations."""
+    from nutshell.core.agent import Agent
+    from nutshell.core.provider import Provider
+    from nutshell.core.types import Message, TokenUsage, ToolCall
+    from nutshell.core.tool import tool
+
+    class CountingProvider(Provider):
+        async def complete(self, messages, tools, system_prompt, model, *, on_text_chunk=None, cache_system_prefix="", cache_last_human_turn=False):
+            from nutshell.core.types import TokenUsage
+            if len(messages) <= 2:  # first call: return tool_call
+                return ("", [ToolCall(id="1", name="noop", input={})], TokenUsage(input_tokens=10, output_tokens=5))
+            return ("done", [], TokenUsage(input_tokens=8, output_tokens=3))  # second call: done
+
+    @tool
+    def noop() -> str:
+        """No-op tool."""
+        return "ok"
+
+    agent = Agent(tools=[noop], provider=CountingProvider())
+    result = await agent.run("do it")
+
+    assert result.usage.input_tokens == 18   # 10 + 8
+    assert result.usage.output_tokens == 8   # 5 + 3
+    assert result.usage.total_tokens == 26
