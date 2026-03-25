@@ -1,4 +1,4 @@
-# Nutshell `v1.3.24`
+# Nutshell `v1.3.25`
 
 A minimal Python agent runtime. Agents run as persistent server-managed sessions with autonomous heartbeat ticking. **Primary interface: CLI.**
 
@@ -44,6 +44,10 @@ nutshell sessions --json              # JSON output — machine-readable for age
 
 nutshell friends                      # IM-style contact list with status dots
 nutshell friends --json               # JSON output for agents
+
+nutshell kanban                       # unified task board (all sessions)
+nutshell kanban --session ID          # single session
+nutshell kanban --json                # JSON output for agents
 
 nutshell new                          # create session (entity: agent, auto-generated ID)
 nutshell new --entity kimi_agent      # specific entity
@@ -359,6 +363,11 @@ The web UI polls both files via SSE, resuming from the last byte offset on recon
 ---
 
 ## Changelog
+
+### v1.3.25
+- **kanban**: `nutshell kanban` — unified task-board view across all sessions; shows entity, online/idle/offline status, and `tasks.md` content per session
+- `--session ID` to filter a single session; `--json` for machine-readable output
+- 16 new tests in `test_cli_kanban.py`; 360 total
 
 ### v1.3.24
 - **app notifications**: new `core/apps/` directory — `.md` files are injected as an **App Notifications** block in the system prompt on every activation, giving agents a persistent, always-visible channel for status updates, alerts, and cross-app communication

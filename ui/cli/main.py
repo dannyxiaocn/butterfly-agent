@@ -966,6 +966,53 @@ def _exec_entrypoint(name: str) -> int:
 
 
 
+
+
+# ── Subcommand: kanban ────────────────────────────────────────────────────────
+
+def _add_kanban_parser(subparsers) -> None:
+    p = subparsers.add_parser(
+        "kanban",
+        help="Unified task board — show tasks.md for all sessions.",
+        description=(
+            "Display every session's task board in one view.\n\n"
+            "Examples:\n"
+            "  nutshell kanban                      # all sessions\n"
+            "  nutshell kanban --session ID          # single session\n"
+            "  nutshell kanban --json                # JSON for agents\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p.add_argument("--session", metavar="ID", default=None,
+                   help="Show only this session")
+    p.add_argument("--json", action="store_true", dest="as_json",
+                   help="Output as JSON array")
+    p.add_argument("--system-base", type=Path, default=_DEFAULT_SYSTEM_BASE,
+                   help=argparse.SUPPRESS)
+    p.add_argument("--sessions-base", type=Path, default=_DEFAULT_SESSIONS_BASE,
+                   help=argparse.SUPPRESS)
+    p.set_defaults(func=cmd_kanban)
+
+
+def cmd_kanban(args) -> int:
+    from ui.cli.kanban import build_kanban, format_kanban_table, format_kanban_json
+    sessions = _read_all_sessions(
+        sessions_base=args.sessions_base,
+        system_base=args.system_base,
+    )
+    if args.session:
+        sessions = [s for s in sessions if s.get("id") == args.session]
+        if not sessions:
+            print(f"Error: session '{args.session}' not found", file=sys.stderr)
+            return 1
+    entries = build_kanban(sessions, sessions_base=args.sessions_base)
+    if args.as_json:
+        print(format_kanban_json(entries))
+    else:
+        print(format_kanban_table(entries))
+    return 0
+
+
 # ── Subcommand: friends ───────────────────────────────────────────────────────
 
 def _add_friends_parser(subparsers) -> None:
@@ -1076,7 +1123,7 @@ def main() -> None:
             "  nutshell start SESSION_ID           Resume heartbeat\n"
             "  nutshell log [SESSION_ID] [-n N]    Show conversation history\n"
             "  nutshell tasks [SESSION_ID]         Show session task board\n"
-            "  nutshell friends [--json]           IM-style contact list\n\n"
+            "  nutshell friends [--json]           IM-style contact list\n  nutshell kanban                     Unified task board (all sessions)\n  nutshell kanban --session ID        Single session task board\n\n"
             "Entity management:\n"
             "  nutshell entity new                 Scaffold entity interactively\n"
             "  nutshell entity new -n NAME         Scaffold entity by name\n"
@@ -1111,6 +1158,7 @@ def main() -> None:
     _add_token_report_parser(subparsers)
     _add_review_parser(subparsers)
     _add_friends_parser(subparsers)
+    _add_kanban_parser(subparsers)
     _add_repo_skill_parser(subparsers)
     _add_repo_dev_parser(subparsers)
     _add_exec_parser(subparsers, "server", "Start the Nutshell server daemon.")
