@@ -80,6 +80,8 @@
   .msg.error  { background: #2d1515; border-left: 3px solid var(--red); color: var(--red); }
   .msg-label  { font-size: 10px; color: var(--muted); margin-bottom: 4px; }
   .msg-ts { font-size: 10px; color: var(--muted); opacity: 0.5; margin-top: 4px; }
+  .msg-footer { display: flex; align-items: center; gap: 10px; margin-top: 4px; }
+  .msg-usage { font-size: 10px; color: var(--muted); opacity: 0.6; font-family: 'SF Mono', monospace; }
   .msg-inline { display: inline-flex; align-items: center; gap: 8px; }
   .msg-inline-ts { font-size: 10px; color: var(--muted); opacity: 0.75; }
 
@@ -388,6 +390,7 @@
       label = event.triggered_by === 'heartbeat' ? '⏱ agent' : 'agent';
       div.className += event.triggered_by === 'heartbeat' ? ' heartbeat-agent' : '';
       html = renderMarkdown(event.content || '');
+      // token usage is appended after main html render below
     } else if (etype === 'user') {
       label = 'you';
       html = '<p>' + escHtml(event.content || '') + '</p>';
@@ -413,9 +416,27 @@
     const ts = fmtTime(event.ts);
     const tsHtml = ts ? `<div class="msg-ts">${ts}</div>` : '';
 
+    // Token usage footer for agent messages
+    let footerHtml = '';
+    if (etype === 'agent' && event.usage) {
+      const u = event.usage;
+      const parts = [];
+      if (u.input || u.output) parts.push(`↑${u.input || 0} ↓${u.output || 0}`);
+      if (u.cache_read) parts.push(`📦${u.cache_read}`);
+      if (u.cache_write) parts.push(`✏️${u.cache_write}`);
+      if (parts.length) {
+        footerHtml = `<span class="msg-usage">${parts.join(' · ')}</span>`;
+      }
+    }
+    const combinedFooter = (ts || footerHtml)
+      ? `<div class="msg-footer">${ts ? `<span class="msg-ts" style="margin-top:0">${ts}</span>` : ''}${footerHtml}</div>`
+      : '';
+
     if (etype === 'status') {
       const prefix = ts ? `<span class="msg-inline-ts">${ts}</span> ` : '';
       div.innerHTML = `<div class="msg-inline">${prefix}${html}</div>`;
+    } else if (etype === 'agent') {
+      div.innerHTML = `<div class="msg-label">${label}</div>${html}${combinedFooter}`;
     } else if (label) {
       div.innerHTML = `<div class="msg-label">${label}</div>${html}${tsHtml}`;
     } else {

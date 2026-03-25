@@ -1,4 +1,4 @@
-# Nutshell `v1.2.7`
+# Nutshell `v1.2.8`
 
 A minimal Python agent runtime. Agents run as persistent server-managed sessions with autonomous heartbeat ticking, accessible via web browser.
 
@@ -293,6 +293,10 @@ The web UI polls both files via SSE, resuming from the last byte offset on recon
 ---
 
 ## Changelog
+
+### v1.2.8
+- **Web UI token usage display** — agent messages in the web UI now show a token footer: `↑{input} ↓{output}` and `📦{cache_read}` when non-zero. Usage data flows from the `turn` event in `context.jsonl` through `_context_event_to_display()` into the `agent` display event; the frontend renders it in a compact footer below each agent message.
+- 2 new tests in `test_ipc.py`; 152 total.
 
 ### v1.2.7
 - **Token usage tracking** — `AgentResult` now includes a `TokenUsage` field with `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`. Usage is accumulated across all tool-call iterations within a single `agent.run()`. `Session.chat()` and `Session.tick()` write `usage` field to turn events in `context.jsonl` when tokens > 0.

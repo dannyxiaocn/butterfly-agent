@@ -76,6 +76,38 @@ def test_context_event_to_display_expands_turn():
     assert not any(e["type"] == "tool" for e in sse_events2)
 
 
+def test_context_event_to_display_passes_usage_to_agent():
+    """usage field from turn event is forwarded to the agent display event."""
+    turn = {
+        "type": "turn",
+        "triggered_by": "user",
+        "ts": "2026-03-11T12:00:00",
+        "usage": {"input": 150, "output": 42, "cache_read": 100, "cache_write": 0},
+        "messages": [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "hello"},
+        ],
+    }
+    events = _context_event_to_display(turn, for_history=True)
+    agent_events = [e for e in events if e["type"] == "agent"]
+    assert len(agent_events) == 1
+    assert agent_events[0]["usage"] == {"input": 150, "output": 42, "cache_read": 100, "cache_write": 0}
+
+
+def test_context_event_to_display_no_usage_when_absent():
+    """agent display event has no usage key when turn has no usage."""
+    turn = {
+        "type": "turn",
+        "triggered_by": "user",
+        "ts": "2026-03-11T12:00:00",
+        "messages": [{"role": "assistant", "content": "hello"}],
+    }
+    events = _context_event_to_display(turn, for_history=True)
+    agent_events = [e for e in events if e["type"] == "agent"]
+    assert len(agent_events) == 1
+    assert "usage" not in agent_events[0]
+
+
 def test_runtime_event_to_display_passes_through():
     """model_status and other runtime events pass through unchanged."""
     model_status = {"type": "model_status", "state": "running", "source": "user", "ts": "2026-03-11T12:00:01"}
