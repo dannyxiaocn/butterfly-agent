@@ -1,4 +1,4 @@
-# Nutshell `v1.3.20`
+# Nutshell `v1.3.21`
 
 A minimal Python agent runtime. Agents run as persistent server-managed sessions with autonomous heartbeat ticking. **Primary interface: CLI.**
 
@@ -356,6 +356,13 @@ The web UI polls both files via SSE, resuming from the last byte offset on recon
 ---
 
 ## Changelog
+
+### v1.3.21
+- **repo-dev**: `nutshell repo-dev <path>` creates a dedicated dev-agent session for any repo
+- Generates a codebase-overview skill (`<name>-wiki`) and injects it into a new `nutshell_dev` session
+- `--name/-n` overrides project name, `--message/-m` sends an initial task to the agent
+- Session ID format: `repo-dev-<name>-<timestamp>` for easy identification
+- 6 new tests in `test_repo_dev.py`
 
 ### v1.3.20
 - **repo-skill**: `nutshell repo-skill <path>` generates a `SKILL.md` codebase overview from any repo

@@ -5,6 +5,7 @@ Pure filesystem operations, no LLM calls.  Fast and offline.
 from __future__ import annotations
 
 import os
+import subprocess
 from pathlib import Path
 
 # ── Configuration ─────────────────────────────────────────────────────────────
@@ -324,4 +325,64 @@ def cmd_repo_skill(args) -> int:
 
     print(f"Generated: {out_file}")
     print(f"Skill name: {name}-wiki")
+    return 0
+
+
+# ── CLI entry point: repo-dev ─────────────────────────────────────────────────
+
+def cmd_repo_dev(args) -> int:
+    """CLI handler for `nutshell repo-dev`."""
+    import sys
+    from datetime import datetime
+
+    repo_path = Path(args.repo_path).resolve()
+    if not repo_path.is_dir():
+        print(f"Error: not a directory: {repo_path}", file=sys.stderr)
+        return 1
+
+    name = args.name or repo_path.name
+
+    # 1. Generate wiki skill content
+    try:
+        skill_content = generate_repo_skill(repo_path, name=name)
+    except Exception as exc:
+        print(f"Error generating repo skill: {exc}", file=sys.stderr)
+        return 1
+
+    # 2. Find sessions_dir
+    sessions_dir = Path(
+        os.environ.get("NUTSHELL_SESSIONS_DIR", "")
+        or Path(__file__).parent.parent.parent / "sessions"
+    )
+
+    # 3. Generate session_id
+    session_id = f"repo-dev-{name}-{datetime.now():%Y%m%d_%H%M%S}"
+
+    # 4. Create session via `nutshell new`
+    result = subprocess.run(
+        [sys.executable, "-m", "ui.cli.main", "new", session_id, "--entity", "nutshell_dev"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        print(f"Error creating session: {result.stderr.strip()}", file=sys.stderr)
+        return 1
+
+    # 5. Write skill file into the session
+    skill_dir = sessions_dir / session_id / "core" / "skills" / f"{name}-wiki"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "SKILL.md").write_text(skill_content, encoding="utf-8")
+
+    # 6. Optionally send initial message
+    if args.message:
+        subprocess.run(
+            [sys.executable, "-m", "ui.cli.main", "chat", "--session", session_id, args.message],
+        )
+
+    # 7. Print session_id + usage instructions
+    print(f"\n✅ repo-dev session created: {session_id}")
+    print(f"   Skill: {name}-wiki (written to session)")
+    print(f"\n   Usage:")
+    print(f"     nutshell chat --session {session_id} 'your task here'")
+    print(f"     nutshell log {session_id}")
+    print(f"     nutshell tasks {session_id}")
     return 0

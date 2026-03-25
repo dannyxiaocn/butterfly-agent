@@ -990,6 +990,35 @@ def _cmd_repo_skill(args) -> int:
     from ui.cli.repo_skill import cmd_repo_skill
     return cmd_repo_skill(args)
 
+
+# ── Subcommand: repo-dev ──────────────────────────────────────────────────────
+
+def _add_repo_dev_parser(subparsers) -> None:
+    p = subparsers.add_parser(
+        'repo-dev',
+        help='Create a dedicated dev-agent session for any repo.',
+        description=(
+            "Create a dev-agent session pre-loaded with a codebase overview skill.\n\n"
+            "Examples:\n"
+            "  nutshell repo-dev ./my-project\n"
+            "  nutshell repo-dev ~/code/fastapi --name fastapi\n"
+            "  nutshell repo-dev . -m 'add unit tests for the parser module'\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p.add_argument('repo_path', metavar='REPO_PATH', help='Path to the repository')
+    p.add_argument('--name', '-n', metavar='NAME',
+                   help='Project name (default: repo directory name)')
+    p.add_argument('--message', '-m', metavar='MSG',
+                   help='Initial message to send to the dev agent')
+    p.set_defaults(func=_cmd_repo_dev)
+
+
+def _cmd_repo_dev(args) -> int:
+    from ui.cli.repo_skill import cmd_repo_dev
+    return cmd_repo_dev(args)
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -1016,7 +1045,9 @@ def main() -> None:
             "  nutshell token-report [SESSION_ID]  Show per-turn token costs\n\n"
             "Repo skills:\n"
             "  nutshell repo-skill PATH            Generate codebase overview SKILL.md\n"
-            "  nutshell repo-skill PATH -n NAME     Custom skill name\n\n"
+            "  nutshell repo-skill PATH -n NAME     Custom skill name\n"
+            "  nutshell repo-dev PATH               Create dev agent for repo\n"
+            "  nutshell repo-dev PATH -m MSG         … with initial task\n\n"
             "Other:\n"
             "  nutshell review                     Review agent update requests\n"
             "  nutshell server                     Start the server\n"
@@ -1039,6 +1070,7 @@ def main() -> None:
     _add_token_report_parser(subparsers)
     _add_review_parser(subparsers)
     _add_repo_skill_parser(subparsers)
+    _add_repo_dev_parser(subparsers)
     _add_exec_parser(subparsers, "server", "Start the Nutshell server daemon.")
     _add_exec_parser(subparsers, "web",    "Start the web UI at http://localhost:8080 (monitoring).")
     _add_exec_parser(subparsers, "tui",    "Start the terminal UI (TUI) — sessions, chat, tasks.")
