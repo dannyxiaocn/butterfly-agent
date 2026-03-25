@@ -1,4 +1,4 @@
-# Nutshell `v1.3.27`
+# Nutshell `v1.3.28`
 
 A minimal Python agent runtime. Agents run as persistent server-managed sessions with autonomous heartbeat ticking. **Primary interface: CLI.**
 
@@ -286,6 +286,38 @@ Entity template:  entity/<name>/memory.md              ← seeds new sessions
 
 ---
 
+### Using OpenAI Provider
+
+Nutshell supports OpenAI GPT models (including via **openai-codex** OAuth tokens).
+
+```bash
+# Set your API key (or openai-codex OAuth token)
+export OPENAI_API_KEY=<your_key_or_oauth_token>
+
+# Optional: custom base URL
+export OPENAI_BASE_URL=https://api.openai.com/v1
+```
+
+**Per-session** — set in `core/params.json`:
+
+```json
+{
+  "provider": "openai",
+  "model": "gpt-5.4"
+}
+```
+
+**Per-entity** — set in `agent.yaml`:
+
+```yaml
+provider: openai
+model: gpt-5.4
+```
+
+Features: streaming (`on_text_chunk`), function calling (tools), token usage tracking (including cached prompt tokens).
+
+---
+
 ## Project Structure
 
 ```
@@ -308,7 +340,8 @@ nutshell/              ← Python library
 ├── llm_engine/
 │   ├── providers/
 │   │   ├── anthropic.py   # AnthropicProvider (streaming, thinking, cache)
-│   │   └── kimi.py        # KimiForCodingProvider
+│   │   ├── kimi.py        # KimiForCodingProvider
+│   │   └── openai_provider.py  # OpenAIProvider (GPT models)
 │   ├── registry.py
 │   └── loader.py      # AgentLoader — entity/ dir → Agent (handles extends chain)
 ├── skill_engine/
@@ -365,6 +398,14 @@ The web UI polls both files via SSE, resuming from the last byte offset on recon
 ---
 
 ## Changelog
+
+### v1.3.28
+- **OpenAI provider** — new `OpenAIProvider` in `nutshell/llm_engine/providers/openai_provider.py`; supports GPT models via the official `openai` Python SDK
+- Works with standard API keys and **openai-codex OAuth tokens** (`OPENAI_API_KEY` env var)
+- Full feature parity: streaming text chunks, function calling (tools), token usage tracking (with cached-token support)
+- Registered in `llm_engine/registry.py` as `"openai"` — switch via `params.json` (`provider: openai`, `model: gpt-5.4`)
+- 20 new tests in `test_openai_provider.py`; 423 total
+
 
 ### v1.3.27
 - **persistent agent** — new `persistent` and `default_task` fields in `params.json`; when `persistent=true` and tasks are empty, tick() fires using `default_task` (or a built-in fallback) with `triggered_by='heartbeat_default'`
