@@ -566,6 +566,8 @@ class NutshellTUI(App):
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def main() -> None:
+    from nutshell.runtime.env import load_dotenv
+    load_dotenv()
     parser = argparse.ArgumentParser(description="Nutshell TUI")
     parser.add_argument("--sessions-dir",        default=str(SESSIONS_DIR),         metavar="DIR")
     parser.add_argument("--system-sessions-dir", default=str(_SYSTEM_SESSIONS_DIR), metavar="DIR")

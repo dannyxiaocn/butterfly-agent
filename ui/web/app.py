@@ -166,6 +166,8 @@ def create_app(sessions_dir: Path, system_sessions_dir: Path | None = None) -> F
 
 
 def main() -> None:
+    from nutshell.runtime.env import load_dotenv
+    load_dotenv()
     parser = argparse.ArgumentParser(description="Nutshell Web UI")
     parser.add_argument("--port", type=int, default=_DEFAULT_PORT)
     parser.add_argument("--host", default="0.0.0.0")

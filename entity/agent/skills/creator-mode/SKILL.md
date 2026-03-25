@@ -216,6 +216,47 @@ build/edit → reload_capabilities → test → fix → reload_capabilities → 
 
 Each reload replaces the previous version in memory. No penalty for iteration.
 
+**Testing a tool:**
+```bash
+# Directly invoke the .sh to confirm it works before the LLM calls it
+echo '{"arg1": "value"}' | bash sessions/YOUR_ID/core/tools/my_tool.sh
+```
+
+**Testing a skill:** Create a scratch note, call `reload_capabilities`, then explicitly invoke the skill in a follow-up message. If the skill is not triggering, make the `description` field longer and more specific — include the exact phrases/contexts where it applies.
+
+---
+
+## Proposing permanent improvements
+
+Session tools/skills are local to this session. To make an improvement available in **all future sessions**, use `propose_entity_update`:
+
+```
+propose_entity_update(
+    file_path="entity/agent/skills/creator-mode/SKILL.md",
+    content="<full new content>",
+    reason="Added X because Y",
+)
+```
+
+A human can review and apply the request via `nutshell-review-updates`. Only use this when the improvement is genuinely general-purpose, not session-specific.
+
+---
+
+## Built-in tools reference
+
+System tools loaded by default (always available, no .json needed in core/tools/):
+
+| Tool | Purpose |
+|------|---------|
+| `bash` | Execute shell commands |
+| `web_search` | Search the web via Brave/Tavily |
+| `fetch_url` | Fetch a URL and return plain text |
+| `send_to_session` | Send a message to another session |
+| `spawn_session` | Create a new sub-session from an entity |
+| `recall_memory` | Search memory.md + memory/*.md for a keyword |
+| `propose_entity_update` | Submit a permanent improvement request |
+| `reload_capabilities` | Hot-reload tools + skills from core/ |
+
 ---
 
 ## Gotchas
@@ -223,3 +264,4 @@ Each reload replaces the previous version in memory. No penalty for iteration.
 - `reload_capabilities` cannot be overridden — always injected last; any disk tool with that name is filtered out.
 - A session tool with the same name as an entity tool overrides it — use this to patch a built-in for this session.
 - Background processes are not managed by the session — store the PID in the playground if you need to stop them.
+- **Skill descriptions must be specific.** Vague descriptions cause under-triggering. Include exact user phrases and task types.
