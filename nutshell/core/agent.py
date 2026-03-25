@@ -84,6 +84,26 @@ class Agent(BaseAgent):
             self._provider = AnthropicProvider()
         return self._provider
 
+    # Memory layers longer than this many lines are truncated in the prompt.
+    # The agent reads the full layer on demand via bash: cat core/memory/<name>.md
+    _MEMORY_LAYER_INLINE_LINES: int = 60
+
+    @classmethod
+    def _render_memory_layer(cls, name: str, content: str) -> str:
+        """Render a named memory layer, truncating large ones for prompt efficiency.
+
+        Layers up to _MEMORY_LAYER_INLINE_LINES are injected verbatim.
+        Larger layers show the first N lines and a bash hint for the rest —
+        the same progressive-disclosure approach used for file-backed skills.
+        """
+        lines = content.split("\n")
+        if len(lines) <= cls._MEMORY_LAYER_INLINE_LINES:
+            return f"## Memory: {name}\n\n{content}"
+        head = "\n".join(lines[: cls._MEMORY_LAYER_INLINE_LINES])
+        omitted = len(lines) - cls._MEMORY_LAYER_INLINE_LINES
+        hint = f"... ({omitted} lines omitted — full content: `cat core/memory/{name}.md`)"
+        return f"## Memory: {name}\n\n{head}\n{hint}"
+
     def _build_system_parts(self) -> tuple[str, str]:
         """Return (static_prefix, dynamic_suffix) for cache-aware prompt building.
 
@@ -102,7 +122,7 @@ class Agent(BaseAgent):
             if self.memory:
                 memory_parts.append(f"## Session Memory\n\n{self.memory}")
             for name, content in self.memory_layers:
-                memory_parts.append(f"## Memory: {name}\n\n{content}")
+                memory_parts.append(self._render_memory_layer(name, content))
             dynamic_parts.append("\n\n---\n" + "\n\n".join(memory_parts))
         skills_block = build_skills_block(self.skills)
         if skills_block:

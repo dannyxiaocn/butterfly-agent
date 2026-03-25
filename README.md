@@ -1,4 +1,4 @@
-# Nutshell `v1.3.9`
+# Nutshell `v1.3.10`
 
 A minimal Python agent runtime. Agents run as persistent server-managed sessions with autonomous heartbeat ticking. **Primary interface: CLI.**
 
@@ -334,6 +334,12 @@ The web UI polls both files via SSE, resuming from the last byte offset on recon
 ---
 
 ## Changelog
+
+### v1.3.10
+- **Memory layer progressive disclosure**: Large named memory layers (`core/memory/*.md`) are now truncated in the system prompt using the same approach as file-backed skills. Layers within 60 lines are injected verbatim; larger layers show the first 60 lines plus a bash hint (`cat core/memory/<name>.md`) so the agent reads the rest on demand. Primary `memory.md` is unaffected.
+- `Agent._MEMORY_LAYER_INLINE_LINES = 60` — tunable class-level threshold.
+- `Agent._render_memory_layer(name, content)` — new classmethod for rendering.
+- 5 new tests in `test_session_capabilities.py`; 207 total.
 
 ### v1.3.9
 - **CLI/web parity — no more competing daemons**: `nutshell server` (watcher) now checks `pid_alive` before starting a session daemon. If a daemon is already running (e.g. started by `nutshell chat`), the watcher skips that session. Once the CLI daemon exits, the watcher picks it up on the next scan — seamless handoff.

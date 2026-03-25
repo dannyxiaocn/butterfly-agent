@@ -492,3 +492,56 @@ async def test_heartbeat_compact_marker_recognized_by_reshape_history(tmp_path):
     result = session._reshape_history("new user message")
     assert result == "new user message"
     assert len(agent._history) == 0  # orphan dropped
+
+
+# ── memory layer truncation (_render_memory_layer) ────────────────────────────
+
+def test_render_memory_layer_short_inline():
+    """Layers within the inline limit are injected verbatim."""
+    content = "\n".join(f"line {i}" for i in range(10))
+    result = Agent._render_memory_layer("notes", content)
+    assert result.startswith("## Memory: notes")
+    assert "line 9" in result
+    assert "omitted" not in result
+
+
+def test_render_memory_layer_long_truncated():
+    """Layers exceeding the inline limit show head + truncation hint."""
+    lines = [f"line {i}" for i in range(Agent._MEMORY_LAYER_INLINE_LINES + 20)]
+    content = "\n".join(lines)
+    result = Agent._render_memory_layer("bigfile", content)
+    assert "## Memory: bigfile" in result
+    # First lines present
+    assert "line 0" in result
+    # Lines beyond limit absent
+    assert f"line {Agent._MEMORY_LAYER_INLINE_LINES + 5}" not in result
+    # Truncation hint with count and bash path present
+    assert "omitted" in result
+    assert "cat core/memory/bigfile.md" in result
+
+
+def test_render_memory_layer_exactly_at_limit():
+    """Layers exactly at the limit are NOT truncated."""
+    content = "\n".join(f"x" for _ in range(Agent._MEMORY_LAYER_INLINE_LINES))
+    result = Agent._render_memory_layer("exact", content)
+    assert "omitted" not in result
+
+
+def test_build_system_parts_large_layer_truncated():
+    """_build_system_parts truncates large memory layers in the dynamic suffix."""
+    agent = Agent(system_prompt="sys", provider=None)
+    big_content = "\n".join(f"row {i}" for i in range(Agent._MEMORY_LAYER_INLINE_LINES + 50))
+    agent.memory_layers = [("big", big_content)]
+    _, suffix = agent._build_system_parts()
+    assert "omitted" in suffix
+    assert "cat core/memory/big.md" in suffix
+
+
+def test_build_system_parts_small_layer_not_truncated():
+    """_build_system_parts does NOT truncate small memory layers."""
+    agent = Agent(system_prompt="sys", provider=None)
+    small_content = "\n".join(f"row {i}" for i in range(5))
+    agent.memory_layers = [("small", small_content)]
+    _, suffix = agent._build_system_parts()
+    assert "omitted" not in suffix
+    assert "row 4" in suffix
