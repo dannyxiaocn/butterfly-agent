@@ -20,6 +20,7 @@ class Provider(ABC):
         *,
         on_text_chunk: Callable[[str], None] | None = None,
         cache_system_prefix: str = "",
+        cache_last_human_turn: bool = False,
     ) -> tuple[str, list["ToolCall"]]:
         """Send messages to the LLM and return (content, tool_calls).
 

@@ -35,8 +35,12 @@ class AnthropicProvider(Provider):
         *,
         on_text_chunk: Callable[[str], None] | None = None,
         cache_system_prefix: str = "",
+        cache_last_human_turn: bool = False,
     ) -> tuple[str, list[ToolCall]]:
-        api_messages = _to_api_messages(messages)
+        cache_idx = _find_cache_breakpoint(messages) if (
+            cache_last_human_turn and self._supports_cache_control
+        ) else None
+        api_messages = _to_api_messages(messages, cache_breakpoint_index=cache_idx)
         api_tools = [t.to_api_dict() for t in tools] if tools else []
 
         kwargs: dict[str, Any] = {
@@ -126,11 +130,41 @@ def _build_system_param(
     return blocks
 
 
-def _to_api_messages(messages: list[Message]) -> list[dict]:
+def _find_cache_breakpoint(messages: list[Message]) -> int | None:
+    """Return the index of the last user/human message before the final message.
+
+    This is where we place the cache breakpoint so Anthropic caches all
+    conversation history up to (and including) that message on the next call.
+
+    Returns None if there are fewer than 2 messages or no suitable breakpoint.
+    """
+    if len(messages) < 2:
+        return None
+    # Walk backwards from second-to-last message, find last non-tool role
+    for i in range(len(messages) - 2, -1, -1):
+        if messages[i].role in ("user", "assistant"):
+            return i
+    return None
+
+
+def _to_api_messages(
+    messages: list[Message],
+    cache_breakpoint_index: int | None = None,
+) -> list[dict]:
     result = []
-    for msg in messages:
-        if msg.role == "tool":
-            result.append({"role": "user", "content": msg.content})
-        else:
-            result.append({"role": msg.role, "content": msg.content})
+    for i, msg in enumerate(messages):
+        role = "user" if msg.role == "tool" else msg.role
+        content = msg.content
+
+        # Add cache_control at the specified breakpoint
+        if i == cache_breakpoint_index:
+            if isinstance(content, str):
+                content = [{"type": "text", "text": content, "cache_control": {"type": "ephemeral"}}]
+            elif isinstance(content, list) and content:
+                # Mutate last block in the list to add cache_control
+                last = dict(content[-1])
+                last["cache_control"] = {"type": "ephemeral"}
+                content = [*content[:-1], last]
+
+        result.append({"role": role, "content": content})
     return result

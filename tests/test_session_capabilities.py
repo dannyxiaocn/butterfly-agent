@@ -21,7 +21,7 @@ class MockProvider(Provider):
     def __init__(self, responses):
         self._responses = iter(responses)
 
-    async def complete(self, messages, tools, system_prompt, model, *, on_text_chunk=None, cache_system_prefix=""):
+    async def complete(self, messages, tools, system_prompt, model, *, on_text_chunk=None, cache_system_prefix="", cache_last_human_turn=False):
         return next(self._responses)
 
 

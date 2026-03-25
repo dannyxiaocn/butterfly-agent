@@ -141,6 +141,11 @@ class Agent(BaseAgent):
         messages: list[Message] = [*self._history, Message(role="user", content=input)]
         all_tool_calls: list[ToolCall] = []
 
+        # Cache history when provider supports it and we have prior turns
+        _cache_history = bool(self._history) and getattr(
+            self.provider, "_supports_cache_control", False
+        )
+
         for _ in range(self.max_iterations):
             content, tool_calls = await self.provider.complete(
                 messages=messages,
@@ -149,6 +154,7 @@ class Agent(BaseAgent):
                 model=self.model,
                 on_text_chunk=on_text_chunk,
                 cache_system_prefix=system_prefix,
+                cache_last_human_turn=_cache_history,
             )
             # Only stream the first completion; subsequent rounds (tool loops)
             # don't stream since the user only cares about the final text.

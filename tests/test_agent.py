@@ -14,7 +14,7 @@ class MockProvider(Provider):
         # responses: list of (content, tool_calls) tuples
         self._responses = iter(responses)
 
-    async def complete(self, messages, tools, system_prompt, model, *, on_text_chunk=None, cache_system_prefix=""):
+    async def complete(self, messages, tools, system_prompt, model, *, on_text_chunk=None, cache_system_prefix="", cache_last_human_turn=False):
         return next(self._responses)
 
 
@@ -91,7 +91,7 @@ async def test_inline_skill_injected_into_system_prompt():
     captured = {}
 
     class CapturingProvider(Provider):
-        async def complete(self, messages, tools, system_prompt, model, *, on_text_chunk=None, cache_system_prefix=""):
+        async def complete(self, messages, tools, system_prompt, model, *, on_text_chunk=None, cache_system_prefix="", cache_last_human_turn=False):
             captured["system_prompt"] = system_prompt
             return ("ok", [])
 
@@ -119,7 +119,7 @@ async def test_file_skill_uses_catalog_in_system_prompt(tmp_path):
     captured = {}
 
     class CapturingProvider(Provider):
-        async def complete(self, messages, tools, system_prompt, model, *, on_text_chunk=None, cache_system_prefix=""):
+        async def complete(self, messages, tools, system_prompt, model, *, on_text_chunk=None, cache_system_prefix="", cache_last_human_turn=False):
             captured["system_prompt"] = system_prompt
             return ("ok", [])
 

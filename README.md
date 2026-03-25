@@ -1,4 +1,4 @@
-# Nutshell `v1.2.3`
+# Nutshell `v1.2.4`
 
 A minimal Python agent runtime. Agents run as persistent server-managed sessions with autonomous heartbeat ticking, accessible via web browser.
 
@@ -293,6 +293,14 @@ The web UI polls both files via SSE, resuming from the last byte offset on recon
 ---
 
 ## Changelog
+
+### v1.2.4
+- **Conversation history caching** — `AnthropicProvider` now adds `cache_control: ephemeral` to the last historical message in each API call. For long sessions (many turns), all prior conversation is served from cache on subsequent activations, significantly reducing token costs.
+- **`cache_last_human_turn` param** — added to `Provider.complete()` ABC and `AnthropicProvider`/`KimiProvider`. Kimi correctly ignores cache_control (no-op).
+- **`multi-agent` skill** — documents `spawn_session` + `send_to_session` coordination patterns: delegate-and-wait, fire-and-forget, worker pool, coordinator/receptionist.
+- **`model-selection` skill** — teaches agents when to switch to Haiku (fast/cheap) vs Opus (complex reasoning) via `params.json`, with decision guide and provider switching.
+- **`nutshell_dev` skill updated** — reflects v1.2.x package layout, correct paths, 143 tests, all new built-in tools.
+- 8 new tests in `test_prompt_cache.py`; 143 total.
 
 ### v1.2.3
 - **`fetch_url` tool** — fetches any URL and returns plain text (HTML stripped). stdlib-only, no extra dependencies. Pairs with `web_search`: search first, then fetch the best result.

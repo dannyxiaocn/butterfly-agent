@@ -14,7 +14,7 @@ class MockProvider(Provider):
     def __init__(self, responses):
         self._responses = iter(responses)
 
-    async def complete(self, messages, tools, system_prompt, model, *, on_text_chunk=None, cache_system_prefix=""):
+    async def complete(self, messages, tools, system_prompt, model, *, on_text_chunk=None, cache_system_prefix="", cache_last_human_turn=False):
         return next(self._responses)
 
 
@@ -129,7 +129,7 @@ async def test_session_chat_writes_turn_to_context_and_status_to_events(tmp_path
 async def test_session_chat_writes_idle_on_cancellation(tmp_path):
     """On cancellation, model_status(idle) is written to events.jsonl; context.jsonl is empty."""
     class CancellingProvider(Provider):
-        async def complete(self, messages, tools, system_prompt, model, *, on_text_chunk=None, cache_system_prefix=""):
+        async def complete(self, messages, tools, system_prompt, model, *, on_text_chunk=None, cache_system_prefix="", cache_last_human_turn=False):
             raise asyncio.CancelledError()
 
     agent = Agent(provider=CancellingProvider())
