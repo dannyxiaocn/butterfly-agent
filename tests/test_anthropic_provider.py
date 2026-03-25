@@ -56,7 +56,7 @@ async def test_complete_streams_thinking_and_text_chunks_in_order():
     )
 
     chunks: list[str] = []
-    content, tool_calls = await provider.complete(
+    content, tool_calls, usage = await provider.complete(
         messages=[Message(role="user", content="hi")],
         tools=[],
         system_prompt="system",
@@ -93,7 +93,7 @@ async def test_complete_falls_back_to_final_thinking_block_when_stream_has_no_th
     )
 
     chunks: list[str] = []
-    content, tool_calls = await provider.complete(
+    content, tool_calls, usage = await provider.complete(
         messages=[Message(role="user", content="hi")],
         tools=[],
         system_prompt="system",
@@ -123,7 +123,7 @@ async def test_complete_collects_tool_calls_from_final_message():
         )
     )
 
-    content, tool_calls = await provider.complete(
+    content, tool_calls, usage = await provider.complete(
         messages=[Message(role="user", content="hi")],
         tools=[],
         system_prompt="system",

@@ -2,7 +2,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Callable, ClassVar
 
 from nutshell.core.provider import Provider
-from nutshell.core.types import Message, ToolCall
+from nutshell.core.types import Message, TokenUsage, ToolCall
 
 if TYPE_CHECKING:
     from nutshell.core.tool import Tool
@@ -36,7 +36,7 @@ class AnthropicProvider(Provider):
         on_text_chunk: Callable[[str], None] | None = None,
         cache_system_prefix: str = "",
         cache_last_human_turn: bool = False,
-    ) -> tuple[str, list[ToolCall]]:
+    ) -> tuple[str, list[ToolCall], TokenUsage]:
         cache_idx = _find_cache_breakpoint(messages) if (
             cache_last_human_turn and self._supports_cache_control
         ) else None
@@ -75,7 +75,8 @@ class AnthropicProvider(Provider):
             elif block.type == "tool_use":
                 tool_calls.append(ToolCall(id=block.id, name=block.name, input=block.input))
 
-        return content_text, tool_calls
+        usage = _extract_usage(response)
+        return content_text, tool_calls, usage
 
 
 def _forward_stream_event(event: Any, on_text_chunk: Callable[[str], None]) -> bool:
@@ -95,6 +96,19 @@ def _forward_stream_event(event: Any, on_text_chunk: Callable[[str], None]) -> b
             on_text_chunk(thinking)
             return True
     return False
+
+
+def _extract_usage(response: Any) -> TokenUsage:
+    """Extract token usage from an Anthropic API response."""
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        return TokenUsage()
+    return TokenUsage(
+        input_tokens=getattr(usage, "input_tokens", 0) or 0,
+        output_tokens=getattr(usage, "output_tokens", 0) or 0,
+        cache_read_tokens=getattr(usage, "cache_read_input_tokens", 0) or 0,
+        cache_write_tokens=getattr(usage, "cache_creation_input_tokens", 0) or 0,
+    )
 
 
 def _extract_thinking_text(block: Any) -> str:

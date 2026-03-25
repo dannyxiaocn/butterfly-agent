@@ -1,4 +1,4 @@
-# Nutshell `v1.2.6`
+# Nutshell `v1.2.7`
 
 A minimal Python agent runtime. Agents run as persistent server-managed sessions with autonomous heartbeat ticking, accessible via web browser.
 
@@ -293,6 +293,12 @@ The web UI polls both files via SSE, resuming from the last byte offset on recon
 ---
 
 ## Changelog
+
+### v1.2.7
+- **Token usage tracking** — `AgentResult` now includes a `TokenUsage` field with `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`. Usage is accumulated across all tool-call iterations within a single `agent.run()`. `Session.chat()` and `Session.tick()` write `usage` field to turn events in `context.jsonl` when tokens > 0.
+- `AnthropicProvider.complete()` now returns `(content, tool_calls, TokenUsage)` — third value contains Anthropic token counts including cache hit/miss stats.
+- `Provider` ABC updated to return 3-tuple; `KimiProvider` inherits correctly.
+- 4 new tests; 150 total.
 
 ### v1.2.6
 - **Fix: all built-in tools now available in sessions** — `entity/agent/agent.yaml` previously only listed `bash` and `web_search`. The other 5 built-in tools (`send_to_session`, `spawn_session`, `propose_entity_update`, `fetch_url`, `recall_memory`) were present as `.json` files but omitted from agent.yaml, so they were never copied to `core/tools/` during session init. Sessions had no access to these tools. All tools now listed in agent.yaml.

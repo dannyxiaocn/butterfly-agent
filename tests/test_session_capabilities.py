@@ -22,7 +22,9 @@ class MockProvider(Provider):
         self._responses = iter(responses)
 
     async def complete(self, messages, tools, system_prompt, model, *, on_text_chunk=None, cache_system_prefix="", cache_last_human_turn=False):
-        return next(self._responses)
+        from nutshell.core.types import TokenUsage
+        r = next(self._responses)
+        return (r[0], r[1], r[2] if len(r) > 2 else TokenUsage())
 
 
 def make_session(tmp_path: Path, agent: Agent, session_id: str = "test") -> Session:

@@ -15,7 +15,9 @@ class MockProvider(Provider):
         self._responses = iter(responses)
 
     async def complete(self, messages, tools, system_prompt, model, *, on_text_chunk=None, cache_system_prefix="", cache_last_human_turn=False):
-        return next(self._responses)
+        from nutshell.core.types import TokenUsage
+        r = next(self._responses)
+        return (r[0], r[1], r[2] if len(r) > 2 else TokenUsage())
 
 
 @pytest.mark.asyncio
@@ -93,7 +95,7 @@ async def test_inline_skill_injected_into_system_prompt():
     class CapturingProvider(Provider):
         async def complete(self, messages, tools, system_prompt, model, *, on_text_chunk=None, cache_system_prefix="", cache_last_human_turn=False):
             captured["system_prompt"] = system_prompt
-            return ("ok", [])
+            return ("ok", [], __import__("nutshell.core.types", fromlist=["TokenUsage"]).TokenUsage())
 
     agent = Agent(
         system_prompt="Base prompt.",
@@ -121,7 +123,7 @@ async def test_file_skill_uses_catalog_in_system_prompt(tmp_path):
     class CapturingProvider(Provider):
         async def complete(self, messages, tools, system_prompt, model, *, on_text_chunk=None, cache_system_prefix="", cache_last_human_turn=False):
             captured["system_prompt"] = system_prompt
-            return ("ok", [])
+            return ("ok", [], __import__("nutshell.core.types", fromlist=["TokenUsage"]).TokenUsage())
 
     agent = Agent(
         system_prompt="Base prompt.",
