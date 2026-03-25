@@ -2,21 +2,10 @@
 from __future__ import annotations
 
 import json
-import os
 from datetime import datetime
 from pathlib import Path
 
-from nutshell.runtime.status import read_session_status
-
-
-def _pid_alive(pid: int | None) -> bool:
-    if not pid:
-        return False
-    try:
-        os.kill(int(pid), 0)
-        return True
-    except (ProcessLookupError, PermissionError, ValueError, OSError):
-        return False
+from nutshell.runtime.status import read_session_status, pid_alive as _pid_alive
 
 
 def _read_session_info(session_dir: Path, system_dir: Path) -> dict | None:

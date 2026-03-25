@@ -1,4 +1,4 @@
-# Nutshell `v1.3.8`
+# Nutshell `v1.3.9`
 
 A minimal Python agent runtime. Agents run as persistent server-managed sessions with autonomous heartbeat ticking. **Primary interface: CLI.**
 
@@ -334,6 +334,11 @@ The web UI polls both files via SSE, resuming from the last byte offset on recon
 ---
 
 ## Changelog
+
+### v1.3.9
+- **CLI/web parity — no more competing daemons**: `nutshell server` (watcher) now checks `pid_alive` before starting a session daemon. If a daemon is already running (e.g. started by `nutshell chat`), the watcher skips that session. Once the CLI daemon exits, the watcher picks it up on the next scan — seamless handoff.
+- `pid_alive()` moved from `ui/web/sessions.py` to `nutshell/runtime/status.py` for shared use by watcher and web.
+- 7 new tests in `test_watcher.py`; 202 total.
 
 ### v1.3.8
 - **`--inject-memory KEY=VALUE / KEY=@FILE`** — `nutshell chat` and `nutshell new` accept one or more `--inject-memory` flags that write named memory layers (`core/memory/<KEY>.md`) before the first agent turn. Supports inline values (`key=hello`) and file references (`track=@track.md`). Enables dynamic context injection (e.g. live task list) when spawning agents from scripts.

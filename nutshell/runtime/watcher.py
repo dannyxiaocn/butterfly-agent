@@ -99,8 +99,15 @@ class SessionWatcher:
             except (json.JSONDecodeError, OSError):
                 continue
 
-            from nutshell.runtime.status import read_session_status, write_session_status
+            from nutshell.runtime.status import read_session_status, write_session_status, pid_alive
             status_data = read_session_status(system_dir)
+
+            # Skip sessions whose daemon is already running (e.g. started by
+            # `nutshell chat`). Without this check, the watcher would start a
+            # competing daemon that races for the same events.jsonl queue.
+            if pid_alive(status_data.get("pid")):
+                continue
+
             if status_data.get("status") == "stopped":
                 # Auto-expire sessions stopped for more than _AUTO_EXPIRE_HOURS
                 stopped_at_str = status_data.get("stopped_at")
