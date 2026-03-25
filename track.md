@@ -145,7 +145,7 @@ agent 自己就可以使用，自己就可以迭代
 ## Harness — 给 Agent 反馈，让 Agent 可以自我进化
 
 - [x] 环境与反馈系统 <!-- a26e603 v1.3.18 -->
-- [ ] 约束系统 — sandbox 等
+- [x] 约束系统 — sandbox 等 <!-- 272c76b v1.3.19 -->
 - [x] 计算 token 数，让模型根据这个找到更短的路径 *(token 追踪已完成 <!-- 8c4b494 v1.2.7 -->；`nutshell token-report` 可视化 token 经济学)* <!-- 2888655 v1.3.17 -->
 
 ---
