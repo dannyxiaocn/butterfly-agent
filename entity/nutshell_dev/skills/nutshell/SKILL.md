@@ -7,7 +7,7 @@ description: "Full development context for the nutshell project. Use this skill 
 
 Complete workbench for developing nutshell.
 
-Current version: **v1.2.3** | Tests: `pytest tests/ -q` (135 passing)
+Current version: **v1.2.6** | Tests: `pytest tests/ -q` (146 passing)
 
 ---
 
@@ -33,8 +33,9 @@ Then:
 1. Implement `nutshell/tool_engine/providers/<name>.py` — expose `async <name>(**kwargs) -> str`
 2. Register in `_BUILTIN_FACTORIES` in `nutshell/tool_engine/registry.py`
 3. Add `entity/agent/tools/<name>.json` (JSON schema)
-4. Write `tests/test_<name>.py`
-5. Run full SOP
+4. **Add `- tools/<name>.json` to `entity/agent/agent.yaml` tools list** ← CRITICAL: omitting this means sessions never get the tool
+5. Write `tests/test_<name>.py`
+6. Run full SOP
 
 **Registry pattern:**
 ```python
@@ -49,7 +50,7 @@ _BUILTIN_FACTORIES: dict[str, Callable[[], Tool]] = {
 
 1. Implement `nutshell/llm_engine/providers/<name>.py` extending `Provider`
 2. Register in `nutshell/llm_engine/registry.py` `_PROVIDERS` dict
-3. `complete()` must accept `on_text_chunk=None`, `cache_system_prefix=""` kwargs
+3. `complete()` must accept `on_text_chunk=None`, `cache_system_prefix=""`, `cache_last_human_turn=False` kwargs
 
 ### 4. Adding a New Entity
 
@@ -201,5 +202,4 @@ Test files:
 |------|-------|----------|
 | `tool_engine/providers/web_search/brave.py` + `tavily.py` | `_SCHEMA` dict identical in both | LOW |
 | `runtime/watcher.py` | Polls `_sessions/` every second; no inotify | LOW |
-| `session.py:_reshape_history()` | Detects heartbeat by hardcoded string | LOW |
 | `entity/nutshell_dev/agent.yaml` | References `session_context` prompt key (legacy) | LOW |
