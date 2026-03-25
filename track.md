@@ -43,7 +43,7 @@
     - [x] entity layered memory 目录支持（entity/memory/ → session/core/memory/） <!-- be6f2cc v1.3.6 -->
     - [ ] track.md 未完成任务列表动态注入 memory（目前是静态 track_sop.md，需考虑运行时更新）
 - [ ] nutshell_dev 能自动在完成后标记 track.md + commit
-- [ ] [bug] nutshell chat --entity nutshell_dev 默认 timeout 120s 太短，复杂任务会超时但 agent 仍在工作 → 考虑增大默认 timeout 或支持 --timeout 参数透传
+- [x] [bug] nutshell chat --entity nutshell_dev 默认 timeout 120s 太短，复杂任务会超时但 agent 仍在工作 → 考虑增大默认 timeout 或支持 --timeout 参数透传 <!-- 95329bd v1.3.7 -->
 
 ---
 
