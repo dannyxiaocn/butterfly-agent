@@ -1,4 +1,4 @@
-# Nutshell `v1.3.0`
+# Nutshell `v1.3.1`
 
 A minimal Python agent runtime. Agents run as persistent server-managed sessions with autonomous heartbeat ticking, accessible via web browser.
 
@@ -10,6 +10,7 @@ A minimal Python agent runtime. Agents run as persistent server-managed sessions
 nutshell-server    ← always-on process (manages all sessions)
 nutshell-web       ← web UI at http://localhost:8080
 nutshell-tui       ← terminal UI (Textual, no web server needed)
+nutshell           ← unified CLI (session + entity management)
 ```
 
 Everything is files. The server and UI communicate only through files on disk — no sockets, no shared memory. You can kill the UI, restart the server, and sessions resume exactly where they left off.
@@ -293,6 +294,11 @@ The web UI polls both files via SSE, resuming from the last byte offset on recon
 ---
 
 ## Changelog
+
+### v1.3.1
+- **Unified `nutshell` CLI** — single entry point for all runtime operations. Subcommands: `chat`, `sessions`, `new`, `stop`, `start`, `entity new`, `review`, `server`, `web`, `tui`. Session management (`sessions`, `new`, `stop`, `start`) works without a running server by reading/writing `_sessions/` directly. `sessions --json` outputs machine-readable JSON for agent consumption.
+- `ui/dui/new_agent.py` moved to `ui/cli/new_agent.py`; `ui.dui` kept as compatibility shim.
+- 14 new tests in `test_cli_main.py`; 168 total.
 
 ### v1.3.0
 - **Bash + shell tools default to session directory** — agents can now use short relative paths (`cat core/tasks.md`, `ls playground/`) instead of full `sessions/<id>/...` paths. `ToolLoader` accepts `default_workdir`; `Session._load_session_capabilities()` passes `str(self.session_dir)`. Both `BashExecutor` and `ShellExecutor` respect it; per-call `workdir=...` override still works. `session.md` updated with note.

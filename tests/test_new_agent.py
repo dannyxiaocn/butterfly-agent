@@ -1,6 +1,6 @@
 import pytest
 
-from ui.dui.new_agent import create_entity
+from ui.cli.new_agent import create_entity
 
 
 def test_create_entity_with_missing_parent_fails_fast(tmp_path):
