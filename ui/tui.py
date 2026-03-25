@@ -395,6 +395,15 @@ class NutshellTUI(App):
                     log.write(Markdown(content))
                 except Exception:
                     log.write(content)
+            usage = event.get("usage")
+            if usage:
+                parts = []
+                if usage.get("input") or usage.get("output"):
+                    parts.append(f"↑{usage.get('input', 0)} ↓{usage.get('output', 0)}")
+                if usage.get("cache_read"):
+                    parts.append(f"📦{usage['cache_read']}")
+                if parts:
+                    log.write(f"[bright_black]  {' · '.join(parts)}[/bright_black]")
             self._set_thinking(False)
 
         elif etype == "tool":
