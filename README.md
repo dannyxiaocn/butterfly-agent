@@ -1,4 +1,4 @@
-# Nutshell `v1.3.22`
+# Nutshell `v1.3.23`
 
 A minimal Python agent runtime. Agents run as persistent server-managed sessions with autonomous heartbeat ticking. **Primary interface: CLI.**
 
@@ -359,6 +359,10 @@ The web UI polls both files via SSE, resuming from the last byte offset on recon
 ---
 
 ## Changelog
+
+### v1.3.23
+- **fix: partial_text flush** — `_make_text_chunk_callback()` now exposes a `.flush()` method; `chat()` and `tick()` call it in a `finally` block so the last <150-char buffered segment is always emitted as a `partial_text` event (previously silently dropped)
+- 7 new tests in `test_text_chunk_flush.py`; 327 total
 
 ### v1.3.22
 - **friends**: `nutshell friends` — IM-style session list with online/idle/offline status indicators (●/◐/○)

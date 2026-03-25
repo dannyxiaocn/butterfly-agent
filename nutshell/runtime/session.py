@@ -248,17 +248,20 @@ class Session:
         old_len = len(self._agent._history)
         self._set_model_status("running", "user")
         tool_call_cb, get_tool_call_count = self._make_tool_call_callback()
+        on_chunk = self._make_text_chunk_callback()
         try:
             async with self._agent_lock:
                 self._load_session_capabilities()
                 result = await self._agent.run(
                     message,
-                    on_text_chunk=self._make_text_chunk_callback(),
+                    on_text_chunk=on_chunk,
                     on_tool_call=tool_call_cb,
                 )
         except BaseException:
             self._set_model_status("idle", "user")
             raise
+        finally:
+            on_chunk.flush()
 
         # Append full turn (the user_input event was already written by the UI
         # via send_message before the server picked it up).
@@ -306,17 +309,20 @@ class Session:
         self._append_event({"type": "heartbeat_trigger", "ts": trigger_ts})
         self._set_model_status("running", "heartbeat")
         tool_call_cb, get_tool_call_count = self._make_tool_call_callback()
+        on_chunk = self._make_text_chunk_callback()
         try:
             async with self._agent_lock:
                 self._load_session_capabilities()
                 result = await self._agent.run(
                     prompt,
-                    on_text_chunk=self._make_text_chunk_callback(),
+                    on_text_chunk=on_chunk,
                     on_tool_call=tool_call_cb,
                 )
         except BaseException:
             self._set_model_status("idle", "heartbeat")
             raise
+        finally:
+            on_chunk.flush()
 
         if SESSION_FINISHED in result.content:
             # Clear tasks, prune heartbeat history so it doesn't pollute context
@@ -638,6 +644,11 @@ class Session:
 
         Chunks are buffered and flushed every ~150 characters to limit
         write frequency while still giving the UI near-real-time feedback.
+
+        The returned callback has a ``.flush()`` attribute that must be
+        called after ``agent.run()`` completes to emit any remaining
+        buffered text.  Without this, the last <150-char segment of
+        every tool-call iteration would be silently dropped.
         """
         buf: list[str] = []
         buf_len: list[int] = [0]
@@ -652,6 +663,14 @@ class Session:
                 buf.clear()
                 buf_len[0] = 0
 
+        def flush() -> None:
+            """Emit any remaining buffered text as a final partial_text event."""
+            if buf:
+                self._append_event({"type": "partial_text", "content": "".join(buf)})
+                buf.clear()
+                buf_len[0] = 0
+
+        on_chunk.flush = flush  # type: ignore[attr-defined]
         return on_chunk
 
     def _serialize_turn_messages(self, messages: list) -> list[dict]:
