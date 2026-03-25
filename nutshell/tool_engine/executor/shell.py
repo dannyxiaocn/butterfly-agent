@@ -15,8 +15,9 @@ class ShellExecutor(BaseExecutor):
     The script should write its result to stdout.
     """
 
-    def __init__(self, sh_path: Path) -> None:
+    def __init__(self, sh_path: Path, cwd: str | None = None) -> None:
         self._sh_path = sh_path
+        self._cwd = cwd
 
     @classmethod
     def can_handle(cls, tool_name: str, tool_path: Path | None) -> bool:
@@ -33,6 +34,7 @@ class ShellExecutor(BaseExecutor):
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                cwd=self._cwd,
             )
             stdout, stderr = await asyncio.wait_for(
                 proc.communicate(input=input_json),

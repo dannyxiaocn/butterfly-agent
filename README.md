@@ -1,4 +1,4 @@
-# Nutshell `v1.2.8`
+# Nutshell `v1.3.0`
 
 A minimal Python agent runtime. Agents run as persistent server-managed sessions with autonomous heartbeat ticking, accessible via web browser.
 
@@ -293,6 +293,11 @@ The web UI polls both files via SSE, resuming from the last byte offset on recon
 ---
 
 ## Changelog
+
+### v1.3.0
+- **Bash + shell tools default to session directory** — agents can now use short relative paths (`cat core/tasks.md`, `ls playground/`) instead of full `sessions/<id>/...` paths. `ToolLoader` accepts `default_workdir`; `Session._load_session_capabilities()` passes `str(self.session_dir)`. Both `BashExecutor` and `ShellExecutor` respect it; per-call `workdir=...` override still works. `session.md` updated with note.
+- **TUI token usage display** — `↑N ↓N · 📦N` footer shown after each agent message in the TUI, matching the web UI added in v1.2.8.
+- 2 new tests in `test_bash_tool.py`; 154 total.
 
 ### v1.2.8
 - **Web UI token usage display** — agent messages in the web UI now show a token footer: `↑{input} ↓{output}` and `📦{cache_read}` when non-zero. Usage data flows from the `turn` event in `context.jsonl` through `_context_event_to_display()` into the `agent` display event; the frontend renders it in a compact footer below each agent message.

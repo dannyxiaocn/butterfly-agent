@@ -147,8 +147,10 @@ class Session:
             self._agent.skills = []
 
         # 4. tools from core/tools/ + tool_providers overrides
+        # default_workdir: bash and shell tools run from the session directory so
+        # agents use short relative paths (core/tasks.md) instead of full session paths.
         try:
-            tools = ToolLoader().load_dir(self.core_dir / "tools")
+            tools = ToolLoader(default_workdir=str(self.session_dir)).load_dir(self.core_dir / "tools")
         except (FileNotFoundError, PermissionError):
             tools = []
         except Exception as e:

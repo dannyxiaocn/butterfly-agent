@@ -16,6 +16,8 @@ Your session: `sessions/{session_id}/`
 | `playground/` | Your workspace: `tmp/` scratch, `projects/` long-term, `output/` artifacts |
 | `_sessions/{session_id}/` | System internals — do not edit |
 
+**bash default directory**: `sessions/{session_id}/` — use short relative paths: `cat core/tasks.md`, `ls playground/`. Use `workdir=...` to override per call.
+
 **Task board**: Write progress notes your future self can resume from. Remove completed items. Empty board = no outstanding work.
 
 **Memory**: One fact per line. Avoid injecting large documents — memory is prepended to every activation.

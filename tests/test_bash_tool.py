@@ -1,6 +1,8 @@
 """Tests for the built-in bash tool."""
 import pytest
 from nutshell.tool_engine.executor.bash import create_bash_tool
+from nutshell.tool_engine.executor.shell import ShellExecutor
+from nutshell.tool_engine.loader import ToolLoader
 from nutshell.core.tool import Tool
 
 
@@ -97,3 +99,53 @@ async def test_pty_timeout():
     if "[pty unavailable" in result:
         pytest.skip("PTY not available in this environment")
     assert "timed out" in result.lower()
+
+
+# ── ToolLoader default_workdir ─────────────────────────────────────────────────
+
+def test_toolloader_bash_uses_default_workdir(tmp_path):
+    """ToolLoader.default_workdir is passed to BashExecutor."""
+    import json
+    bash_json = tmp_path / "tools" / "bash.json"
+    bash_json.parent.mkdir()
+    bash_json.write_text(json.dumps({
+        "name": "bash",
+        "description": "run bash",
+        "input_schema": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]},
+    }))
+    workdir = tmp_path / "session"
+    workdir.mkdir()
+    loader = ToolLoader(default_workdir=str(workdir))
+    tool = loader.load(bash_json)
+    assert tool.name == "bash"
+    # BashExecutor stores workdir; verify it uses it when invoked
+    import asyncio
+    result = asyncio.get_event_loop().run_until_complete(tool.execute(command="pwd"))
+    assert str(workdir) in result
+
+
+def test_toolloader_shell_uses_default_workdir(tmp_path):
+    """ToolLoader.default_workdir is passed to ShellExecutor for agent-created tools."""
+    import json
+    tools_dir = tmp_path / "tools"
+    tools_dir.mkdir()
+
+    # Write a shell tool that prints its working directory
+    sh = tools_dir / "show_pwd.sh"
+    sh.write_text("#!/usr/bin/env bash\npwd\n")
+    sh.chmod(0o755)
+    json_def = tools_dir / "show_pwd.json"
+    json_def.write_text(json.dumps({
+        "name": "show_pwd",
+        "description": "print cwd",
+        "input_schema": {"type": "object", "properties": {}},
+    }))
+
+    session_dir = tmp_path / "session"
+    session_dir.mkdir()
+
+    loader = ToolLoader(default_workdir=str(session_dir))
+    tool = loader.load(json_def)
+    import asyncio
+    result = asyncio.get_event_loop().run_until_complete(tool.execute())
+    assert str(session_dir) in result
