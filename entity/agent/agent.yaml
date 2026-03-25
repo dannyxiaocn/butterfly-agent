@@ -23,6 +23,7 @@ tools:
   - tools/fetch_url.json
   - tools/recall_memory.json
   - tools/state_diff.json
+  - tools/git_checkpoint.json
 
 skills:
   - skills/creator-mode

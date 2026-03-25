@@ -398,6 +398,7 @@ def test_agent_entity_loads_all_builtin_tools():
         "fetch_url",
         "recall_memory",
         "state_diff",
+        "git_checkpoint",
     }
     missing = expected - names
     assert not missing, f"Missing tools from agent entity: {missing}"

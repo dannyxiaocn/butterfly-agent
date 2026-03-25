@@ -1,4 +1,4 @@
-# Nutshell `v1.3.15`
+# Nutshell `v1.3.16`
 
 A minimal Python agent runtime. Agents run as persistent server-managed sessions with autonomous heartbeat ticking. **Primary interface: CLI.**
 
@@ -356,6 +356,12 @@ The web UI polls both files via SSE, resuming from the last byte offset on recon
 ---
 
 ## Changelog
+
+### v1.3.16
+- **`git_checkpoint` built-in tool**: Agents can now call `git_checkpoint(message, workdir)` to stage all changes and create a checkpoint commit in a git repository within their session workspace. Returns the commit hash + summary, or `(nothing to commit)` if the tree is clean. Designed for the nutshell_dev playground workflow: `git_checkpoint(message="feat: X", workdir="playground/nutshell")`.
+- `nutshell/tool_engine/providers/git_checkpoint.py` — implementation.
+- `entity/agent/tools/git_checkpoint.json` — schema; added to `entity/agent/agent.yaml`.
+- 9 new tests in `test_git_checkpoint.py`; 243 total.
 
 ### v1.3.15
 - **`nutshell prompt-stats [SESSION_ID]`**: New diagnostic command showing a component-by-component breakdown of system prompt size — static (cached: `system.md`, `session.md`), dynamic (`memory.md`, memory layers with truncation notes, skills catalog), and heartbeat sections. Columns: Lines (disk), Chars (prompt), ~Tokens (chars/4). Helps reason about prompt space allocation and cost vs. effectiveness trade-offs.

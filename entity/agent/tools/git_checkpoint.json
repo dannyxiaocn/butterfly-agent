@@ -1,0 +1,18 @@
+{
+  "name": "git_checkpoint",
+  "description": "Stage all changes and create a checkpoint commit in a git repository within the session's workspace. Returns the commit hash and summary, or '(nothing to commit)' if the working tree is clean. Use this when you've finished a task or want to save progress before continuing.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "message": {
+        "type": "string",
+        "description": "Commit message describing what was accomplished (e.g. 'feat: implement X', 'fix: resolve Y')."
+      },
+      "workdir": {
+        "type": "string",
+        "description": "Path to the git repository relative to the session directory (e.g. 'playground/nutshell'). Defaults to the session directory itself if empty."
+      }
+    },
+    "required": ["message"]
+  }
+}

@@ -56,6 +56,11 @@ def _make_state_diff() -> Callable:
     return state_diff
 
 
+def _make_git_checkpoint() -> Callable:
+    from nutshell.tool_engine.providers.git_checkpoint import git_checkpoint
+    return git_checkpoint
+
+
 _BUILTIN_FACTORIES: dict[str, Callable[[], Callable]] = {
     "bash":                   _make_bash,
     "web_search":             _make_web_search,
@@ -65,6 +70,7 @@ _BUILTIN_FACTORIES: dict[str, Callable[[], Callable]] = {
     "fetch_url":              _make_fetch_url,
     "recall_memory":          _make_recall_memory,
     "state_diff":             _make_state_diff,
+    "git_checkpoint":         _make_git_checkpoint,
 }
 
 
