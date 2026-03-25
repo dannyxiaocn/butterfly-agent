@@ -1,4 +1,4 @@
-# Nutshell `v1.3.19`
+# Nutshell `v1.3.20`
 
 A minimal Python agent runtime. Agents run as persistent server-managed sessions with autonomous heartbeat ticking. **Primary interface: CLI.**
 
@@ -356,6 +356,13 @@ The web UI polls both files via SSE, resuming from the last byte offset on recon
 ---
 
 ## Changelog
+
+### v1.3.20
+- **repo-skill**: `nutshell repo-skill <path>` generates a `SKILL.md` codebase overview from any repo
+- Pure filesystem ops (no LLM) — extracts README summary, directory tree, key files
+- Auto-detects manifests (`pyproject.toml`, `package.json`, `Cargo.toml`, `go.mod`…), entry points, source dirs
+- `--output DIR` and `--name NAME` options; defaults to `core/skills/<name>-wiki/` inside current session
+- 17 new tests in `test_repo_skill.py`
 
 ### v1.3.19
 - **Sandbox**: bash executor now checks commands against `DANGEROUS_DEFAULTS` before execution

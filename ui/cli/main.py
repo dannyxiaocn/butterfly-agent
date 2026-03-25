@@ -12,6 +12,7 @@ Usage:
     nutshell entity log NAME                Show entity version changelog
     nutshell prompt-stats [SESSION_ID]      Show prompt space breakdown for a session
     nutshell token-report [SESSION_ID]      Show per-turn token usage breakdown
+    nutshell repo-skill REPO_PATH           Generate codebase overview skill
     nutshell review                         Review pending entity update requests
     nutshell server                         Start the Nutshell server
     nutshell web                            Start the web UI (monitoring)
@@ -961,6 +962,34 @@ def _exec_entrypoint(name: str) -> int:
     return 1
 
 
+
+# ── Subcommand: repo-skill ────────────────────────────────────────────────────
+
+def _add_repo_skill_parser(subparsers) -> None:
+    p = subparsers.add_parser(
+        'repo-skill',
+        help='Generate a codebase overview skill from any repo.',
+        description=(
+            "Generate a SKILL.md codebase overview from a repository.\n\n"
+            "Examples:\n"
+            "  nutshell repo-skill ./my-project\n"
+            "  nutshell repo-skill ~/code/fastapi --name fastapi\n"
+            "  nutshell repo-skill . --output /tmp/skills/my-wiki\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p.add_argument('repo_path', metavar='REPO_PATH', help='Path to the repository')
+    p.add_argument('--output', '-o', metavar='DIR',
+                   help='Output directory (default: core/skills/<name>-wiki/ in current session)')
+    p.add_argument('--name', '-n', metavar='NAME',
+                   help='Skill name (default: repo directory name)')
+    p.set_defaults(func=_cmd_repo_skill)
+
+
+def _cmd_repo_skill(args) -> int:
+    from ui.cli.repo_skill import cmd_repo_skill
+    return cmd_repo_skill(args)
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -985,6 +1014,9 @@ def main() -> None:
             "Diagnostics:\n"
             "  nutshell prompt-stats [SESSION_ID]  Show prompt space breakdown\n"
             "  nutshell token-report [SESSION_ID]  Show per-turn token costs\n\n"
+            "Repo skills:\n"
+            "  nutshell repo-skill PATH            Generate codebase overview SKILL.md\n"
+            "  nutshell repo-skill PATH -n NAME     Custom skill name\n\n"
             "Other:\n"
             "  nutshell review                     Review agent update requests\n"
             "  nutshell server                     Start the server\n"
@@ -1006,6 +1038,7 @@ def main() -> None:
     _add_prompt_stats_parser(subparsers)
     _add_token_report_parser(subparsers)
     _add_review_parser(subparsers)
+    _add_repo_skill_parser(subparsers)
     _add_exec_parser(subparsers, "server", "Start the Nutshell server daemon.")
     _add_exec_parser(subparsers, "web",    "Start the web UI at http://localhost:8080 (monitoring).")
     _add_exec_parser(subparsers, "tui",    "Start the terminal UI (TUI) — sessions, chat, tasks.")
