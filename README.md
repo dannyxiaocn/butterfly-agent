@@ -1,4 +1,4 @@
-# Nutshell `v1.3.23`
+# Nutshell `v1.3.24`
 
 A minimal Python agent runtime. Agents run as persistent server-managed sessions with autonomous heartbeat ticking. **Primary interface: CLI.**
 
@@ -359,6 +359,14 @@ The web UI polls both files via SSE, resuming from the last byte offset on recon
 ---
 
 ## Changelog
+
+### v1.3.24
+- **app notifications**: new `core/apps/` directory — `.md` files are injected as an **App Notifications** block in the system prompt on every activation, giving agents a persistent, always-visible channel for status updates, alerts, and cross-app communication
+- **`app_notify` tool**: built-in tool with `write` / `clear` / `list` actions to manage `core/apps/<app>.md` files; registered in `entity/agent/agent.yaml`
+- Agent `_build_system_parts()` renders app notifications between memory and skills in the dynamic suffix
+- Session `_load_session_capabilities()` reads `core/apps/*.md` (sorted, non-empty only)
+- `entity/agent/prompts/session.md` documents the `core/apps/` directory and usage
+- 17 new tests in `test_app_notify.py`; 344 total
 
 ### v1.3.23
 - **fix: partial_text flush** — `_make_text_chunk_callback()` now exposes a `.flush()` method; `chat()` and `tick()` call it in a `finally` block so the last <150-char buffered segment is always emitted as a `partial_text` event (previously silently dropped)

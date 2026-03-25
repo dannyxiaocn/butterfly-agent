@@ -1,0 +1,23 @@
+{
+  "name": "app_notify",
+  "description": "Manage app notifications that appear in your system prompt. Write a notification to make it persistently visible across activations, clear it when done, or list all active notifications. Notifications live in core/apps/<app>.md and are injected as an 'App Notifications' block in the system prompt on every activation.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "action": {
+        "type": "string",
+        "enum": ["write", "clear", "list"],
+        "description": "Action to perform: 'write' to create/update a notification, 'clear' to remove one, 'list' to show all."
+      },
+      "app": {
+        "type": "string",
+        "description": "App name (used as filename, e.g. 'weather' → core/apps/weather.md). Required for write and clear."
+      },
+      "content": {
+        "type": "string",
+        "description": "Markdown content for the notification. Required for write."
+      }
+    },
+    "required": ["action"]
+  }
+}

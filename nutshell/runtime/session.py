@@ -137,6 +137,16 @@ class Session:
                     extra_layers.append((md_file.stem, content))
         self._agent.memory_layers = extra_layers
 
+        # App notifications from core/apps/*.md (sorted, non-empty only)
+        apps_dir = self.core_dir / "apps"
+        app_notifications: list[tuple[str, str]] = []
+        if apps_dir.is_dir():
+            for md_file in sorted(apps_dir.glob("*.md")):
+                content = md_file.read_text(encoding="utf-8").strip()
+                if content:
+                    app_notifications.append((md_file.stem, content))
+        self._agent.app_notifications = app_notifications
+
         # 3. skills from core/skills/
         try:
             self._agent.skills = SkillLoader().load_dir(self.core_dir / "skills")

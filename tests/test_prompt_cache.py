@@ -168,6 +168,7 @@ def _make_agent(system_prompt="", session_context="", memory="", memory_layers=N
     a.session_context = session_context
     a.memory = memory
     a.memory_layers = memory_layers or []
+    a.app_notifications = []
     a.skills = []
     return a
 

@@ -75,6 +75,8 @@ class Agent(BaseAgent):
         # Extra named memory layers from core/memory/*.md, sorted by filename.
         # Each entry is (label, content) where label is the .md file stem.
         self.memory_layers: list[tuple[str, str]] = []
+        # App notifications from core/apps/*.md, injected as system-prompt block.
+        self.app_notifications: list[tuple[str, str]] = []
         self.session_context: str = ""
 
     @property
@@ -124,6 +126,13 @@ class Agent(BaseAgent):
             for name, content in self.memory_layers:
                 memory_parts.append(self._render_memory_layer(name, content))
             dynamic_parts.append("\n\n---\n" + "\n\n".join(memory_parts))
+        # App notifications — core/apps/*.md, always-visible persistent channel
+        if self.app_notifications:
+            notif_parts = []
+            for app_name, app_content in self.app_notifications:
+                notif_parts.append(f"### {app_name}\n\n{app_content}")
+            dynamic_parts.append("\n\n---\n## App Notifications\n\n" + "\n\n".join(notif_parts))
+
         skills_block = build_skills_block(self.skills)
         if skills_block:
             dynamic_parts.append(skills_block)

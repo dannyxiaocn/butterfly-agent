@@ -61,6 +61,11 @@ def _make_git_checkpoint() -> Callable:
     return git_checkpoint
 
 
+
+def _make_app_notify() -> Callable:
+    from nutshell.tool_engine.providers.app_notify import app_notify
+    return app_notify
+
 _BUILTIN_FACTORIES: dict[str, Callable[[], Callable]] = {
     "bash":                   _make_bash,
     "web_search":             _make_web_search,
@@ -71,6 +76,7 @@ _BUILTIN_FACTORIES: dict[str, Callable[[], Callable]] = {
     "recall_memory":          _make_recall_memory,
     "state_diff":             _make_state_diff,
     "git_checkpoint":         _make_git_checkpoint,
+    "app_notify":             _make_app_notify,
 }
 
 
