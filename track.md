@@ -72,6 +72,7 @@ agent 自己就可以使用，自己就可以迭代
 - [x] cli 上提交的chat等等，web上应当能看到完整的、实时的工作，cli启动的和web上启动的应该是一个东西，不应该有差别 <!-- 8606176 v1.3.9 -->
 - [x] 全面转向 cli <!-- ee1dc63 v1.3.1 -->
 - [x] bug: cli 上提交的 session，在 web 端不能和 web 端提交的一样实时显示 <!-- 9d6d156 v1.3.23 -->
+- [ ] cli上启动的session，也需要enable它的heartbeat功能，具体可以更细化一下要实现什么，要让调用者直到会有heartbeat，要自动起一个server来监控（后台），然后直到没有需要跑的heartbeat，那个server再停止
 
 ---
 
