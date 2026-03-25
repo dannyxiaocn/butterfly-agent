@@ -36,11 +36,17 @@ def _make_propose_entity_update() -> Callable:
     return propose_entity_update
 
 
+def _make_spawn_session() -> Callable:
+    from nutshell.tool_engine.providers.spawn_session import spawn_session
+    return spawn_session
+
+
 _BUILTIN_FACTORIES: dict[str, Callable[[], Callable]] = {
     "bash":                   _make_bash,
     "web_search":             _make_web_search,
     "send_to_session":        _make_send_to_session,
     "propose_entity_update":  _make_propose_entity_update,
+    "spawn_session":          _make_spawn_session,
 }
 
 

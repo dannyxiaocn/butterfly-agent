@@ -1,4 +1,4 @@
-# Nutshell `v1.2.1`
+# Nutshell `v1.2.2`
 
 A minimal Python agent runtime. Agents run as persistent server-managed sessions with autonomous heartbeat ticking, accessible via web browser.
 
@@ -293,6 +293,12 @@ The web UI polls both files via SSE, resuming from the last byte offset on recon
 ---
 
 ## Changelog
+
+### v1.2.2
+- **`spawn_session` tool** — agents can now create new sub-sessions dynamically. Initialises from any entity, optionally writes an initial message, and registers on disk for `nutshell-server` to pick up automatically. Use `send_to_session` to communicate with the spawned session.
+- **`nutshell.runtime.session_factory`** — extracted shared `init_session()` logic, used by both the web UI and the new tool. DRY refactor of `ui/web/sessions.py`.
+- **`.gitignore`** — added `_entity_updates/`.
+- 8 new tests in `test_spawn_session.py`; 125 total.
 
 ### v1.2.1
 - **`propose_entity_update` tool** — agents can now submit requests to modify their own global entity files (system prompt, skills, tool schemas). Requests are queued in `_entity_updates/` and must be approved by a human before taking effect globally.
