@@ -19,3 +19,5 @@ tools:
 
 skills:
   - skills/creator-mode
+  - skills/multi-agent
+  - skills/model-selection

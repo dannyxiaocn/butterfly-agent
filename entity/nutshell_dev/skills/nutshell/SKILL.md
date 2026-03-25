@@ -5,9 +5,9 @@ description: "Full development context for the nutshell project. Use this skill 
 
 # Nutshell — Developer Skill
 
-This skill is your complete workbench for developing nutshell. It covers project architecture, development SOPs, and when to invoke specialist agents.
+Complete workbench for developing nutshell.
 
-Current version: **v1.0.4** | Tests: `pytest tests/ -q` (62 passing)
+Current version: **v1.2.3** | Tests: `pytest tests/ -q` (135 passing)
 
 ---
 
@@ -19,150 +19,142 @@ pytest tests/ -q          # must pass before anything else
 ```
 Then:
 1. Update `README.md` — relevant section + new Changelog entry under `## Changelog`
-2. Bump version in **both** `pyproject.toml` (`version = "X.Y.Z"`) **and** `README.md` heading (`# Nutshell \`vX.Y.Z\``)
-3. Check `.gitignore` — if new dirs/files were introduced (session dirs, cache dirs, build artifacts), add them
-4. Commit: `git commit -m "vX.Y.Z: {short summary}"`
-5. Push: `git push`
+2. Bump version in **both** `pyproject.toml` (`version = "X.Y.Z"`) **and** `README.md` heading
+3. Commit: `git commit -m "vX.Y.Z: {short summary}\n\n- detail 1\n- detail 2"`
+4. Push: `git push`
 
-**Versioning rules:**
-- Patch (1.0.X): bug fixes, no API change
+**Versioning:**
+- Patch (1.x.Z): bug fixes
 - Minor (1.X.0): new features, backward compatible
-- Major (X.0.0): breaking API changes
+- Major (X.0.0): breaking changes
 
 ### 2. Adding a Built-in Tool
-1. Implement in `nutshell/providers/tool/<name>.py` — expose `create_<name>_tool() -> Tool`
-2. Register in `nutshell/runtime/tools/_registry.py`
-3. Add `entity/agent/tools/<name>.json` (JSON Schema)
-4. Add to `entity/agent/agent.yaml` tools list
-5. Run full SOP (tests → docs → version → commit → push)
+
+1. Implement `nutshell/tool_engine/providers/<name>.py` — expose `async <name>(**kwargs) -> str`
+2. Register in `_BUILTIN_FACTORIES` in `nutshell/tool_engine/registry.py`
+3. Add `entity/agent/tools/<name>.json` (JSON schema)
+4. Write `tests/test_<name>.py`
+5. Run full SOP
+
+**Registry pattern:**
+```python
+# in registry.py
+_BUILTIN_FACTORIES: dict[str, Callable[[], Tool]] = {
+    "my_tool": lambda: Tool(name="my_tool", description="...", fn=my_module.my_tool),
+    ...
+}
+```
 
 ### 3. Adding a New LLM Provider
-1. Implement in `nutshell/providers/llm/<name>.py` extending `AnthropicProvider` or `Provider`
-2. Register in `nutshell/runtime/provider_factory.py` `_REGISTRY`
-3. Export from `nutshell/providers/llm/__init__.py`
 
-### 4. Adding a New Tool Provider (e.g. new web_search backend)
-1. Implement in `nutshell/providers/tool/<name>.py` — expose `async _<name>_search()`
-2. Register in `nutshell/runtime/tool_provider_factory.py` `_REGISTRY`
-3. Agent switches via `params.json`: `{"tool_providers": {"web_search": "<name>"}}`
+1. Implement `nutshell/llm_engine/providers/<name>.py` extending `Provider`
+2. Register in `nutshell/llm_engine/registry.py` `_PROVIDERS` dict
+3. `complete()` must accept `on_text_chunk=None`, `cache_system_prefix=""` kwargs
 
-### 5. Adding a New Entity
+### 4. Adding a New Entity
+
 ```bash
-nutshell-new-agent -n <name>   # interactive — picks parent, scaffolds files
+nutshell-new-agent -n <name>   # interactive scaffolder, validates parent exists
 ```
-Then edit `entity/<name>/agent.yaml` to set model, provider, description.
+
+Then edit `entity/<name>/agent.yaml`.
 
 ---
 
-## When to Use the Simplify Agent
+## Package Layout
 
-Run the simplify agent when:
-- Codebase has grown significantly (multiple new features merged)
-- You notice dead code, unused imports, or duplicated logic
-- A refactor left behind stale scaffolding
-- The user asks to "clean up", "simplify", or "reduce code"
-- After a major feature is complete and the implementation can be tightened
-
-To invoke: spawn a subagent with instructions from `agents/simplify.md` in this skill directory.
-
-The simplify agent will: audit all modules, remove dead code, eliminate duplication, fix obvious bugs, and verify tests still pass — without changing behaviour.
-
----
-
-## Known Technical Debt
-
-| File | Issue | Priority |
-|------|-------|----------|
-| ~~`ui/web.py`~~ | Refactored into `ui/web/` package in v1.0.3 | ✅ Done |
-| `providers/tool/web_search.py` + `tavily.py` | `_SCHEMA` dict is identical in both files | LOW |
-| `runtime/tools/_registry.py` | `get_builtin()` creates a new Tool instance on every call (no caching) | LOW |
-| `runtime/watcher.py` | Polls `_sessions/` every second (O(n) scan); no file-system watch | LOW |
-| `session.py:_reshape_history()` | Detects heartbeat prompts via hardcoded string "Heartbeat activation" | LOW |
-
----
-
-## Project Architecture
-
-### Core design principles
-- **File-based IPC only** — no sockets; server ↔ UI communicate via `context.jsonl` + `events.jsonl`
-- **Capability reload on every activation** — agent reads `core/` fresh before each run; no restart needed
-- **Dual-directory sessions** — `sessions/<id>/` (agent-visible) + `_sessions/<id>/` (system-only)
-- **Entity copy-on-create** — full inheritance chain resolved and copied into `core/` at session creation; entity dir never accessed at runtime
-
-### Package layout
 ```
 nutshell/
-├── abstract/         — ABCs: BaseAgent, BaseTool, Provider, BaseLoader
-├── core/
-│   ├── agent.py      — Agent: LLM loop, tool dispatch, history, on_text_chunk/on_tool_call
-│   ├── tool.py       — Tool + @tool decorator (auto-schema from type hints)
-│   ├── skill.py      — Skill dataclass
-│   └── types.py      — Message, ToolCall, AgentResult
-├── providers/
-│   ├── llm/
-│   │   ├── anthropic.py  — AnthropicProvider (streaming, custom base_url)
-│   │   └── kimi.py       — KimiForCodingProvider (extends Anthropic, KIMI_FOR_CODING_API_KEY)
-│   └── tool/
-│       ├── web_search.py — Brave Search (_web_search, BRAVE_API_KEY)
-│       └── tavily.py     — Tavily Search (_tavily_search, TAVILY_API_KEY)
-├── runtime/
-│   ├── session.py         — Session: chat(), tick(), run_daemon_loop(), _load_session_capabilities()
-│   ├── ipc.py             — FileIPC(system_dir): context.jsonl + events.jsonl
-│   ├── status.py          — status.json: read/write_session_status(system_dir, ...)
-│   ├── params.py          — params.json: DEFAULT_PARAMS, read/write/ensure_session_params(session_dir)
-│   ├── provider_factory.py      — resolve_provider(name), provider_name(provider)
-│   ├── tool_provider_factory.py — resolve_tool_impl(tool_name, provider_name), list_providers()
-│   ├── watcher.py         — SessionWatcher: polls _sessions/
-│   ├── server.py          — nutshell-server entry point
-│   ├── loaders/
-│   │   ├── agent.py   — AgentLoader: deep extends chain, child-first file resolution
-│   │   ├── tool.py    — ToolLoader: .json + built-in registry + .sh shell tools
-│   │   └── skill.py   — SkillLoader: YAML frontmatter + body
-│   └── tools/
-│       ├── bash.py        — create_bash_tool() subprocess + PTY modes
-│       └── _registry.py   — built-in registry: {bash, web_search}
+├── core/                  — ABCs + Agent, Tool, Skill, Provider, types
+│   ├── agent.py           — Agent: run(), _history, _build_system_parts(), memory + memory_layers
+│   ├── tool.py, skill.py, provider.py, types.py
+│   └── loader.py          — AgentLoader (inheritance chain resolution)
+├── llm_engine/
+│   ├── providers/
+│   │   ├── anthropic.py   — AnthropicProvider: streaming, thinking, cache_control
+│   │   └── kimi.py        — KimiProvider: Anthropic-compatible, no cache_control
+│   ├── registry.py        — resolve_provider(name), provider_name(provider)
+│   └── loader.py
+├── tool_engine/
+│   ├── executor/          — base.py, bash.py (subprocess/PTY), shell.py
+│   ├── providers/
+│   │   ├── web_search/    — brave.py, tavily.py
+│   │   ├── session_msg.py — send_to_session: sync/async cross-session messaging
+│   │   ├── spawn_session.py — spawn_session: creates session from entity
+│   │   ├── entity_update.py — propose_entity_update: entity change requests
+│   │   ├── fetch_url.py   — fetch_url: stdlib URL fetcher, HTML stripping
+│   │   └── recall_memory.py — recall_memory: keyword search in memory files
+│   ├── registry.py        — _BUILTIN_FACTORIES + get_builtin(name)
+│   ├── loader.py          — ToolLoader: .json + built-in registry + .sh shell tools
+│   ├── reload.py          — create_reload_tool(): hot-reload core/ capabilities
+│   └── sandbox.py
+├── skill_engine/
+│   ├── loader.py          — SkillLoader: SKILL.md + flat .md
+│   └── renderer.py        — build_skills_block(): catalog vs inline injection
+└── runtime/
+    ├── session.py         — Session: chat(), tick(), run_daemon_loop(stop_event=), _load_session_capabilities()
+    ├── ipc.py             — FileIPC: context.jsonl + events.jsonl; send_message() → msg_id
+    ├── status.py          — status.json r/w
+    ├── params.py          — params.json: DEFAULT_PARAMS, read/write/ensure_session_params
+    ├── env.py             — load_dotenv(): cwd/.env then repo-root/.env
+    ├── session_factory.py — init_session(): idempotent, copies entity → core/
+    ├── entity_updates.py  — list_pending_updates(), apply_update(id), reject_update(id)
+    ├── watcher.py         — SessionWatcher: polls _sessions/ for new sessions
+    └── server.py          — nutshell-server entry point
+
+ui/                        (NOT inside nutshell/ package)
+├── web/
+│   ├── app.py             — FastAPI: SSE streaming, /api/sessions/* routes
+│   ├── sessions.py        — _init_session, _read_session_info, _sort_sessions
+│   └── index.html         — frontend (HTML + CSS + JS, no build step)
 ├── cli/
-│   └── new_agent.py   — nutshell-new-agent: interactive entity scaffolder
-└── ui/
-    ├── web/           — FastAPI + SSE, http://localhost:8080
-    │   ├── __init__.py    — re-exports create_app, main
-    │   ├── app.py         — FastAPI routes + _sse_format() + main()
-    │   ├── sessions.py    — _read_session_info, _sort_sessions, _init_session
-    │   └── index.html     — frontend (HTML + CSS + JS)
-    └── tui.py         — Textual TUI, nutshell-tui entry point
+│   └── chat.py            — nutshell-chat: single-shot CLI + inline daemon
+└── dui/
+    └── new_agent.py       — nutshell-new-agent: interactive entity scaffolder
 ```
 
-### Entities (inheritance chain)
-```
-agent  ←  kimi_agent  ←  nutshell_dev
-```
-- `entity/agent/` — base: claude-sonnet-4-6, anthropic, tools: bash+web_search, skills: skill-creator
-- `entity/kimi_agent/` — kimi-for-coding, kimi-coding-plan, all else inherited
-- `entity/nutshell_dev/` — extra skill: nutshell (this), all else inherited
+---
 
-**Inheritance rules:** `null` = inherit parent · `[]` = explicitly empty · explicit list = child-first file resolution
+## Entity Inheritance
+
+```
+entity/agent/        — base: claude-sonnet-4-6, anthropic, tools: bash+web_search+built-ins
+  ↑ entity/kimi_agent/   — kimi provider/model, all else inherited
+    ↑ entity/nutshell_dev/ — extra skill: nutshell (this)
+```
+
+`null` fields = inherit parent. `[]` = explicitly empty. Explicit list = child-first file resolution.
+
+**Built-in tools** (always registered regardless of entity.yaml):
+`bash`, `web_search`, `send_to_session`, `spawn_session`, `propose_entity_update`, `fetch_url`, `recall_memory`, `reload_capabilities`
 
 ---
 
 ## Session Disk Layout
 
 ```
-sessions/<id>/core/          ← agent reads/writes
-  system.md heartbeat.md session_context.md memory.md tasks.md
-  params.json                ← SOURCE OF TRUTH for runtime config
-  tools/  <name>.json + <name>.sh   ← agent-created tools
-  skills/ <name>/SKILL.md           ← session-level skills
-sessions/<id>/docs/          ← user uploads (read-only)
-sessions/<id>/playground/    ← free workspace
+sessions/<id>/                  ← agent-visible
+  core/
+    system.md                   ← system prompt (copied from entity at creation)
+    heartbeat.md                ← heartbeat prompt
+    session.md                  ← path reference table (~20 lines)
+    memory.md                   ← persistent memory (injected every activation)
+    memory/                     ← layered memory: *.md → "## Memory: {stem}"
+    tasks.md                    ← task board (non-empty → triggers heartbeat)
+    params.json                 ← runtime config (SOURCE OF TRUTH)
+    tools/                      ← .json + .sh agent-created tools
+    skills/                     ← <name>/SKILL.md session skills
+  docs/                         ← user uploads (read-only by convention)
+  playground/                   ← free workspace (tmp/, projects/, output/)
 
-_sessions/<id>/              ← system-only, never touch
-  manifest.json              ← STATIC: entity, created_at
-  status.json                ← DYNAMIC: model_state, pid, status, last_run_at...
-  context.jsonl              ← user_input + turn events
-  events.jsonl               ← model_status, partial_text, tool_call...
+_sessions/<id>/                 ← system-only
+  manifest.json                 ← STATIC: entity, created_at
+  status.json                   ← DYNAMIC: model_state, status, last_run_at, pid
+  context.jsonl                 ← user_input + turn events (IPC)
+  events.jsonl                  ← runtime/UI events
 ```
 
-### params.json defaults
+**params.json defaults:**
 ```json
 {
   "heartbeat_interval": 600.0,
@@ -171,34 +163,43 @@ _sessions/<id>/              ← system-only, never touch
   "tool_providers": {"web_search": "brave"}
 }
 ```
-`tool_providers.web_search`: `"brave"` (default, needs `BRAVE_API_KEY`) or `"tavily"` (needs `TAVILY_API_KEY`)
-
-### status.json fields
-`model_state`: running|idle · `model_source`: user|heartbeat|system · `status`: active|stopped · `pid` · `last_run_at` · `heartbeat_interval`
 
 ---
 
 ## Key API Notes
 
-**`status.py` / `ipc.py`** — take `system_dir` (`_sessions/<id>/`), NOT `session_dir`
-**`params.py`** — takes `session_dir` (`sessions/<id>/`)
-**`Session(agent, base_dir, system_base, heartbeat)`** — `session.core_dir` → `sessions/<id>/core/`, `session.system_dir` → `_sessions/<id>/`
-
-### Built-in tools
-**bash**: `command` (required), `timeout`, `workdir`, `pty` (PTY mode for interactive programs, Unix only)
-**web_search**: `query` (required), `count=5`, `country`, `language`, `freshness` (day|week|month|year), `date_after`, `date_before` (YYYY-MM-DD)
-
-### LLM providers
-| Name | Class | Env Var |
-|---|---|---|
-| `anthropic` | `AnthropicProvider` | `ANTHROPIC_API_KEY` |
-| `kimi-coding-plan` | `KimiForCodingProvider` | `KIMI_FOR_CODING_API_KEY` |
+- **`status.py` / `ipc.py`** take `system_dir` (`_sessions/<id>/`)
+- **`params.py`** takes `session_dir` (`sessions/<id>/`)
+- **Prompt caching**: static (system.md + session.md) cached via `cache_control`; dynamic (memory + skills) not cached
+- **`session_factory.init_session()`** — shared init logic; called by `spawn_session`, `nutshell-chat`, Web UI
 
 ---
 
-## Heartbeat Mechanics
-- Fires every `heartbeat_interval` seconds (default 600s, read fresh from params.json each cycle)
-- Skipped when: tasks.md empty · agent lock held · session stopped
-- `last_tick_time` resets **after** every agent run (user or heartbeat)
-- `SESSION_FINISHED` in response → clears tasks, rolls back heartbeat history
-- On server restart: timer initialised from `last_run_at` in status.json
+## Running Tests
+
+```bash
+pytest tests/ -q                     # all tests
+pytest tests/test_<name>.py -v       # specific module
+pytest tests/ -q -k "keyword"        # filter by name
+```
+
+Test files:
+- `test_agent.py`, `test_agent_loader_inheritance.py`
+- `test_anthropic_provider.py` (thinking block streaming)
+- `test_bash_tool.py`, `test_tools.py`
+- `test_cli_chat.py` (nutshell-chat new/continue/no-wait)
+- `test_ipc.py`, `test_session_capabilities.py`
+- `test_new_agent.py`, `test_reload_tool.py`
+- `test_send_to_session.py`, `test_spawn_session.py`
+- `test_fetch_url.py`, `test_entity_update.py`, `test_prompt_cache.py`
+
+---
+
+## Known Technical Debt
+
+| File | Issue | Priority |
+|------|-------|----------|
+| `tool_engine/providers/web_search/brave.py` + `tavily.py` | `_SCHEMA` dict identical in both | LOW |
+| `runtime/watcher.py` | Polls `_sessions/` every second; no inotify | LOW |
+| `session.py:_reshape_history()` | Detects heartbeat by hardcoded string | LOW |
+| `entity/nutshell_dev/agent.yaml` | References `session_context` prompt key (legacy) | LOW |
