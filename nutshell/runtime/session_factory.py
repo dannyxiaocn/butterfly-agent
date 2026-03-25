@@ -142,7 +142,12 @@ def init_session(
         else:
             write_session_params(session_dir, heartbeat_interval=heartbeat)
 
-    _write_if_absent(core_dir / "memory.md", "")
+    # Seed memory.md from entity if the entity provides one
+    entity_memory = (ent_base / entity_name / "memory.md") if entity_dir.exists() else None
+    if entity_memory and entity_memory.exists():
+        _write_if_absent(core_dir / "memory.md", entity_memory.read_text(encoding="utf-8"))
+    else:
+        _write_if_absent(core_dir / "memory.md", "")
     _write_if_absent(core_dir / "tasks.md", "")
 
     ensure_session_status(system_dir)

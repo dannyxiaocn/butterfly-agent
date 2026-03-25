@@ -1,4 +1,4 @@
-# Nutshell `v1.3.4`
+# Nutshell `v1.3.5`
 
 A minimal Python agent runtime. Agents run as persistent server-managed sessions with autonomous heartbeat ticking. **Primary interface: CLI.**
 
@@ -297,6 +297,11 @@ The web UI polls both files via SSE, resuming from the last byte offset on recon
 ---
 
 ## Changelog
+
+### v1.3.5
+- **Entity `memory.md` seeding** — `session_factory.init_session()` now copies `entity/<name>/memory.md` into `core/memory.md` on first session creation (if absent). Entities can pre-seed agent memory.
+- **`entity/nutshell_dev/memory.md`** — initial memory for nutshell_dev: project state, role definition, recent changes, SOP summary.
+- **`entity/nutshell_dev/skills/nutshell/SKILL.md`** — updated to v1.3.4: new CLI commands, track.md workflow, role clarification.
 
 ### v1.3.4
 - **`nutshell log [SESSION_ID] [-n N]`** — new CLI subcommand to display recent conversation history from a session's `context.jsonl`. Shows user messages, agent replies, tool calls, and token usage. Defaults to latest session, last 5 turns.
