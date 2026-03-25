@@ -441,3 +441,52 @@ def test_tool_provider_unknown_keeps_original_impl(tmp_path, monkeypatch):
     import asyncio
     result = asyncio.get_event_loop().run_until_complete(ws.execute(query="test"))
     assert "shell result" in result
+
+
+# ── Heartbeat history pruning ──────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_heartbeat_replaces_prompt_with_compact_marker(tmp_path):
+    """After a heartbeat activation, the verbose prompt is replaced with a compact marker."""
+    from nutshell.core.types import AgentResult
+
+    # MockProvider.complete() returns (content_str, [ToolCall])
+    responses = [("Making progress", [])]
+    provider = MockProvider(iter(responses))
+    agent = Agent(system_prompt="sys", provider=provider)
+    session = make_session(tmp_path, agent)
+
+    # Write a task so heartbeat fires
+    (session.core_dir / "tasks.md").write_text("- [ ] Do something", encoding="utf-8")
+    (session.core_dir / "heartbeat.md").write_text(
+        "Heartbeat activation.\n\nCurrent tasks:\n{tasks}", encoding="utf-8"
+    )
+    session._load_session_capabilities()
+
+    await session.tick()
+
+    # History should have 2 messages: compact marker + assistant response
+    history = agent._history
+    assert len(history) >= 2
+    # First new message should be compact marker, not verbose heartbeat prompt
+    user_msgs = [m for m in history if m.role == "user"]
+    assert user_msgs, "No user message in history"
+    assert user_msgs[-1].content.startswith("[Heartbeat "), (
+        f"Expected compact marker, got: {user_msgs[-1].content!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_compact_marker_recognized_by_reshape_history(tmp_path):
+    """_reshape_history drops compact [Heartbeat ...] markers like full prompts."""
+    from nutshell.core.types import Message
+
+    agent = Agent(system_prompt="sys", provider=MockProvider(iter([])))
+    session = make_session(tmp_path, agent)
+
+    # Simulate an orphaned compact marker at end of history
+    agent._history = [Message(role="user", content="[Heartbeat 2026-01-01T00:00:00]")]
+
+    result = session._reshape_history("new user message")
+    assert result == "new user message"
+    assert len(agent._history) == 0  # orphan dropped

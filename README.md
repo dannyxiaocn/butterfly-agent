@@ -1,4 +1,4 @@
-# Nutshell `v1.2.4`
+# Nutshell `v1.2.5`
 
 A minimal Python agent runtime. Agents run as persistent server-managed sessions with autonomous heartbeat ticking, accessible via web browser.
 
@@ -293,6 +293,11 @@ The web UI polls both files via SSE, resuming from the last byte offset on recon
 ---
 
 ## Changelog
+
+### v1.2.5
+- **Heartbeat history pruning** — after each heartbeat activation, the verbose heartbeat prompt in agent history is replaced with a compact `[Heartbeat <ts>]` marker. For sessions with many heartbeat cycles, this prevents heartbeat instructions from accumulating in the context window, significantly reducing token costs on long-running tasks.
+- `_reshape_history()` updated to also recognize the compact marker format (alongside the old "Heartbeat activation" prefix).
+- 2 new tests in `test_session_capabilities.py`; 145 total.
 
 ### v1.2.4
 - **Conversation history caching** — `AnthropicProvider` now adds `cache_control: ephemeral` to the last historical message in each API call. For long sessions (many turns), all prior conversation is served from cache on subsequent activations, significantly reducing token costs.

@@ -315,6 +315,15 @@ class Session:
             self._agent._history = history_snapshot
             self._append_event({"type": "heartbeat_finished"})
         else:
+            # Replace the verbose heartbeat prompt in history with a compact marker.
+            # This prevents heartbeat instructions from accumulating in context across
+            # many activations, which would rapidly increase token costs.
+            new_msgs = self._agent._history[old_len:]
+            if new_msgs and new_msgs[0].role == "user":
+                from nutshell.core.types import Message as _Msg
+                new_msgs = [_Msg(role="user", content=f"[Heartbeat {trigger_ts}]"), *new_msgs[1:]]
+                self._agent._history = history_snapshot + new_msgs
+
             # Only log to context if session is still active — skip if user stopped
             # the session while this heartbeat was in-flight (avoids ghost output in UI)
             if not self.is_stopped():
@@ -571,8 +580,8 @@ class Session:
         last = self._agent._history[-1]
         last_content = last.content if isinstance(last.content, str) else ""
         self._agent._history.pop()
-        if "Heartbeat activation" in last_content:
-            # Orphaned heartbeat prompt — drop it, use new message as-is
+        if "Heartbeat activation" in last_content or last_content.startswith("[Heartbeat "):
+            # Orphaned heartbeat prompt/marker — drop it, use new message as-is
             return new_content
         # Orphaned real user message — merge with new input
         return f"{last_content}\n\n{new_content}"
