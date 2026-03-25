@@ -1,4 +1,4 @@
-# Nutshell `v1.3.21`
+# Nutshell `v1.3.22`
 
 A minimal Python agent runtime. Agents run as persistent server-managed sessions with autonomous heartbeat ticking. **Primary interface: CLI.**
 
@@ -41,6 +41,9 @@ nutshell chat --inject-memory track=@track.md "start"     # inject file contents
 ```bash
 nutshell sessions                     # list all sessions (table)
 nutshell sessions --json              # JSON output — machine-readable for agents
+
+nutshell friends                      # IM-style contact list with status dots
+nutshell friends --json               # JSON output for agents
 
 nutshell new                          # create session (entity: agent, auto-generated ID)
 nutshell new --entity kimi_agent      # specific entity
@@ -356,6 +359,13 @@ The web UI polls both files via SSE, resuming from the last byte offset on recon
 ---
 
 ## Changelog
+
+### v1.3.22
+- **friends**: `nutshell friends` — IM-style session list with online/idle/offline status indicators (●/◐/○)
+- Status engine: `model_state=running` or last_run <5m → online, <1h → idle, else offline; `stopped` always offline
+- `--json` flag for machine-readable output (agents can parse peer list programmatically)
+- **messaging skill**: new `entity/agent/skills/messaging/SKILL.md` teaches agents to discover peers via `nutshell friends` and communicate via `send_to_session`
+- 9 new tests in `test_friends.py`; 320 total
 
 ### v1.3.21
 - **repo-dev**: `nutshell repo-dev <path>` creates a dedicated dev-agent session for any repo

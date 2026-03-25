@@ -13,6 +13,7 @@ Usage:
     nutshell prompt-stats [SESSION_ID]      Show prompt space breakdown for a session
     nutshell token-report [SESSION_ID]      Show per-turn token usage breakdown
     nutshell repo-skill REPO_PATH           Generate codebase overview skill
+    nutshell friends [--json]                IM-style session list with status
     nutshell review                         Review pending entity update requests
     nutshell server                         Start the Nutshell server
     nutshell web                            Start the web UI (monitoring)
@@ -963,6 +964,45 @@ def _exec_entrypoint(name: str) -> int:
 
 
 
+
+
+# ── Subcommand: friends ───────────────────────────────────────────────────────
+
+def _add_friends_parser(subparsers) -> None:
+    p = subparsers.add_parser(
+        "friends",
+        help="IM-style session list with online/idle/offline status.",
+        description=(
+            "Show all sessions as a contact list with live status indicators.\n\n"
+            "Examples:\n"
+            "  nutshell friends                     # pretty table\n"
+            "  nutshell friends --json              # JSON for agents\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p.add_argument("--json", action="store_true", dest="as_json",
+                   help="Output as JSON array")
+    p.add_argument("--system-base", type=Path, default=_DEFAULT_SYSTEM_BASE,
+                   help=argparse.SUPPRESS)
+    p.add_argument("--sessions-base", type=Path, default=_DEFAULT_SESSIONS_BASE,
+                   help=argparse.SUPPRESS)
+    p.set_defaults(func=cmd_friends)
+
+
+def cmd_friends(args) -> int:
+    from ui.cli.friends import build_friends_list, format_friends_table, format_friends_json
+    sessions = _read_all_sessions(
+        sessions_base=args.sessions_base,
+        system_base=args.system_base,
+    )
+    friends = build_friends_list(sessions)
+    if args.as_json:
+        print(format_friends_json(friends))
+    else:
+        print(format_friends_table(friends))
+    return 0
+
+
 # ── Subcommand: repo-skill ────────────────────────────────────────────────────
 
 def _add_repo_skill_parser(subparsers) -> None:
@@ -1035,7 +1075,8 @@ def main() -> None:
             "  nutshell stop SESSION_ID            Stop heartbeat\n"
             "  nutshell start SESSION_ID           Resume heartbeat\n"
             "  nutshell log [SESSION_ID] [-n N]    Show conversation history\n"
-            "  nutshell tasks [SESSION_ID]         Show session task board\n\n"
+            "  nutshell tasks [SESSION_ID]         Show session task board\n"
+            "  nutshell friends [--json]           IM-style contact list\n\n"
             "Entity management:\n"
             "  nutshell entity new                 Scaffold entity interactively\n"
             "  nutshell entity new -n NAME         Scaffold entity by name\n"
@@ -1069,6 +1110,7 @@ def main() -> None:
     _add_prompt_stats_parser(subparsers)
     _add_token_report_parser(subparsers)
     _add_review_parser(subparsers)
+    _add_friends_parser(subparsers)
     _add_repo_skill_parser(subparsers)
     _add_repo_dev_parser(subparsers)
     _add_exec_parser(subparsers, "server", "Start the Nutshell server daemon.")
