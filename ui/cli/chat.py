@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import subprocess
 import threading
 import time
 import uuid
@@ -147,6 +148,7 @@ def _new_session(
     system_base: Path,
     sessions_base: Path,
     inject_memory: dict[str, str] | None = None,
+    keep_alive: bool = False,
 ) -> int:
     """Handle new-session mode. Spawns daemon thread, returns exit code."""
     import asyncio
@@ -234,16 +236,34 @@ def _new_session(
         return 0
 
     reply = _wait_for_reply(ctx_path, msg_id, timeout)
-    _stop_daemon(stop_event_holder, daemon_thread)
 
-    if reply is None:
-        print(f"Error: no response within {timeout:.0f}s", file=sys.stderr)
+    if keep_alive:
+        # Stop the in-process daemon but launch a background server
+        _stop_daemon(stop_event_holder, daemon_thread)
+        subprocess.Popen(
+            ["nutshell-server"],
+            start_new_session=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        if reply is None:
+            print(f"Error: no response within {timeout:.0f}s", file=sys.stderr)
+            print(f"\nSession: {session_id}")
+            print("[heartbeat active — server running in background]")
+            return 1
+        print(reply)
         print(f"\nSession: {session_id}")
-        return 1
-
-    print(reply)
-    print(f"\nSession: {session_id}")
-    return 0
+        print("[heartbeat active — server running in background]")
+        return 0
+    else:
+        _stop_daemon(stop_event_holder, daemon_thread)
+        if reply is None:
+            print(f"Error: no response within {timeout:.0f}s", file=sys.stderr)
+            print(f"\nSession: {session_id}")
+            return 1
+        print(reply)
+        print(f"\nSession: {session_id}")
+        return 0
 
 
 def _stop_daemon(
@@ -320,6 +340,7 @@ def main() -> None:
             timeout=args.timeout,
             system_base=args.system_base,
             sessions_base=args.sessions_base,
+            keep_alive=getattr(args, 'keep_alive', False),
         )
 
     sys.exit(code)

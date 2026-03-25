@@ -1,4 +1,4 @@
-# Nutshell `v1.3.28`
+# Nutshell `v1.3.29`
 
 A minimal Python agent runtime. Agents run as persistent server-managed sessions with autonomous heartbeat ticking. **Primary interface: CLI.**
 
@@ -398,6 +398,12 @@ The web UI polls both files via SSE, resuming from the last byte offset on recon
 ---
 
 ## Changelog
+
+
+### v1.3.29
+- **`nutshell chat --keep-alive`** — after receiving the reply, launches `nutshell-server` in the background so the session keeps its heartbeat active; prints `[heartbeat active — server running in background]`
+- New `keep_alive` parameter on `_new_session()` in `ui/cli/chat.py`; wired through `cmd_chat` in `ui/cli/main.py`
+- 11 new tests in `test_cli_keepalive.py`; 434 total
 
 ### v1.3.28
 - **OpenAI provider** — new `OpenAIProvider` in `nutshell/llm_engine/providers/openai_provider.py`; supports GPT models via the official `openai` Python SDK

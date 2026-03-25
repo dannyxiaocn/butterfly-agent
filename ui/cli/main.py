@@ -169,6 +169,9 @@ def _add_chat_parser(subparsers) -> None:
                    help=argparse.SUPPRESS)
     p.add_argument("--sessions-base", type=Path, default=_DEFAULT_SESSIONS_BASE,
                    help=argparse.SUPPRESS)
+    p.add_argument("--keep-alive", action="store_true", default=False,
+                   dest="keep_alive",
+                   help="Keep the server running in background after reply")
     p.add_argument("--inject-memory", action="append", metavar="KEY=VALUE",
                    dest="inject_memory",
                    help="Inject a memory layer: KEY=VALUE or KEY=@FILE (repeatable)")
@@ -195,6 +198,7 @@ def cmd_chat(args) -> int:
         system_base=args.system_base,
         sessions_base=args.sessions_base,
         inject_memory=inject,
+        keep_alive=getattr(args, 'keep_alive', False),
     )
 
 
