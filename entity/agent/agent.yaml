@@ -21,6 +21,7 @@ tools:
   - tools/propose_entity_update.json
   - tools/fetch_url.json
   - tools/recall_memory.json
+  - tools/state_diff.json
 
 skills:
   - skills/creator-mode

@@ -51,6 +51,11 @@ def _make_recall_memory() -> Callable:
     return recall_memory
 
 
+def _make_state_diff() -> Callable:
+    from nutshell.tool_engine.providers.state_diff import state_diff
+    return state_diff
+
+
 _BUILTIN_FACTORIES: dict[str, Callable[[], Callable]] = {
     "bash":                   _make_bash,
     "web_search":             _make_web_search,
@@ -59,6 +64,7 @@ _BUILTIN_FACTORIES: dict[str, Callable[[], Callable]] = {
     "spawn_session":          _make_spawn_session,
     "fetch_url":              _make_fetch_url,
     "recall_memory":          _make_recall_memory,
+    "state_diff":             _make_state_diff,
 }
 
 

@@ -1,0 +1,18 @@
+{
+  "name": "state_diff",
+  "description": "Store a named state snapshot and return a unified diff vs. the previous snapshot. Designed for high-frequency status checks (e.g. ps, df, git status) to save tokens — only shows what changed. First call initializes the snapshot. Call with the same key to see what changed since the last call.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "key": {
+        "type": "string",
+        "description": "Short identifier for this state (e.g. 'ps', 'disk', 'git_status'). Must be a valid filename stem."
+      },
+      "content": {
+        "type": "string",
+        "description": "New state string to compare against the previous snapshot."
+      }
+    },
+    "required": ["key", "content"]
+  }
+}

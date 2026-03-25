@@ -1,4 +1,4 @@
-# Nutshell `v1.3.12`
+# Nutshell `v1.3.13`
 
 A minimal Python agent runtime. Agents run as persistent server-managed sessions with autonomous heartbeat ticking. **Primary interface: CLI.**
 
@@ -356,6 +356,12 @@ The web UI polls both files via SSE, resuming from the last byte offset on recon
 ---
 
 ## Changelog
+
+### v1.3.13
+- **`state_diff` built-in tool**: Token-efficient state tracking for high-frequency status checks. `state_diff(key, content)` stores a named snapshot in `core/state/<key>.txt` and returns a unified diff on subsequent calls. Returns "(initialized)" on first call, "(no change)" when unchanged. Designed for use with `ps`, `df`, `git status`, etc. to avoid re-reading 50+ identical lines every heartbeat.
+- `nutshell/tool_engine/providers/state_diff.py` — implementation.
+- `entity/agent/tools/state_diff.json` — schema; added to `entity/agent/agent.yaml`.
+- 8 new tests in `test_state_diff.py`; 215 total.
 
 ### v1.3.12
 - **TUI restored**: `nutshell tui` launches a Textual terminal UI with a three-pane layout: session list (left), live chat log with rich markdown (center), and task board editor (right). Real-time polling (0.5s events, 3s sessions, 2s tasks). Supports send message, stop/resume session, create new session, edit tasks.
