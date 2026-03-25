@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "nutshell"
-version = "1.2.0"
+version = "1.2.1"
 description = "A minimal Python Agent library"
 requires-python = ">=3.11"
 dependencies = [
@@ -24,7 +24,8 @@ nutshell-server    = "nutshell.runtime.server:main"
 nutshell-web       = "ui.web:main"
 nutshell-tui       = "ui.tui:main"
 nutshell-new-agent = "ui.dui.new_agent:main"
-nutshell-chat      = "ui.cli.chat:main"
+nutshell-chat           = "ui.cli.chat:main"
+nutshell-review-updates = "ui.cli.review_updates:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["nutshell", "ui"]

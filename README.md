@@ -1,4 +1,4 @@
-# Nutshell `v1.2.0`
+# Nutshell `v1.2.1`
 
 A minimal Python agent runtime. Agents run as persistent server-managed sessions with autonomous heartbeat ticking, accessible via web browser.
 
@@ -293,6 +293,13 @@ The web UI polls both files via SSE, resuming from the last byte offset on recon
 ---
 
 ## Changelog
+
+### v1.2.1
+- **`propose_entity_update` tool** — agents can now submit requests to modify their own global entity files (system prompt, skills, tool schemas). Requests are queued in `_entity_updates/` and must be approved by a human before taking effect globally.
+- **`nutshell-review-updates` CLI** — interactive review of pending entity update requests. Shows content preview, then `[a]pply / [r]eject / [s]kip / [q]uit` for each. Use `--list` to inspect without reviewing.
+- **`nutshell.runtime.entity_updates`** — `list_pending_updates()`, `apply_update()`, `reject_update()`.
+- **`entity/agent/tools/propose_entity_update.json`** — all agents get this tool by default.
+- 10 new tests in `test_entity_update.py`; 117 total.
 
 ### v1.2.0
 - **Anthropic prompt caching** — system prompt now split into a static prefix (system.md + session context) and a dynamic suffix (memory + skills). Anthropic provider sends the static prefix with `cache_control: {"type": "ephemeral"}`, saving ~90% of static-prefix token costs on cache hits. Kimi provider concatenates both parts as before (no cache_control).

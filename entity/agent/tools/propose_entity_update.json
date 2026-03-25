@@ -1,0 +1,22 @@
+{
+  "name": "propose_entity_update",
+  "description": "Submit a request to update a file in the global entity directory. The change will NOT take effect immediately — it requires human approval via `nutshell-review-updates`. Use to propose improvements to your own system prompt, skills, or tool schemas that should persist across all future sessions.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "file_path": {
+        "type": "string",
+        "description": "Repo-relative path to the entity file to update (e.g. 'entity/agent/prompts/system.md', 'entity/agent/skills/creator-mode/SKILL.md')."
+      },
+      "content": {
+        "type": "string",
+        "description": "The full new content for the file (complete replacement, not a diff)."
+      },
+      "reason": {
+        "type": "string",
+        "description": "Why this change improves the agent. Be specific — the human reviewer will use this to decide whether to approve."
+      }
+    },
+    "required": ["file_path", "content", "reason"]
+  }
+}

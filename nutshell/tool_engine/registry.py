@@ -31,10 +31,16 @@ def _make_send_to_session() -> Callable:
     return send_to_session
 
 
+def _make_propose_entity_update() -> Callable:
+    from nutshell.tool_engine.providers.entity_update import propose_entity_update
+    return propose_entity_update
+
+
 _BUILTIN_FACTORIES: dict[str, Callable[[], Callable]] = {
-    "bash":             _make_bash,
-    "web_search":       _make_web_search,
-    "send_to_session":  _make_send_to_session,
+    "bash":                   _make_bash,
+    "web_search":             _make_web_search,
+    "send_to_session":        _make_send_to_session,
+    "propose_entity_update":  _make_propose_entity_update,
 }
 
 
