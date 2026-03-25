@@ -13,13 +13,18 @@ All subsequent bash commands run from `playground/nutshell/`.
 
 ## Step 1 — Record task start in memory
 
+Claude Code includes the exact track.md item text in the dispatch message (look for the line starting with `- [ ]`).
+Extract it and write it to `work_state.md` so you can find it in Step 6.
+
 ```bash
-# Update work_state layer so future activations know what's in progress
 cat > core/memory/work_state.md << 'EOF'
 # Work State
 
 ## Current Task
-<paste task description here>
+<exact task description as dispatched>
+
+## track.md search keyword
+<3-5 word fragment from the task description that uniquely identifies the track.md line>
 
 ## Last Completed
 <previous task if known>
@@ -28,9 +33,9 @@ EOF
 
 ## Step 2 — Read task
 
-1. `cat track.md` to see current task board
-2. Look for `[ ]` (unchecked) items
-3. **Do not self-select.** Claude Code dispatches a specific task — implement exactly that
+1. `cat track.md` to confirm the matching `[ ]` item
+2. **Do not self-select.** Claude Code dispatches a specific task — implement exactly that
+3. Note the EXACT text of the `[ ]` line — you will need it in Step 6
 
 ## Step 3 — Implement
 
@@ -46,13 +51,46 @@ pytest tests/ -q          # must pass
 
 1. Update `README.md`: section + Changelog entry
 2. Bump version in `pyproject.toml` AND `README.md` heading
-3. `git commit -m "vX.Y.Z: summary\n\n- bullets\nCo-Authored-By: ..."`
+3. `git commit -m "vX.Y.Z: summary\n\n- bullets\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"`
+   Save the commit hash (first 7 chars).
 
-## Step 6 — Update track.md
+## Step 6 — Update track.md (REQUIRED — do not skip)
 
-1. Mark item: `[ ]` → `[x]` with `<!-- COMMIT_ID vX.Y.Z -->`
-2. Add new `[ ]` items for sub-tasks / missing features found
-3. `git add track.md && git commit -m "track: mark <task> done"`
+Use `sed` or Python to mark the exact matching line. The line text was recorded in Step 1.
+
+```bash
+# Method: find the matching [ ] line and replace it with [x] + commit annotation
+COMMIT_ID=$(git rev-parse --short HEAD)
+VERSION=$(python3 -c "import tomllib; print(tomllib.loads(open('pyproject.toml').read())['project']['version'])")
+
+# Replace the first matching [ ] line — adjust the search string to match EXACTLY
+python3 << 'PYEOF'
+import re, pathlib
+
+track = pathlib.Path("track.md").read_text()
+
+# Search for the [ ] item that matches the task (use the keyword from work_state)
+search = "<paste 3-5 word unique fragment from the task line>"
+commit_id = "<COMMIT_ID>"
+version = "<VERSION>"
+
+# Find and replace
+pattern = rf'(\- \[ \] (?:[^\n]*{re.escape(search)}[^\n]*))'
+replacement = rf'\1 <!-- {commit_id} v{version} -->'
+new_track, n = re.subn(pattern, lambda m: m.group(0).replace("- [ ]", "- [x]") + f" <!-- {commit_id} v{version} -->", track, count=1)
+
+if n == 0:
+    print("WARNING: no match found for search term — check keyword")
+else:
+    pathlib.Path("track.md").write_text(new_track)
+    print(f"Marked done: {commit_id} v{version}")
+PYEOF
+
+git add track.md
+git commit -m "track: mark <task short name> done (${COMMIT_ID} v${VERSION})"
+```
+
+Also add new `[ ]` items for any sub-tasks or missing features discovered during implementation.
 
 ## Step 7 — Update entity memory (cross-session persistence)
 
@@ -60,21 +98,25 @@ Update the entity's memory files so future sessions inherit the knowledge:
 
 ```bash
 # In playground/nutshell/
-# 1. Update entity memory.md version + recent changes
-# (edit entity/nutshell_dev/memory.md to reflect new version and last change)
+# 1. Update entity memory.md: bump version in "Recent Changes" section
 
 # 2. Update work_state layer
+COMMIT_ID=$(git rev-parse --short HEAD~1)   # feature commit (before track commit)
 cat > entity/nutshell_dev/memory/work_state.md << 'EOF'
 # Work State
 
 ## Current Task
 (none — waiting for dispatch)
 
+## track.md search keyword
+(none)
+
 ## Last Completed
 vX.Y.Z: <task description> (commit: COMMIT_ID)
 EOF
 
-git add entity/nutshell_dev/memory/ && git commit -m "nutshell_dev: update entity memory after vX.Y.Z"
+git add entity/nutshell_dev/memory/ entity/nutshell_dev/memory.md
+git commit -m "nutshell_dev: update entity memory after vX.Y.Z"
 ```
 
 ## Step 8 — Push + report
@@ -83,13 +125,21 @@ git add entity/nutshell_dev/memory/ && git commit -m "nutshell_dev: update entit
 git push origin main
 ```
 
-Report the feature commit ID to Claude Code.
+Report the feature commit ID (from Step 5) to Claude Code.
 
 ## Step 9 — Update session memory
 
-After pushing, update your session's own memory so this activation ends clean:
+After pushing, update your session's own core memory to reflect completed state:
 
 ```bash
-# Core memory is at sessions/<id>/core/memory.md (relative: core/memory.md from session dir)
-# Update it to reflect completed state
+# Write to sessions/<my-id>/core/memory/work_state.md  (path relative to session workdir)
+cat > core/memory/work_state.md << 'EOF'
+# Work State
+
+## Current Task
+(none — done)
+
+## Last Completed
+vX.Y.Z: <task> (commit: COMMIT_ID)
+EOF
 ```

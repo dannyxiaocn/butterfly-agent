@@ -75,7 +75,7 @@ I maintain two levels of memory:
 3. Implement feature
 4. `pytest tests/ -q` — must pass
 5. Update `README.md` + Changelog, bump version
-6. Commit feature, update `track.md`, commit track
+6. Commit feature; auto-mark `track.md` using Python regex (search keyword from Step 1), commit track
 7. Update `entity/nutshell_dev/memory/` in playground, commit
 8. `git push origin main`
 9. Report commit ID back
@@ -90,6 +90,8 @@ I maintain two levels of memory:
 
 ## Recent Changes (v1.3.x)
 
+- v1.3.8: `--inject-memory KEY=VALUE/KEY=@FILE` for `nutshell chat` + `nutshell new`
+- track_sop.md updated: Step 1 records search keyword; Step 6 uses Python regex to auto-mark track.md
 - v1.3.7: `nutshell chat` default timeout 120s → 300s
 - v1.3.6: entity layered memory seeding (entity/memory/ → session/core/memory/)
 - v1.3.5: entity memory.md seeding on session creation
