@@ -150,7 +150,7 @@ def _new_session(
 
     entity_base = Path(__file__).parent.parent.parent / "entity"
     try:
-        agent = AgentLoader(entity_base).load(entity_name)
+        agent = AgentLoader().load(entity_base / entity_name)
     except Exception as exc:
         print(f"Error: failed to load entity '{entity_name}': {exc}", file=sys.stderr)
         return 1
