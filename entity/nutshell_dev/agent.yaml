@@ -1,5 +1,6 @@
 name: nutshell_dev
 description: Development assistant with nutshell project context. Extends kimi_agent (kimi-for-coding model) with nutshell skill added.
+version: 1.0.0
 extends: kimi_agent
 release_policy: persistent
 max_iterations: 20

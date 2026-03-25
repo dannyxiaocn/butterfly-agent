@@ -1,5 +1,6 @@
 name: kimi_agent
 description: "Kimi model specialist."
+version: 1.0.0
 model: kimi-for-coding
 provider: kimi-coding-plan
 extends: agent

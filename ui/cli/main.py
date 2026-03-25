@@ -9,6 +9,7 @@ Usage:
     nutshell log [SESSION_ID] [-n N]        Show recent conversation history
     nutshell tasks [SESSION_ID]             Show a session's task board
     nutshell entity new [options]           Scaffold a new entity directory
+    nutshell entity log NAME                Show entity version changelog
     nutshell review                         Review pending entity update requests
     nutshell server                         Start the Nutshell server
     nutshell web                            Start the web UI (monitoring)
@@ -577,6 +578,22 @@ def _add_entity_parser(subparsers) -> None:
                       help="Create standalone entity with no inheritance")
     enew.add_argument("--entity-dir", default="entity", metavar="DIR",
                       help="Base directory for entities (default: entity/)")
+
+    elog = esub.add_parser(
+        "log",
+        help="Show entity version changelog.",
+        description=(
+            "Show the version changelog for an entity.\n\n"
+            "Examples:\n"
+            "  nutshell entity log agent\n"
+            "  nutshell entity log nutshell_dev\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    elog.add_argument("name", metavar="NAME", help="Entity name")
+    elog.add_argument("--entity-dir", default="entity", metavar="DIR",
+                      help=argparse.SUPPRESS)
+
     p.set_defaults(func=cmd_entity)
 
 
@@ -600,6 +617,24 @@ def cmd_entity(args) -> int:
         if parent:
             print(f"  (extends '{parent}')")
         return 0
+
+    if args.entity_cmd == "log":
+        from nutshell.runtime.entity_updates import get_entity_version, get_entity_changelog
+        entity_dir = Path(args.entity_dir)
+        entity_path = entity_dir / args.name
+        if not entity_path.exists():
+            print(f"Error: entity '{args.name}' not found in {entity_dir}/", file=sys.stderr)
+            return 1
+        version = get_entity_version(args.name, repo_root=entity_dir.parent)
+        changelog = get_entity_changelog(args.name, repo_root=entity_dir.parent)
+        print(f"Entity: {args.name}  (v{version})")
+        print("─" * 60)
+        if changelog:
+            print(changelog)
+        else:
+            print("(no changelog entries yet — changes are recorded when updates are applied)")
+        return 0
+
     return 0
 
 
@@ -674,7 +709,8 @@ def main() -> None:
             "  nutshell tasks [SESSION_ID]         Show session task board\n\n"
             "Entity management:\n"
             "  nutshell entity new                 Scaffold entity interactively\n"
-            "  nutshell entity new -n NAME         Scaffold entity by name\n\n"
+            "  nutshell entity new -n NAME         Scaffold entity by name\n"
+            "  nutshell entity log NAME            Show entity version changelog\n\n"
             "Other:\n"
             "  nutshell review                     Review agent update requests\n"
             "  nutshell server                     Start the server\n"

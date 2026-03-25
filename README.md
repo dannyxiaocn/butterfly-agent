@@ -1,4 +1,4 @@
-# Nutshell `v1.3.13`
+# Nutshell `v1.3.14`
 
 A minimal Python agent runtime. Agents run as persistent server-managed sessions with autonomous heartbeat ticking. **Primary interface: CLI.**
 
@@ -356,6 +356,13 @@ The web UI polls both files via SSE, resuming from the last byte offset on recon
 ---
 
 ## Changelog
+
+### v1.3.14
+- **Entity version control**: Every entity now has a `version` field in `agent.yaml` (starting at `1.0.0`). When a human applies an agent-proposed update via `nutshell review`, the patch version is bumped automatically (`1.0.0 → 1.0.1`) and a changelog entry is appended to `entity/<name>/CHANGELOG.md`, recording the file changed, session ID, and reason.
+- `nutshell entity log <name>` — new subcommand to display an entity's version and full changelog.
+- `nutshell/runtime/entity_updates.py`: `bump_entity_version()`, `get_entity_version()`, `get_entity_changelog()`, `_extract_entity_name()`, `_bump_patch()`.
+- All three built-in entities (`agent`, `kimi_agent`, `nutshell_dev`) seeded with `version: 1.0.0`.
+- 10 new tests in `test_entity_update.py`; 225 total.
 
 ### v1.3.13
 - **`state_diff` built-in tool**: Token-efficient state tracking for high-frequency status checks. `state_diff(key, content)` stores a named snapshot in `core/state/<key>.txt` and returns a unified diff on subsequent calls. Returns "(initialized)" on first call, "(no change)" when unchanged. Designed for use with `ps`, `df`, `git status`, etc. to avoid re-reading 50+ identical lines every heartbeat.

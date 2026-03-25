@@ -3,6 +3,7 @@
 
 name: agent
 description: A general-purpose assistant with basic capabilities.
+version: 1.0.0
 model: claude-sonnet-4-6
 provider: anthropic
 release_policy: persistent

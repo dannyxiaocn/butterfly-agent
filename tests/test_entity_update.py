@@ -14,6 +14,11 @@ from nutshell.runtime.entity_updates import (
     apply_update,
     reject_update,
     UpdateRecord,
+    bump_entity_version,
+    get_entity_version,
+    get_entity_changelog,
+    _extract_entity_name,
+    _bump_patch,
 )
 
 
@@ -173,3 +178,103 @@ def test_propose_entity_update_registered_as_builtin():
     impl = get_builtin("propose_entity_update")
     assert impl is not None
     assert callable(impl)
+
+
+# ── version control helpers ───────────────────────────────────────────────────
+
+def test_bump_patch_increments_last_component():
+    assert _bump_patch("1.0.0") == "1.0.1"
+    assert _bump_patch("1.2.9") == "1.2.10"
+    assert _bump_patch("0.0.0") == "0.0.1"
+
+
+def test_extract_entity_name_from_file_path():
+    assert _extract_entity_name("entity/agent/prompts/system.md") == "agent"
+    assert _extract_entity_name("entity/nutshell_dev/agent.yaml") == "nutshell_dev"
+    assert _extract_entity_name("other/path/file.md") is None
+
+
+def _make_entity_dir(tmp_path: Path, name: str, version: str = "1.0.0") -> Path:
+    """Create a minimal entity directory with agent.yaml."""
+    entity_dir = tmp_path / "entity" / name
+    entity_dir.mkdir(parents=True)
+    (entity_dir / "agent.yaml").write_text(
+        f"name: {name}\nversion: {version}\n", encoding="utf-8"
+    )
+    return entity_dir
+
+
+def _make_record(file_path: str = "entity/agent/prompts/system.md") -> UpdateRecord:
+    return UpdateRecord(
+        id="test-id",
+        ts="2026-01-15T12:00:00",
+        session_id="sess-abc",
+        file_path=file_path,
+        content="new content",
+        reason="Better clarity",
+        status="pending",
+    )
+
+
+def test_get_entity_version_reads_yaml(tmp_path):
+    _make_entity_dir(tmp_path, "agent", "2.3.4")
+    assert get_entity_version("agent", repo_root=tmp_path) == "2.3.4"
+
+
+def test_get_entity_version_defaults_when_missing(tmp_path):
+    assert get_entity_version("nonexistent", repo_root=tmp_path) == "1.0.0"
+
+
+def test_bump_entity_version_increments_yaml(tmp_path):
+    _make_entity_dir(tmp_path, "agent", "1.0.0")
+    record = _make_record()
+    new_ver = bump_entity_version("agent", record, repo_root=tmp_path)
+    assert new_ver == "1.0.1"
+    assert get_entity_version("agent", repo_root=tmp_path) == "1.0.1"
+
+
+def test_bump_entity_version_creates_changelog(tmp_path):
+    _make_entity_dir(tmp_path, "agent", "1.0.0")
+    record = _make_record()
+    bump_entity_version("agent", record, repo_root=tmp_path)
+    changelog = get_entity_changelog("agent", repo_root=tmp_path)
+    assert "v1.0.1" in changelog
+    assert "entity/agent/prompts/system.md" in changelog
+    assert "sess-abc" in changelog
+    assert "Better clarity" in changelog
+
+
+def test_bump_entity_version_consecutive_bumps(tmp_path):
+    _make_entity_dir(tmp_path, "agent", "1.0.0")
+    bump_entity_version("agent", _make_record(), repo_root=tmp_path)
+    bump_entity_version("agent", _make_record(), repo_root=tmp_path)
+    assert get_entity_version("agent", repo_root=tmp_path) == "1.0.2"
+    changelog = get_entity_changelog("agent", repo_root=tmp_path)
+    assert "v1.0.1" in changelog
+    assert "v1.0.2" in changelog
+
+
+def test_bump_entity_version_changelog_has_title(tmp_path):
+    _make_entity_dir(tmp_path, "myagent", "1.0.0")
+    bump_entity_version("myagent", _make_record("entity/myagent/prompts/system.md"), repo_root=tmp_path)
+    changelog = get_entity_changelog("myagent", repo_root=tmp_path)
+    assert changelog.startswith("# myagent Changelog")
+
+
+def test_apply_update_bumps_entity_version(tmp_path):
+    updates_base = tmp_path / "updates"
+    _make_entity_dir(tmp_path, "agent", "1.0.0")
+    (tmp_path / "entity" / "agent" / "prompts").mkdir(parents=True)
+    (tmp_path / "entity" / "agent" / "prompts" / "system.md").write_text("old content")
+
+    uid = _write_update(updates_base, "entity/agent/prompts/system.md")
+    apply_update(uid, updates_base=updates_base, entity_base=tmp_path)
+
+    assert get_entity_version("agent", repo_root=tmp_path) == "1.0.1"
+    changelog = get_entity_changelog("agent", repo_root=tmp_path)
+    assert "v1.0.1" in changelog
+
+
+def test_get_entity_changelog_empty_when_no_changelog(tmp_path):
+    _make_entity_dir(tmp_path, "agent", "1.0.0")
+    assert get_entity_changelog("agent", repo_root=tmp_path) == ""
