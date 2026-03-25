@@ -84,21 +84,36 @@ class Agent(BaseAgent):
             self._provider = AnthropicProvider()
         return self._provider
 
-    def _build_system_prompt(self) -> str:
+    def _build_system_parts(self) -> tuple[str, str]:
+        """Return (static_prefix, dynamic_suffix) for cache-aware prompt building.
+
+        static_prefix  — system.md + session context. Stable across activations;
+                         eligible for Anthropic prompt caching.
+        dynamic_suffix — memory + skills. Changes each activation; not cached.
+        """
         from nutshell.skill_engine.renderer import build_skills_block
-        parts = [self.system_prompt] if self.system_prompt else []
+        static_parts = [self.system_prompt] if self.system_prompt else []
         if self.session_context:
-            parts.append("\n\n---\n" + self.session_context)
+            static_parts.append("\n\n---\n" + self.session_context)
+
+        dynamic_parts: list[str] = []
         if self.memory or self.memory_layers:
             memory_parts = []
             if self.memory:
                 memory_parts.append(f"## Session Memory\n\n{self.memory}")
             for name, content in self.memory_layers:
                 memory_parts.append(f"## Memory: {name}\n\n{content}")
-            parts.append("\n\n---\n" + "\n\n".join(memory_parts))
+            dynamic_parts.append("\n\n---\n" + "\n\n".join(memory_parts))
         skills_block = build_skills_block(self.skills)
         if skills_block:
-            parts.append(skills_block)
+            dynamic_parts.append(skills_block)
+
+        return "\n".join(static_parts), "\n".join(dynamic_parts)
+
+    def _build_system_prompt(self) -> str:
+        """Return full system prompt as a single string (backward-compatible)."""
+        prefix, suffix = self._build_system_parts()
+        parts = [p for p in [prefix, suffix] if p]
         return "\n".join(parts)
 
     def _tool_map(self) -> dict[str, Tool]:
@@ -121,7 +136,7 @@ class Agent(BaseAgent):
         if clear_history:
             self._history = []
 
-        system = self._build_system_prompt()
+        system_prefix, system_dynamic = self._build_system_parts()
         tool_map = self._tool_map()
         messages: list[Message] = [*self._history, Message(role="user", content=input)]
         all_tool_calls: list[ToolCall] = []
@@ -130,9 +145,10 @@ class Agent(BaseAgent):
             content, tool_calls = await self.provider.complete(
                 messages=messages,
                 tools=self.tools,
-                system_prompt=system,
+                system_prompt=system_dynamic,
                 model=self.model,
                 on_text_chunk=on_text_chunk,
+                cache_system_prefix=system_prefix,
             )
             # Only stream the first completion; subsequent rounds (tool loops)
             # don't stream since the user only cares about the final text.
