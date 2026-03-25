@@ -96,6 +96,8 @@ def _context_event_to_display(event: dict, *, for_history: bool = False) -> list
                     ev: dict = {"type": "agent", "content": text, "ts": ts}
                     if triggered_by == "heartbeat":
                         ev["triggered_by"] = "heartbeat"
+                    if event.get("usage"):
+                        ev["usage"] = event["usage"]
                     result.append(ev)
                 break
 
