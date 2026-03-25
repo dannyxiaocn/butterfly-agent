@@ -50,15 +50,33 @@ Claude Code will see the push and handle any review/merge from there.
 - If I discover sub-tasks or missing features mid-work: add new `[ ]` items directly
 - Commit `track.md` separately: `git commit -m "track: ..."`
 
+## Memory Self-Update
+
+I maintain two levels of memory:
+
+**Session memory** (survives activations within same session):
+- `core/memory.md` — primary memory, write freely with bash
+- `core/memory/*.md` — named layers, each becomes `## Memory: {stem}` in prompt
+- Re-read from disk on every activation — writes take effect immediately next turn
+
+**Entity memory** (survives across sessions, seeds new sessions):
+- `playground/nutshell/entity/nutshell_dev/memory.md` — main template
+- `playground/nutshell/entity/nutshell_dev/memory/*.md` — layer templates
+- Update these in playground and push — future sessions inherit the changes
+
+**Rule**: At the end of every task, update both levels:
+1. `core/memory/work_state.md` — mark task done, record commit
+2. `entity/nutshell_dev/memory/work_state.md` + `memory.md` (version bump) in playground → push
+
 ## Development SOP (summary)
 
-1. **Setup**: `git clone` if needed, `cd playground/nutshell`, `git pull` to sync
-2. Implement feature
-3. `pytest tests/ -q` — must pass
-4. Update `README.md` (section + Changelog)
-5. Bump version in `pyproject.toml` AND `README.md` heading
-6. Commit: `vX.Y.Z: short summary\n\n- bullets`
-7. Update `track.md`, commit
+1. **Setup**: `git clone` if needed, `cd playground/nutshell`, `git pull`
+2. Write task to `core/memory/work_state.md` (session-level)
+3. Implement feature
+4. `pytest tests/ -q` — must pass
+5. Update `README.md` + Changelog, bump version
+6. Commit feature, update `track.md`, commit track
+7. Update `entity/nutshell_dev/memory/` in playground, commit
 8. `git push origin main`
 9. Report commit ID back
 

@@ -216,6 +216,40 @@ print(args['query'].upper())
 
 After writing both files, call `reload_capabilities`.
 
+### Memory
+
+Each session has two memory structures, both re-read from disk on **every activation**:
+
+| File | Prompt block | Writable by agent |
+|------|-------------|-------------------|
+| `core/memory.md` | `## Session Memory` | Yes — `echo/cat >` via bash |
+| `core/memory/<name>.md` | `## Memory: <name>` | Yes — write any `.md` file |
+
+**Memory is injected after `session.md` but before skills**, so it's in the dynamic (non-cached) suffix.
+
+**Agents update session memory by writing files:**
+```bash
+# Overwrite primary memory
+echo "Last task: feature X done (commit abc123)" > core/memory.md
+
+# Add/update a named layer
+cat > core/memory/work_state.md << 'EOF'
+## Current Task
+Implementing feature Y
+EOF
+```
+
+Changes take effect on the **next activation** — the runtime re-reads from disk each time.
+
+**Cross-session memory** (for entities like `nutshell_dev`): update the entity's template files in `entity/<name>/memory.md` + `entity/<name>/memory/*.md` and push. `session_factory` seeds new sessions from these templates.
+
+```
+Session memory:   sessions/<id>/core/memory.md        ← per-session, mutable
+                  sessions/<id>/core/memory/<name>.md  ← named layers, mutable
+Entity template:  entity/<name>/memory.md              ← seeds new sessions
+                  entity/<name>/memory/<name>.md        ← seeds named layers
+```
+
 ---
 
 ## Project Structure
