@@ -8,6 +8,30 @@
 
 ---
 
+## 用 Nutshell 开发 Nutshell（meta SOP）
+
+> 用 nutshell 的 agent 来完成 nutshell 自身的开发任务——真正的 filesystem-as-everything 实践。
+
+### SOP
+1. 用 `entity/nutshell_dev` agent 领取 track.md 中的任务
+2. 发现 bug/error → 立即修复 nutshell 本身
+3. 发现缺少功能 → 在 track.md 加 new todo
+4. 持续更新 nutshell_dev 的 memory / skill / tool，让它越来越强
+
+### 使用方式
+```bash
+nutshell chat --entity nutshell_dev "领取 track.md 中的下一个任务并实现"
+nutshell log -n 10                    # 查看 agent 进展
+nutshell tasks                        # 查看 agent 任务板
+```
+
+### 待完成（nutshell_dev 驱动）
+- [ ] 让 nutshell_dev 能自主领取 track.md 任务并完成（heartbeat-driven）
+- [ ] nutshell_dev memory 包含 track.md 当前状态快照
+- [ ] nutshell_dev 能自动在完成后标记 track.md + commit
+
+---
+
 ## 全面转向 CLI
 
 agent 自己就可以使用，自己就可以迭代
@@ -160,26 +184,3 @@ agent 自己就可以使用，自己就可以迭代
 - [ ] 看一下 skills、harness 大家的实现，学习
 - [ ] 看一下 context engineering
 
----
-
-## 用 Nutshell 开发 Nutshell（meta SOP）
-
-> 用 nutshell 的 agent 来完成 nutshell 自身的开发任务——真正的 filesystem-as-everything 实践。
-
-### SOP
-1. 用 `entity/nutshell_dev` agent 领取 track.md 中的任务
-2. 发现 bug/error → 立即修复 nutshell 本身
-3. 发现缺少功能 → 在 track.md 加 new todo
-4. 持续更新 nutshell_dev 的 memory / skill / tool，让它越来越强
-
-### 使用方式
-```bash
-nutshell chat --entity nutshell_dev "领取 track.md 中的下一个任务并实现"
-nutshell log --n 10                   # 查看 agent 进展
-nutshell tasks                        # 查看 agent 任务板
-```
-
-### 待完成（nutshell_dev 驱动）
-- [ ] 让 nutshell_dev 能自主领取 track.md 任务并完成（heartbeat-driven）
-- [ ] nutshell_dev memory 包含 track.md 当前状态快照
-- [ ] nutshell_dev 能自动在完成后标记 track.md + commit
