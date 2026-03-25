@@ -11,6 +11,7 @@ Usage:
     nutshell entity new [options]           Scaffold a new entity directory
     nutshell entity log NAME                Show entity version changelog
     nutshell prompt-stats [SESSION_ID]      Show prompt space breakdown for a session
+    nutshell token-report [SESSION_ID]      Show per-turn token usage breakdown
     nutshell review                         Review pending entity update requests
     nutshell server                         Start the Nutshell server
     nutshell web                            Start the web UI (monitoring)
@@ -496,6 +497,135 @@ def cmd_log(args) -> int:
     return 0
 
 
+# ── Subcommand: token-report ──────────────────────────────────────────────────
+
+def _add_token_report_parser(subparsers) -> None:
+    p = subparsers.add_parser(
+        "token-report",
+        help="Show per-turn token usage breakdown for a session.",
+        description=(
+            "Display token costs per turn with totals and cache efficiency.\n\n"
+            "Examples:\n"
+            "  nutshell token-report                       Latest session\n"
+            "  nutshell token-report 2026-03-25_10-00-00   Specific session\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p.add_argument("session_id", nargs="?", default=None,
+                   help="Session ID (default: most recently active session)")
+    p.add_argument("--system-base", type=Path, default=_DEFAULT_SYSTEM_BASE,
+                   help=argparse.SUPPRESS)
+    p.add_argument("--sessions-base", type=Path, default=_DEFAULT_SESSIONS_BASE,
+                   help=argparse.SUPPRESS)
+    p.set_defaults(func=cmd_token_report)
+
+
+def cmd_token_report(args) -> int:
+    session_id = args.session_id
+    if not session_id:
+        sessions = _read_all_sessions(args.sessions_base, args.system_base)
+        if not sessions:
+            print("No sessions found.", file=sys.stderr)
+            return 1
+        session_id = sessions[0]["id"]
+
+    context_path = args.system_base / session_id / "context.jsonl"
+    if not context_path.exists():
+        if not (args.system_base / session_id / "manifest.json").exists():
+            print(f"Error: session '{session_id}' not found", file=sys.stderr)
+            return 1
+        print(f"[{session_id}] No conversation history yet.")
+        return 0
+
+    lines = [l for l in context_path.read_text(encoding="utf-8").splitlines() if l.strip()]
+    events = []
+    for line in lines:
+        try:
+            events.append(json.loads(line))
+        except json.JSONDecodeError:
+            pass
+
+    inputs_by_id: dict[str, dict] = {}
+    turns: list[dict] = []
+    for ev in events:
+        if ev.get("type") == "user_input":
+            inputs_by_id[ev["id"]] = ev
+        elif ev.get("type") == "turn":
+            turns.append(ev)
+
+    if not turns:
+        print(f"[{session_id}] No turns with token data yet.")
+        return 0
+
+    # Collect per-turn data
+    rows = []
+    for i, turn in enumerate(turns, 1):
+        usage = turn.get("usage") or {}
+        inp = usage.get("input", 0) or 0
+        out = usage.get("output", 0) or 0
+        cr = usage.get("cache_read", 0) or 0
+        cw = usage.get("cache_write", 0) or 0
+        uid = turn.get("user_input_id")
+        user_ev = inputs_by_id.get(uid) if uid else None
+        ts = (user_ev or turn).get("ts", "")[:16].replace("T", " ")
+        trigger = ""
+        if user_ev:
+            raw = user_ev.get("content", "")
+            trigger = (raw[:40] + "…") if len(raw) > 40 else raw
+        elif turn.get("pre_triggered"):
+            trigger = "[heartbeat]"
+        rows.append((i, ts, trigger, inp, out, cr, cw))
+
+    # Column widths
+    W = (4, 16, 42, 8, 8, 8, 8)
+    header = (
+        f"{'#':>{W[0]}}  {'Time':<{W[1]}}  {'Trigger':<{W[2]}}"
+        f"  {'Input':>{W[3]}}  {'Output':>{W[4]}}  {'CacheR':>{W[5]}}  {'CacheW':>{W[6]}}"
+    )
+    sep = "─" * (sum(W) + 2 * 6)
+
+    print(f"[{session_id}] token-report  ({len(rows)} turns)")
+    print(sep)
+    print(header)
+    print(sep)
+    for idx, ts, trigger, inp, out, cr, cw in rows:
+        print(
+            f"{idx:>{W[0]}}  {ts:<{W[1]}}  {trigger:<{W[2]}}"
+            f"  {inp:>{W[3]}}  {out:>{W[4]}}  {cr:>{W[5]}}  {cw:>{W[6]}}"
+        )
+    print(sep)
+
+    # Totals
+    total_inp = sum(r[3] for r in rows)
+    total_out = sum(r[4] for r in rows)
+    total_cr  = sum(r[5] for r in rows)
+    total_cw  = sum(r[6] for r in rows)
+    print(
+        f"{'TOT':>{W[0]}}  {'':>{W[1]}}  {'':>{W[2]}}"
+        f"  {total_inp:>{W[3]}}  {total_out:>{W[4]}}  {total_cr:>{W[5]}}  {total_cw:>{W[6]}}"
+    )
+
+    # Cache efficiency
+    total_billed = total_inp + total_out
+    if total_billed > 0:
+        cache_pct = total_cr * 100 // (total_inp + total_cr) if (total_inp + total_cr) > 0 else 0
+        print()
+        print(f"  Cache hit rate : {cache_pct}%  ({total_cr:,} read / {total_inp + total_cr:,} total input)")
+        print(f"  Billed tokens  : {total_billed:,}  (input {total_inp:,} + output {total_out:,})")
+
+        # Highlight the most expensive turns (top 3 by input)
+        ranked = sorted(rows, key=lambda r: r[3] + r[4], reverse=True)[:3]
+        if ranked and ranked[0][3] + ranked[0][4] > 0:
+            print()
+            print("  Most expensive turns (by input+output):")
+            for idx, ts, trigger, inp, out, cr, cw in ranked:
+                total = inp + out
+                if total > 0:
+                    print(f"    #{idx:>3}  {ts}  {inp+out:>8} tok  {trigger}")
+
+    return 0
+
+
 # ── Subcommand: tasks ─────────────────────────────────────────────────────────
 
 def _add_tasks_parser(subparsers) -> None:
@@ -853,7 +983,8 @@ def main() -> None:
             "  nutshell entity new -n NAME         Scaffold entity by name\n"
             "  nutshell entity log NAME            Show entity version changelog\n\n"
             "Diagnostics:\n"
-            "  nutshell prompt-stats [SESSION_ID]  Show prompt space breakdown\n\n"
+            "  nutshell prompt-stats [SESSION_ID]  Show prompt space breakdown\n"
+            "  nutshell token-report [SESSION_ID]  Show per-turn token costs\n\n"
             "Other:\n"
             "  nutshell review                     Review agent update requests\n"
             "  nutshell server                     Start the server\n"
@@ -873,6 +1004,7 @@ def main() -> None:
     _add_tasks_parser(subparsers)
     _add_entity_parser(subparsers)
     _add_prompt_stats_parser(subparsers)
+    _add_token_report_parser(subparsers)
     _add_review_parser(subparsers)
     _add_exec_parser(subparsers, "server", "Start the Nutshell server daemon.")
     _add_exec_parser(subparsers, "web",    "Start the web UI at http://localhost:8080 (monitoring).")

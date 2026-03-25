@@ -1,4 +1,4 @@
-# Nutshell `v1.3.16`
+# Nutshell `v1.3.17`
 
 A minimal Python agent runtime. Agents run as persistent server-managed sessions with autonomous heartbeat ticking. **Primary interface: CLI.**
 
@@ -356,6 +356,10 @@ The web UI polls both files via SSE, resuming from the last byte offset on recon
 ---
 
 ## Changelog
+
+### v1.3.17
+- **`nutshell token-report [SESSION_ID]`**: New diagnostic command showing per-turn token costs — columns: turn #, timestamp, trigger preview, input/output/cache-read/cache-write tokens. Includes session totals, cache hit rate, and top-3 most expensive turns. Makes prompt token economics visible so users and agents can find cheaper paths.
+- 10 new tests in `test_cli_token_report.py`; 253 total.
 
 ### v1.3.16
 - **`git_checkpoint` built-in tool**: Agents can now call `git_checkpoint(message, workdir)` to stage all changes and create a checkpoint commit in a git repository within their session workspace. Returns the commit hash + summary, or `(nothing to commit)` if the tree is clean. Designed for the nutshell_dev playground workflow: `git_checkpoint(message="feat: X", workdir="playground/nutshell")`.
