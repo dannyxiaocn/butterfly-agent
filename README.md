@@ -1,4 +1,4 @@
-# Nutshell `v1.3.10`
+# Nutshell `v1.3.11`
 
 A minimal Python agent runtime. Agents run as persistent server-managed sessions with autonomous heartbeat ticking. **Primary interface: CLI.**
 
@@ -246,6 +246,26 @@ Changes take effect on the **next activation** — the runtime re-reads from dis
 
 **Cross-session memory** (for entities like `nutshell_dev`): update the entity's template files in `entity/<name>/memory.md` + `entity/<name>/memory/*.md` and push. `session_factory` seeds new sessions from these templates.
 
+### nutshell_dev — autonomous development agent
+
+`nutshell_dev` is an entity that develops nutshell itself. Two usage modes:
+
+**Dispatched mode** (Claude Code → nutshell_dev):
+```bash
+nutshell chat --entity nutshell_dev --timeout 300 "任务：<description>"
+```
+
+**Autonomous heartbeat mode** (self-selects tasks from track.md):
+```bash
+# Create a persistent session
+nutshell new --entity nutshell_dev dev-session
+
+# Start the server (picks up the session and runs heartbeats)
+nutshell server
+```
+
+On each heartbeat, `nutshell_dev` reads `track.md`, picks the first actionable `[ ]` task, implements it following its SOP (clone → implement → test → commit → mark done → push), then picks the next task. Stops when no actionable items remain.
+
 ```
 Session memory:   sessions/<id>/core/memory.md        ← per-session, mutable
                   sessions/<id>/core/memory/<name>.md  ← named layers, mutable
@@ -334,6 +354,11 @@ The web UI polls both files via SSE, resuming from the last byte offset on recon
 ---
 
 ## Changelog
+
+### v1.3.11
+- **nutshell_dev autonomous heartbeat**: `entity/nutshell_dev` now ships a custom `prompts/heartbeat.md` that drives fully autonomous task selection from `track.md`. On each heartbeat: empty task board → reads `track.md`, picks the first actionable `[ ]` item, writes it to `core/tasks.md`, and begins; non-empty board → follows SOP, commits, pushes, marks done, then picks the next task or returns `SESSION_FINISHED`.
+- `entity/nutshell_dev/agent.yaml` updated: `heartbeat: prompts/heartbeat.md`.
+- README documents autonomous mode (`nutshell new --entity nutshell_dev` + `nutshell server`).
 
 ### v1.3.10
 - **Memory layer progressive disclosure**: Large named memory layers (`core/memory/*.md`) are now truncated in the system prompt using the same approach as file-backed skills. Layers within 60 lines are injected verbatim; larger layers show the first 60 lines plus a bash hint (`cat core/memory/<name>.md`) so the agent reads the rest on demand. Primary `memory.md` is unaffected.

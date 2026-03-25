@@ -5,9 +5,9 @@ release_policy: persistent
 max_iterations: 20
 
 prompts:
-  system:           # inherited from kimi_agent → agent
-  heartbeat:        # inherited
-  session_context:  # inherited
+  system:                        # inherited from kimi_agent → agent
+  heartbeat: prompts/heartbeat.md  # autonomous track.md task selection
+  session_context:               # inherited
 
 tools:    # inherited from kimi_agent → agent
 
