@@ -7,7 +7,7 @@ description: "Full development context for the nutshell project. Use this skill 
 
 Complete workbench for developing nutshell.
 
-Current version: **v1.2.7** | Tests: `pytest tests/ -q` (150 passing)
+Current version: **v1.2.8** | Tests: `pytest tests/ -q` (152 passing)
 
 ---
 
