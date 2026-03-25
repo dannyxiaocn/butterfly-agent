@@ -38,7 +38,7 @@
 ```
 
 ### 待完成（nutshell_dev 驱动）
-- [ ] 让 nutshell_dev 能自主领取 track.md 任务并完成（heartbeat-driven）
+- [x] 让 nutshell_dev 能自主领取 track.md 任务并完成（heartbeat-driven） <!-- 173e884 v1.3.11 -->
 - [x] nutshell_dev memory 包含 track.md 当前状态快照 <!-- be6f2cc v1.3.6 -->
     - [x] entity layered memory 目录支持（entity/memory/ → session/core/memory/） <!-- be6f2cc v1.3.6 -->
     - [x] track.md 未完成任务列表动态注入 memory — `--inject-memory track=@track.md` 支持运行时文件注入 <!-- 37a04d2 v1.3.8 -->
