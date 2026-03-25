@@ -12,3 +12,4 @@ venv/
 .claude/
 sessions/
 _sessions/
+_entity_updates/

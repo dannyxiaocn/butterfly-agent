@@ -3,12 +3,10 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 from datetime import datetime
 from pathlib import Path
 
-from nutshell.runtime.params import ensure_session_params, write_session_params
-from nutshell.runtime.status import ensure_session_status, read_session_status, write_session_status
+from nutshell.runtime.status import read_session_status
 
 
 def _pid_alive(pid: int | None) -> bool:
@@ -74,12 +72,6 @@ def _sort_sessions(sessions: list[dict]) -> list[dict]:
     return sessions
 
 
-def _write_if_absent(path: Path, content: str) -> None:
-    """Write content to path only if it does not already exist."""
-    if not path.exists():
-        path.write_text(content, encoding="utf-8")
-
-
 def _init_session(
     sessions_dir: Path,
     system_sessions_dir: Path,
@@ -89,83 +81,30 @@ def _init_session(
 ) -> None:
     """Initialize a new session directory structure by copying entity content to core/.
 
-    Idempotent: only writes files that do not already exist, except manifest.json.
+    Delegates to nutshell.runtime.session_factory.init_session.
+    `entity` may be a full relative path ('entity/agent') or just a name ('agent').
     """
-    session_dir = sessions_dir / session_id
-    system_dir = system_sessions_dir / session_id
-    core_dir = session_dir / "core"
+    from nutshell.runtime.session_factory import init_session
 
-    core_dir.mkdir(parents=True, exist_ok=True)
-    (core_dir / "tools").mkdir(exist_ok=True)
-    (core_dir / "skills").mkdir(exist_ok=True)
-    (session_dir / "docs").mkdir(exist_ok=True)
-    (session_dir / "playground").mkdir(exist_ok=True)
-    system_dir.mkdir(parents=True, exist_ok=True)
-
-    (system_dir / "context.jsonl").touch(exist_ok=True)
-    (system_dir / "events.jsonl").touch(exist_ok=True)
-
-    manifest = {
-        "session_id": session_id,
-        "entity": entity,
-        "created_at": datetime.now().isoformat(),
-    }
-    (system_dir / "manifest.json").write_text(
-        json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
-    )
-
+    # Resolve entity_name and entity_base from the entity string
+    # Web UI historically passes full paths like "entity/agent"
     entity_path = Path(entity)
-    agent = None
-    if entity_path.exists():
-        try:
-            from nutshell import AgentLoader
-            agent = AgentLoader().load(entity_path)
-        except Exception as e:
-            print(f"[web] Warning: failed to load entity '{entity}': {e}")
-
-    if agent is not None:
-        _write_if_absent(core_dir / "system.md", agent.system_prompt or "")
-        _write_if_absent(core_dir / "heartbeat.md", agent.heartbeat_prompt or "")
-        _write_if_absent(core_dir / "session.md", agent.session_context_template or "")
-
-        for t in agent.tools:
-            tool_json = core_dir / "tools" / f"{t.name}.json"
-            if not tool_json.exists():
-                schema = {"name": t.name, "description": t.description, "input_schema": t.schema}
-                tool_json.write_text(json.dumps(schema, indent=2, ensure_ascii=False), encoding="utf-8")
-
-        for s in agent.skills:
-            skill_dir = core_dir / "skills" / s.name
-            if not skill_dir.exists():
-                if s.location is not None:
-                    src_dir = s.location.parent
-                    if src_dir.is_dir():
-                        shutil.copytree(src_dir, skill_dir, dirs_exist_ok=True)
-                    else:
-                        skill_dir.mkdir(parents=True, exist_ok=True)
-                        shutil.copy2(s.location, skill_dir / "SKILL.md")
-                else:
-                    skill_dir.mkdir(parents=True, exist_ok=True)
-                    content = f"---\nname: {s.name}\ndescription: {s.description}\n---\n\n{s.body}\n"
-                    (skill_dir / "SKILL.md").write_text(content, encoding="utf-8")
-
-        if not (core_dir / "params.json").exists():
-            from nutshell.llm_engine.registry import provider_name as pname
-            entity_provider = pname(agent._provider) or "anthropic"
-            write_session_params(session_dir, heartbeat_interval=heartbeat,
-                                 model=agent.model, provider=entity_provider)
-        else:
-            write_session_params(session_dir, heartbeat_interval=heartbeat)
+    if len(entity_path.parts) >= 2 and entity_path.parts[0] == "entity":
+        entity_name = str(Path(*entity_path.parts[1:]))
+        entity_base = sessions_dir.parent / "entity"
+    elif entity_path.is_absolute() or entity_path.parent != Path("."):
+        # Full or relative path — use parent as entity_base
+        entity_name = entity_path.name
+        entity_base = entity_path.parent.resolve() if not entity_path.is_absolute() else entity_path.parent
     else:
-        for fname in ("system.md", "heartbeat.md", "session.md"):
-            _write_if_absent(core_dir / fname, "")
-        if not (core_dir / "params.json").exists():
-            ensure_session_params(session_dir, heartbeat_interval=heartbeat)
-        else:
-            write_session_params(session_dir, heartbeat_interval=heartbeat)
+        entity_name = entity
+        entity_base = sessions_dir.parent / "entity"
 
-    _write_if_absent(core_dir / "memory.md", "")
-    _write_if_absent(core_dir / "tasks.md", "")
-
-    ensure_session_status(system_dir)
-    write_session_status(system_dir, heartbeat_interval=heartbeat)
+    init_session(
+        session_id=session_id,
+        entity_name=entity_name,
+        sessions_base=sessions_dir,
+        system_sessions_base=system_sessions_dir,
+        entity_base=entity_base,
+        heartbeat=heartbeat,
+    )

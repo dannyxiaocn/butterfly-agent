@@ -1,0 +1,22 @@
+{
+  "name": "spawn_session",
+  "description": "Create a new agent session dynamically. The session is initialised from the given entity and picked up by nutshell-server automatically. Use send_to_session to communicate with the spawned session after it starts. Ideal for delegating subtasks to specialised sub-agents.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "entity": {
+        "type": "string",
+        "description": "Entity name to use for the new session (e.g. 'agent', 'kimi_agent'). Must match a directory name under entity/."
+      },
+      "initial_message": {
+        "type": "string",
+        "description": "Optional first message to write to the new session. If provided, the session will respond immediately when the server picks it up."
+      },
+      "heartbeat": {
+        "type": "number",
+        "description": "Heartbeat interval in seconds (default: 600). Lower values mean more frequent autonomous activation."
+      }
+    },
+    "required": []
+  }
+}
