@@ -1,4 +1,4 @@
-# Nutshell `v1.3.31`
+# Nutshell `v1.3.32`
 
 A minimal Python agent runtime. Agents run as persistent server-managed sessions with autonomous heartbeat ticking. **Primary interface: CLI.**
 
@@ -48,6 +48,10 @@ nutshell friends --json               # JSON output for agents
 nutshell kanban                       # unified task board (all sessions)
 nutshell kanban --session ID          # single session
 nutshell kanban --json                # JSON output for agents
+
+nutshell visit                        # agent room view (latest session)
+nutshell visit SESSION_ID             # specific session room view
+nutshell visit --json                 # JSON output for agents
 
 nutshell new                          # create session (entity: agent, auto-generated ID)
 nutshell new --entity kimi_agent      # specific entity
@@ -416,6 +420,10 @@ The web UI polls both files via SSE, resuming from the last byte offset on recon
 ---
 
 ## Changelog
+
+### v1.3.32
+- **visit**: `nutshell visit [SESSION_ID]` — agent room view showing entity, status, recent activity (last 3 context entries), task board, and app notifications
+- Supports `--json` for machine-readable output; defaults to latest session when no ID given
 
 ### v1.3.31
 - **Auto-model selection** — new `auto_model` field in `params.json` (default: `false`). When enabled, `tick()` evaluates `tasks.md` complexity via lightweight text heuristics and temporarily overrides the agent model (haiku for simple, sonnet for medium, opus for complex). Supports Anthropic and OpenAI providers. Original model restored after each tick. Harness snapshot records `auto_model_override` field.

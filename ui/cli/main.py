@@ -1110,6 +1110,38 @@ def _cmd_repo_dev(args) -> int:
     return cmd_repo_dev(args)
 
 
+
+# ── Subcommand: visit ─────────────────────────────────────────────────────────
+
+def _add_visit_parser(subparsers) -> None:
+    p = subparsers.add_parser(
+        "visit",
+        help="Agent room view — detailed status of a single session.",
+        description=(
+            "Show an agent's room: identity, status, recent activity,\n"
+            "task board, and app notifications.\n\n"
+            "Examples:\n"
+            "  nutshell visit                       # latest session\n"
+            "  nutshell visit 2026-03-25_11-06-53   # specific session\n"
+            "  nutshell visit --json                # JSON output\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p.add_argument("session_id", nargs="?", default=None, metavar="SESSION_ID",
+                   help="Session ID (default: latest session)")
+    p.add_argument("--json", action="store_true", dest="as_json",
+                   help="Output as JSON")
+    p.add_argument("--system-base", type=Path, default=_DEFAULT_SYSTEM_BASE,
+                   help=argparse.SUPPRESS)
+    p.add_argument("--sessions-base", type=Path, default=_DEFAULT_SESSIONS_BASE,
+                   help=argparse.SUPPRESS)
+    p.set_defaults(func=_cmd_visit)
+
+
+def _cmd_visit(args) -> int:
+    from ui.cli.visit import cmd_visit
+    return cmd_visit(args)
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -1165,6 +1197,7 @@ def main() -> None:
     _add_kanban_parser(subparsers)
     _add_repo_skill_parser(subparsers)
     _add_repo_dev_parser(subparsers)
+    _add_visit_parser(subparsers)
     _add_exec_parser(subparsers, "server", "Start the Nutshell server daemon.")
     _add_exec_parser(subparsers, "web",    "Start the web UI at http://localhost:8080 (monitoring).")
     _add_exec_parser(subparsers, "tui",    "Start the terminal UI (TUI) — sessions, chat, tasks.")
