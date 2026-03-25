@@ -92,8 +92,8 @@ agent 自己就可以使用，自己就可以迭代
         - [x] agent 需要的一个 playground 也要创建（一个是 local computer，另一个是对应具体的系统文件的位置，这个 Agent's Computer 要怎么设计，类似于机密文件放在什么地方的感觉）
     - [x] 可能要思考一下有 tool 之后的架构要怎么 reshape 了 —> 参考一下 pi-ai? 以及 tinyclaw, ironclaw 这些…
 
-- [ ] 站在 skills 的角度思考一下这种分段式 load in 的感觉和思路
-    - [ ] 优化一下系统 prompt，太长了，想一下 skill 的这种"分区"的思路
+- [x] 站在 skills 的角度思考一下这种分段式 load in 的感觉和思路 <!-- 3c12fce v1.3.10 -->
+    - [x] 优化一下系统 prompt，太长了，想一下 skill 的这种"分区"的思路 — memory layer 超过 60 行自动截断，agent 按需 cat <!-- 3c12fce v1.3.10 -->
 
 - [x] [tool]
     - [x] 想让 Agent 自己可以写 tool —> 要怎么设计这个
