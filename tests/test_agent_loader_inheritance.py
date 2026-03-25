@@ -381,3 +381,22 @@ def test_real_kimi_agent_inherits_tools_from_agent():
     assert len(agent.tools) > 0
     names = {t.name for t in agent.tools}
     assert "bash" in names
+
+
+def test_agent_entity_loads_all_builtin_tools():
+    """agent entity must include all built-in tools so sessions have full capability."""
+    entity_root = Path(__file__).parent.parent / "entity"
+    agent = AgentLoader().load(entity_root / "agent")
+    names = {t.name for t in agent.tools}
+
+    expected = {
+        "bash",
+        "web_search",
+        "send_to_session",
+        "spawn_session",
+        "propose_entity_update",
+        "fetch_url",
+        "recall_memory",
+    }
+    missing = expected - names
+    assert not missing, f"Missing tools from agent entity: {missing}"

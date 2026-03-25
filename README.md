@@ -1,4 +1,4 @@
-# Nutshell `v1.2.5`
+# Nutshell `v1.2.6`
 
 A minimal Python agent runtime. Agents run as persistent server-managed sessions with autonomous heartbeat ticking, accessible via web browser.
 
@@ -293,6 +293,10 @@ The web UI polls both files via SSE, resuming from the last byte offset on recon
 ---
 
 ## Changelog
+
+### v1.2.6
+- **Fix: all built-in tools now available in sessions** — `entity/agent/agent.yaml` previously only listed `bash` and `web_search`. The other 5 built-in tools (`send_to_session`, `spawn_session`, `propose_entity_update`, `fetch_url`, `recall_memory`) were present as `.json` files but omitted from agent.yaml, so they were never copied to `core/tools/` during session init. Sessions had no access to these tools. All tools now listed in agent.yaml.
+- 1 new test in `test_agent_loader_inheritance.py` (asserts all 7 built-in tools present); 146 total.
 
 ### v1.2.5
 - **Heartbeat history pruning** — after each heartbeat activation, the verbose heartbeat prompt in agent history is replaced with a compact `[Heartbeat <ts>]` marker. For sessions with many heartbeat cycles, this prevents heartbeat instructions from accumulating in the context window, significantly reducing token costs on long-running tasks.

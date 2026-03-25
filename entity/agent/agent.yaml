@@ -16,6 +16,11 @@ prompts:
 tools:
   - tools/bash.json
   - tools/web_search.json
+  - tools/send_to_session.json
+  - tools/spawn_session.json
+  - tools/propose_entity_update.json
+  - tools/fetch_url.json
+  - tools/recall_memory.json
 
 skills:
   - skills/creator-mode
