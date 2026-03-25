@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 
 from nutshell.core.tool import Tool
 from nutshell.core.loader import BaseLoader
@@ -58,15 +58,20 @@ class ToolLoader(BaseLoader[Tool]):
 
     Args:
         impl_registry: Optional dict mapping tool name -> callable.
+        default_workdir: Default working directory for bash/shell executors.
+        blocked_patterns: Extra regex patterns for the bash sandbox (on top of
+                          DANGEROUS_DEFAULTS). Read from params.json at session level.
     """
 
     def __init__(
         self,
         impl_registry: dict[str, Callable] | None = None,
         default_workdir: str | None = None,
+        blocked_patterns: Sequence[str] | None = None,
     ) -> None:
         self._registry: dict[str, Callable] = impl_registry or {}
         self._default_workdir = default_workdir
+        self._blocked_patterns = list(blocked_patterns) if blocked_patterns else []
 
     def register(self, name: str, func: Callable) -> None:
         """Register a Python implementation for a tool by name."""
@@ -88,7 +93,10 @@ class ToolLoader(BaseLoader[Tool]):
         if name in self._registry:
             impl = self._registry[name]
         elif BashExecutor.can_handle(name, path):
-            executor = BashExecutor(workdir=self._default_workdir)
+            executor = BashExecutor(
+                workdir=self._default_workdir,
+                blocked_patterns=self._blocked_patterns,
+            )
             async def _bash_impl(**kwargs: Any) -> str:
                 return await executor.execute(**kwargs)
             _bash_impl.__name__ = "bash"

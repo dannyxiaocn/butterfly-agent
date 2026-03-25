@@ -1,4 +1,4 @@
-# Nutshell `v1.3.18`
+# Nutshell `v1.3.19`
 
 A minimal Python agent runtime. Agents run as persistent server-managed sessions with autonomous heartbeat ticking. **Primary interface: CLI.**
 
@@ -356,6 +356,13 @@ The web UI polls both files via SSE, resuming from the last byte offset on recon
 ---
 
 ## Changelog
+
+### v1.3.19
+- **Sandbox**: bash executor now checks commands against `DANGEROUS_DEFAULTS` before execution
+- Blocks destructive ops (`rm -rf /`, `mkfs`, `dd of=/dev/`), system cmds (`shutdown`, `reboot`), fork bombs, credential access
+- `params.json` supports `blocked_patterns` list for session-level custom regex blocking
+- `ToolLoader` passes `blocked_patterns` through to `BashExecutor` automatically
+- 24 new tests in `test_sandbox.py`
 
 ### v1.3.18
 - **Harness feedback system**: After every agent turn, a performance snapshot is automatically written to `core/memory/harness.md`. The agent sees it next turn as a memory layer: triggered_by, iterations, tool_calls, tokens (input/output/cache), history_turns, model. Enables self-adjustment without external monitoring. Works for both `chat()` (user-triggered) and `tick()` (heartbeat) turns.
