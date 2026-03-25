@@ -1,1 +1,1 @@
-"""nutshell UI frontends — TUI and Web."""
+"""nutshell UI frontends — Web (monitoring) and CLI."""

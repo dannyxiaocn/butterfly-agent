@@ -9,8 +9,7 @@ Usage:
     nutshell entity new [options]           Scaffold a new entity directory
     nutshell review                         Review pending entity update requests
     nutshell server                         Start the Nutshell server
-    nutshell web                            Start the web UI
-    nutshell tui                            Start the terminal UI
+    nutshell web                            Start the web UI (monitoring)
 
 All session-management commands (sessions, new, stop, start) work without
 a running server — they read/write the _sessions/ directory directly.
@@ -376,7 +375,7 @@ def cmd_review(args) -> int:
     return 0
 
 
-# ── Subcommands: server / web / tui ──────────────────────────────────────────
+# ── Subcommands: server / web ─────────────────────────────────────────────────
 
 def _add_exec_parser(subparsers, name: str, help_text: str) -> None:
     p = subparsers.add_parser(name, help=help_text)
@@ -394,7 +393,6 @@ def _exec_entrypoint(name: str) -> int:
     mapping = {
         "server": ("nutshell.runtime.server", "main"),
         "web":    ("ui.web", "main"),
-        "tui":    ("ui.tui", "main"),
     }
     if name in mapping:
         module_path, fn = mapping[name]
@@ -427,8 +425,7 @@ def main() -> None:
             "Other:\n"
             "  nutshell review                     Review agent update requests\n"
             "  nutshell server                     Start the server\n"
-            "  nutshell web                        Start the web UI\n"
-            "  nutshell tui                        Start the terminal UI\n"
+            "  nutshell web                        Start the web UI (monitoring)\n"
         ),
     )
     subparsers = parser.add_subparsers(dest="command", metavar="COMMAND")
@@ -442,8 +439,7 @@ def main() -> None:
     _add_entity_parser(subparsers)
     _add_review_parser(subparsers)
     _add_exec_parser(subparsers, "server", "Start the Nutshell server daemon.")
-    _add_exec_parser(subparsers, "web",    "Start the web UI at http://localhost:8080.")
-    _add_exec_parser(subparsers, "tui",    "Start the terminal UI.")
+    _add_exec_parser(subparsers, "web",    "Start the web UI at http://localhost:8080 (monitoring).")
 
     args = parser.parse_args()
     sys.exit(args.func(args))

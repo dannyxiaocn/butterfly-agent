@@ -11,7 +11,8 @@ class KimiForCodingProvider(AnthropicProvider):
     """LLM provider backed by Kimi For Coding (Moonshot AI).
 
     Thin wrapper over AnthropicProvider pointing at Kimi's Anthropic-compatible
-    messages API. Uses KIMI_FOR_CODING_API_KEY env var by default.
+    messages API. Uses KIMI_FOR_CODING_API_KEY env var by default, with
+    KIMI_API_KEY kept as a compatibility fallback.
     """
 
     # Kimi's API does not support Anthropic cache_control blocks.
@@ -24,7 +25,7 @@ class KimiForCodingProvider(AnthropicProvider):
         base_url: str = _KIMI_BASE_URL,
     ) -> None:
         super().__init__(
-            api_key=api_key or os.environ.get("KIMI_FOR_CODING_API_KEY"),
+            api_key=api_key or os.environ.get("KIMI_FOR_CODING_API_KEY") or os.environ.get("KIMI_API_KEY"),
             max_tokens=max_tokens,
             base_url=base_url,
         )

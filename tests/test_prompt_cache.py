@@ -92,6 +92,24 @@ def test_kimi_provider_does_not_support_cache_control():
     assert KimiForCodingProvider._supports_cache_control is False
 
 
+def test_kimi_provider_falls_back_to_legacy_kimi_api_key(monkeypatch):
+    monkeypatch.delenv("KIMI_FOR_CODING_API_KEY", raising=False)
+    monkeypatch.setenv("KIMI_API_KEY", "legacy-key")
+
+    captured = {}
+
+    def _fake_init(self, *, api_key=None, max_tokens=8096, base_url=None):
+        captured["api_key"] = api_key
+        captured["max_tokens"] = max_tokens
+        captured["base_url"] = base_url
+
+    monkeypatch.setattr(AnthropicProvider, "__init__", _fake_init)
+
+    KimiForCodingProvider()
+
+    assert captured["api_key"] == "legacy-key"
+
+
 @pytest.mark.asyncio
 async def test_kimi_provider_falls_back_to_string_with_prefix():
     """KimiProvider should concatenate prefix+prompt instead of using block list."""
@@ -112,6 +130,33 @@ async def test_kimi_provider_falls_back_to_string_with_prefix():
     assert isinstance(system, str), "KimiProvider must NOT send a block list"
     assert "static" in system
     assert "dynamic" in system
+
+
+def test_anthropic_provider_prefers_http_proxy_when_socks_missing(monkeypatch):
+    import httpx
+    from nutshell.llm_engine.providers.anthropic import _build_http_client
+
+    monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:7890")
+    monkeypatch.setenv("ALL_PROXY", "socks5://127.0.0.1:7890")
+    monkeypatch.setattr("nutshell.llm_engine.providers.anthropic._has_socks_support", lambda: False)
+
+    client = _build_http_client(httpx)
+
+    assert isinstance(client, httpx.AsyncClient)
+    assert client._trust_env is False
+
+
+def test_anthropic_provider_uses_env_defaults_when_socks_supported(monkeypatch):
+    import httpx
+    from nutshell.llm_engine.providers.anthropic import _build_http_client
+
+    monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:7890")
+    monkeypatch.setenv("ALL_PROXY", "socks5://127.0.0.1:7890")
+    monkeypatch.setattr("nutshell.llm_engine.providers.anthropic._has_socks_support", lambda: True)
+
+    client = _build_http_client(httpx)
+
+    assert client is None
 
 
 # ── Agent._build_system_parts ─────────────────────────────────────────────────

@@ -1,4 +1,6 @@
 from __future__ import annotations
+import importlib.util
+import os
 from typing import TYPE_CHECKING, Any, Callable, ClassVar
 
 from nutshell.core.provider import Provider
@@ -21,9 +23,14 @@ class AnthropicProvider(Provider):
     ) -> None:
         try:
             import anthropic as _anthropic
+            import httpx
         except ImportError:
             raise ImportError("Install anthropic: pip install anthropic") from None
-        self._client = _anthropic.AsyncAnthropic(api_key=api_key, base_url=base_url)
+        http_client = _build_http_client(httpx)
+        client_kwargs: dict[str, Any] = {"api_key": api_key, "base_url": base_url}
+        if http_client is not None:
+            client_kwargs["http_client"] = http_client
+        self._client = _anthropic.AsyncAnthropic(**client_kwargs)
         self.max_tokens = max_tokens
 
     async def complete(
@@ -96,6 +103,37 @@ def _forward_stream_event(event: Any, on_text_chunk: Callable[[str], None]) -> b
             on_text_chunk(thinking)
             return True
     return False
+
+
+def _build_http_client(httpx_module: Any) -> Any | None:
+    """Prefer explicit HTTP(S) proxies when SOCKS support is unavailable.
+
+    Some local environments export both HTTP(S)_PROXY and ALL_PROXY=socks5://...
+    but do not have socksio installed. httpx then errors before the request is
+    sent. When that happens, pin the client to the HTTP(S) proxy explicitly and
+    ignore the environment proxy auto-detection.
+    """
+    https_proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
+    http_proxy = os.environ.get("HTTP_PROXY") or os.environ.get("http_proxy")
+    all_proxy = os.environ.get("ALL_PROXY") or os.environ.get("all_proxy")
+
+    explicit_proxy = https_proxy or http_proxy
+    if not explicit_proxy:
+        return None
+
+    if _is_socks_proxy(all_proxy) and not _has_socks_support():
+        return httpx_module.AsyncClient(proxy=explicit_proxy, trust_env=False)
+    return None
+
+
+def _is_socks_proxy(proxy_url: str | None) -> bool:
+    if not proxy_url:
+        return False
+    return proxy_url.lower().startswith(("socks4://", "socks4a://", "socks5://", "socks5h://"))
+
+
+def _has_socks_support() -> bool:
+    return importlib.util.find_spec("socksio") is not None
 
 
 def _extract_usage(response: Any) -> TokenUsage:
