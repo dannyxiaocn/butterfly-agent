@@ -8,40 +8,17 @@ A minimal Python agent runtime. Agents run as persistent server-managed sessions
 
 ```bash
 pip install -e .
-export ANTHROPIC_API_KEY=sk-...
-export BRAVE_API_KEY=...       # optional: enables web_search (default provider)
-export TAVILY_API_KEY=...      # optional: enables web_search via Tavily
+export ANTHROPIC_API_KEY=...
+export OPENAI_API_KEY=...           # optional: enables openai_agent (Codex)
+export KIMI_FOR_CODING_API_KEY=...  # optional: enables kimi_agent
+export BRAVE_API_KEY=...            # optional: enables web_search (default provider)
+export TAVILY_API_KEY=...           # optional: enables web_search via Tavily
 
 nutshell server                # keep running in a terminal
 nutshell chat "Plan a data pipeline"
 # → prints agent response
 # Session: 2026-03-25_10-00-00
 ```
-
-### OpenAI / Codex (`openai_agent`)
-
-```bash
-pip install -e ".[openai]"     # installs openai>=1.0.0
-export OPENAI_API_KEY=sk-...   # standard OpenAI key — get from https://platform.openai.com/api-keys
-# For Codex OAuth token (openai-codex CLI): run `openai-codex login`, token is stored and
-# exported automatically; or set OPENAI_API_KEY to the OAuth token directly.
-export OPENAI_BASE_URL=...     # optional — only needed for custom endpoints / Codex gateway
-
-nutshell chat --entity openai_agent "Implement a binary search in Python"
-```
-
-Model is `codex-mini-latest` by default. Override in `params.json`: `{"model": "gpt-4o"}`.
-
-### Kimi (`kimi_agent`)
-
-```bash
-# No extra packages — Kimi uses the Anthropic SDK (already installed)
-export KIMI_FOR_CODING_API_KEY=sk-...  # get from https://platform.moonshot.cn/
-
-nutshell chat --entity kimi_agent "Analyse this 200-page document"
-```
-
-Base URL (`https://api.kimi.com/coding/`) is hardcoded in the provider. Model is `kimi-for-coding` by default. Note: Kimi does **not** support Anthropic prompt caching.
 
 ---
 

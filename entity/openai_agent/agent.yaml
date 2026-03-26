@@ -1,7 +1,7 @@
 name: openai_agent
 description: "OpenAI Codex specialist — code generation and reasoning."
 version: 1.0.0
-model: codex-mini-latest
+model: gpt-5.4
 provider: openai
 extends: agent
 release_policy: persistent
