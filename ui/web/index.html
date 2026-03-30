@@ -25,6 +25,12 @@
   #server-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
   #server-indicator.on #server-dot { background: var(--green); }
   #server-indicator.off #server-dot { background: var(--red); }
+  #weixin-indicator { display: flex; align-items: center; gap: 6px; padding: 4px 10px; border: 1px solid var(--border); border-radius: 999px; font-size: 11px; color: var(--muted); cursor: default; }
+  #weixin-indicator.running { border-color: rgba(63, 185, 80, 0.45); color: #b8f3c0; background: rgba(63, 185, 80, 0.12); }
+  #weixin-indicator.error, #weixin-indicator.no_account { border-color: rgba(248, 81, 73, 0.45); color: #ffb7b1; background: rgba(248, 81, 73, 0.12); }
+  #weixin-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  #weixin-indicator.running #weixin-dot { background: var(--green); animation: pulse-dot 1.5s ease-in-out infinite; }
+  #weixin-indicator.error #weixin-dot, #weixin-indicator.no_account #weixin-dot { background: var(--red); }
   #header-meta { margin-left: auto; display: flex; align-items: center; gap: 10px; }
   #session-name { font-size: 11px; color: var(--muted); }
   #session-indicator { display: flex; align-items: center; gap: 8px; padding: 4px 10px; border: 1px solid var(--border); border-radius: 999px; font-size: 11px; color: var(--muted); }
@@ -137,6 +143,10 @@
     <span id="server-dot"></span>
     <span id="server-state">server off</span>
   </div>
+  <div id="weixin-indicator" class="idle" title="WeChat bridge status">
+    <span id="weixin-dot"></span>
+    <span id="weixin-state">微信</span>
+  </div>
   <div id="header-meta">
     <span id="session-name">no session selected</span>
     <div id="session-indicator" class="idle">
@@ -207,6 +217,24 @@
     await refreshSessions();
     setInterval(refreshSessions, 3000);
     setInterval(refreshTasks, 2000);
+    refreshWeixinStatus();
+    setInterval(refreshWeixinStatus, 5000);
+  }
+
+  // ── WeChat status ────────────────────────────────────────────────────────
+
+  async function refreshWeixinStatus() {
+    try {
+      const res = await fetch('/api/weixin/status');
+      const data = await res.json();
+      const el = document.getElementById('weixin-indicator');
+      const stateEl = document.getElementById('weixin-state');
+      el.className = data.status;
+      const labels = { running: '微信 ●', no_account: '微信 —', error: '微信 ✕', idle: '微信', stopped: '微信 ○' };
+      const sessionHint = data.session ? ` · ${data.session}` : '';
+      stateEl.textContent = (labels[data.status] || '微信') + (data.status === 'running' ? sessionHint : '');
+      el.title = data.error ? `WeChat: ${data.error}` : `WeChat bridge: ${data.status}${sessionHint}`;
+    } catch (e) { /* server not reachable */ }
   }
 
   // ── Sessions ──────────────────────────────────────────────────────────

@@ -42,7 +42,18 @@ def create_app(sessions_dir: Path, system_sessions_dir: Path | None = None) -> F
     if system_sessions_dir is None:
         system_sessions_dir = sessions_dir.parent / "_sessions"
 
-    app = FastAPI(title="Nutshell Web UI", docs_url=None, redoc_url=None)
+    from contextlib import asynccontextmanager
+
+    from .weixin import WeixinBridge
+    weixin = WeixinBridge(sessions_dir, system_sessions_dir)
+
+    @asynccontextmanager
+    async def _lifespan(app):
+        weixin.start()
+        yield
+        weixin.stop()
+
+    app = FastAPI(title="Nutshell Web UI", docs_url=None, redoc_url=None, lifespan=_lifespan)
 
     @app.get("/", response_class=HTMLResponse)
     async def index():
@@ -161,6 +172,15 @@ def create_app(sessions_dir: Path, system_sessions_dir: Path | None = None) -> F
         tasks_path.parent.mkdir(parents=True, exist_ok=True)
         tasks_path.write_text(body.get("content", ""), encoding="utf-8")
         return {"ok": True}
+
+    @app.get("/api/weixin/status")
+    async def weixin_status():
+        return {
+            "status": weixin.status,
+            "error": weixin.error,
+            "session": weixin._current_session,
+            "account": weixin._account_id,
+        }
 
     return app
 
