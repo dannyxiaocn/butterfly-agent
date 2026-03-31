@@ -164,6 +164,9 @@ class SessionWatcher:
                 agent = Agent(provider=provider, **({"model": model} if model else {}))
         except Exception as exc:
             print(f"[server] Failed to create agent for {session_id}: {exc}")
+            # Mark as stopped so the watcher doesn't retry indefinitely
+            from nutshell.runtime.status import write_session_status
+            write_session_status(system_dir, status="stopped")
             return
 
         ipc = FileIPC(system_dir)
