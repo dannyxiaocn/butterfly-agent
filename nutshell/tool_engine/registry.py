@@ -36,6 +36,11 @@ def _make_propose_entity_update() -> Callable:
     return propose_entity_update
 
 
+def _make_update_meta_memory() -> Callable:
+    from nutshell.tool_engine.providers.update_meta_memory import update_meta_memory
+    return update_meta_memory
+
+
 def _make_spawn_session() -> Callable:
     from nutshell.tool_engine.providers.spawn_session import spawn_session
     return spawn_session
@@ -71,6 +76,7 @@ _BUILTIN_FACTORIES: dict[str, Callable[[], Callable]] = {
     "web_search":             _make_web_search,
     "send_to_session":        _make_send_to_session,
     "propose_entity_update":  _make_propose_entity_update,
+    "update_meta_memory":      _make_update_meta_memory,
     "spawn_session":          _make_spawn_session,
     "fetch_url":              _make_fetch_url,
     "recall_memory":          _make_recall_memory,

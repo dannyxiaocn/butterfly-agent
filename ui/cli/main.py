@@ -1359,6 +1359,77 @@ def cmd_os(args) -> int:
     return 0
 
 
+# ── Subcommand: meta ──────────────────────────────────────────────────────────
+
+def _read_meta_info(meta_dir: Path) -> dict:
+    memory_path = meta_dir / "core" / "memory.md"
+    memory_dir = meta_dir / "core" / "memory"
+    playground_dir = meta_dir / "playground"
+    return {
+        "entity": meta_dir.name,
+        "path": str(meta_dir),
+        "memory_exists": memory_path.exists(),
+        "memory_bytes": memory_path.stat().st_size if memory_path.exists() else 0,
+        "memory_layers": sorted([p.stem for p in memory_dir.glob("*.md")]) if memory_dir.is_dir() else [],
+        "playground_files": sorted([str(p.relative_to(playground_dir)) for p in playground_dir.rglob("*") if p.is_file()]) if playground_dir.is_dir() else [],
+        "params_exists": (meta_dir / "params.json").exists(),
+    }
+
+
+def _add_meta_parser(subparsers) -> None:
+    p = subparsers.add_parser(
+        "meta",
+        help="Show entity meta-session info.",
+        description="Show all or one _meta session state.",
+    )
+    p.add_argument("entity", nargs="?", default=None, help="Entity name (optional)")
+    p.add_argument("--memory", action="store_true", help="Print meta memory.md content")
+    p.add_argument("--json", action="store_true", dest="as_json", help="Output as JSON")
+    p.add_argument("--sessions-base", type=Path, default=_DEFAULT_SESSIONS_BASE, help=argparse.SUPPRESS)
+    p.set_defaults(func=cmd_meta)
+
+
+def cmd_meta(args) -> int:
+    base = args.sessions_base
+    if not base.exists():
+        print("No meta sessions found.")
+        return 0
+
+    if args.entity:
+        meta_dir = base / f"{args.entity}_meta"
+        if not meta_dir.is_dir():
+            print(f"No meta-session found for entity: {args.entity}", file=sys.stderr)
+            return 1
+        targets = [meta_dir]
+    else:
+        targets = [p for p in sorted(base.iterdir()) if p.is_dir() and p.name.endswith("_meta")]
+
+    if args.memory:
+        if len(targets) != 1:
+            print("Error: --memory requires a specific ENTITY.", file=sys.stderr)
+            return 2
+        memory_path = targets[0] / "core" / "memory.md"
+        if memory_path.exists():
+            print(memory_path.read_text(encoding="utf-8"), end="")
+        return 0
+
+    infos = [_read_meta_info(p) for p in targets]
+    if args.as_json:
+        print(json.dumps(infos if not args.entity else infos[0], ensure_ascii=False, indent=2))
+        return 0
+
+    for idx, info in enumerate(infos):
+        print(f"ENTITY: {info['entity']}")
+        print(f"PATH: {info['path']}")
+        print(f"MEMORY: {info['memory_bytes']} bytes")
+        print(f"LAYERS: {', '.join(info['memory_layers']) if info['memory_layers'] else '—'}")
+        print(f"PLAYGROUND FILES: {len(info['playground_files'])}")
+        print(f"PARAMS: {'yes' if info['params_exists'] else 'no'}")
+        if idx != len(infos) - 1:
+            print()
+    return 0
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -1417,6 +1488,7 @@ def main() -> None:
     _add_repo_dev_parser(subparsers)
     _add_visit_parser(subparsers)
     _add_os_parser(subparsers)
+    _add_meta_parser(subparsers)
     _add_exec_parser(subparsers, "server", "Start the Nutshell server daemon.")
     _add_exec_parser(subparsers, "web",    "Start the web UI at http://localhost:8080 (monitoring).")
 

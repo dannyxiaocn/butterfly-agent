@@ -15,6 +15,7 @@ from pathlib import Path
 
 from nutshell.runtime.params import ensure_session_params, write_session_params
 from nutshell.runtime.status import ensure_session_status, write_session_status
+from nutshell.runtime.meta_session import ensure_meta_session, sync_from_entity
 
 _REPO_ROOT = Path(__file__).parent.parent.parent
 _DEFAULT_SESSIONS_BASE = _REPO_ROOT / "sessions"
@@ -192,24 +193,42 @@ def init_session(
         else:
             write_session_params(session_dir, heartbeat_interval=effective_heartbeat, **entity_params)
 
-    # Seed memory.md from entity if the entity provides one
+    # Seed memory from entity-level meta-session first, with entity/ as fallback.
+    meta_dir = ensure_meta_session(entity_name)
+    sync_from_entity(entity_name, ent_base)
+
+    meta_memory = meta_dir / "core" / "memory.md"
     entity_memory = (ent_base / entity_name / "memory.md") if entity_dir.exists() else None
-    if entity_memory and entity_memory.exists():
+    if meta_memory.exists() and meta_memory.read_text(encoding="utf-8"):
+        _write_if_absent(core_dir / "memory.md", meta_memory.read_text(encoding="utf-8"))
+    elif entity_memory and entity_memory.exists():
         _write_if_absent(core_dir / "memory.md", entity_memory.read_text(encoding="utf-8"))
     else:
         _write_if_absent(core_dir / "memory.md", "")
 
-    # Seed layered memory from entity memory/ directory
-    # Copies .md files from entity/<name>/memory/ → session/core/memory/
-    # Only copies files that do not already exist (idempotent).
-    entity_memory_dir = ent_base / entity_name / "memory"
-    if entity_memory_dir.is_dir():
+    # Seed layered memory from <entity>_meta/core/memory/ first, then entity/<entity>/memory/.
+    memory_seed_dirs = [src_dir for src_dir in (meta_dir / "core" / "memory", ent_base / entity_name / "memory") if src_dir.is_dir()]
+    if memory_seed_dirs:
         session_memory_dir = core_dir / "memory"
         session_memory_dir.mkdir(exist_ok=True)
-        for src_file in sorted(entity_memory_dir.glob("*.md")):
-            dst_file = session_memory_dir / src_file.name
-            if not dst_file.exists():
-                shutil.copy2(src_file, dst_file)
+        for src_dir in memory_seed_dirs:
+            for src_file in sorted(src_dir.glob("*.md")):
+                dst_file = session_memory_dir / src_file.name
+                if not dst_file.exists():
+                    shutil.copy2(src_file, dst_file)
+
+    # Seed shared playground files from meta-session without overwriting session-local files.
+    meta_playground_dir = meta_dir / "playground"
+    if meta_playground_dir.is_dir():
+        session_playground_dir = session_dir / "playground"
+        for src_path in sorted(meta_playground_dir.rglob("*")):
+            if src_path.is_dir():
+                continue
+            rel = src_path.relative_to(meta_playground_dir)
+            dst_path = session_playground_dir / rel
+            dst_path.parent.mkdir(parents=True, exist_ok=True)
+            if not dst_path.exists():
+                shutil.copy2(src_path, dst_path)
 
     _write_if_absent(core_dir / "tasks.md", "")
 
