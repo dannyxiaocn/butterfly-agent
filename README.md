@@ -1,4 +1,4 @@
-# Nutshell `v1.3.39`
+# Nutshell `v1.3.42`
 
 A minimal Python agent runtime. Agents run as persistent server-managed sessions with autonomous heartbeat ticking. **Primary interface: CLI.**
 
@@ -481,6 +481,11 @@ When multiple agent sessions work on the same git repository, a **master/sub** c
 
 
 ## Changelog
+
+### v1.3.42
+- **Web UI rich tool call rendering** — `ui/web/index.html` now renders tool calls as structured cards instead of raw JSON.
+- `bash` calls show a yellow tool badge header, timeout/pty badges, and a monospace command block with collapsible long commands (`▼ show more`).
+- Added tailored summaries for `web_search`, `send_to_session`, `fetch_url`, `propose_entity_update`, and `update_meta_memory`, plus a concise fallback for other tools.
 
 ### v1.3.41
 - **Meta-session layer via ordinary sessions** — entity-level mutable state now lives in `sessions/<entity>_meta/` instead of `entity/` or a separate top-level directory. Each meta-session uses the normal session layout (`core/memory.md`, `core/memory/`, `playground/`, optional `core/params.json`).

@@ -79,7 +79,19 @@
   .msg.agent { background: var(--bg3); border-left: 3px solid var(--accent); color: var(--text); }
   .msg.agent.heartbeat-agent { border-left-color: #6b9fd4; opacity: 0.85; }
   .msg.user  { background: #1c2a3a; border-left: 3px solid var(--green); color: var(--text); align-self: flex-end; }
-  .msg.tool  { background: var(--bg2); color: var(--yellow); font-size: 11px; border-left: 3px solid var(--yellow); white-space: pre-wrap; }
+  .msg.tool  { background: var(--bg2); color: var(--fg); font-size: 11px; border-left: 3px solid var(--yellow); padding: 8px 10px; }
+  .tool-card { display: flex; flex-direction: column; gap: 6px; }
+  .tool-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+  .tool-main { display: flex; align-items: center; gap: 6px; min-width: 0; flex-wrap: wrap; }
+  .tool-name { display: inline-flex; align-items: center; padding: 2px 6px; border-radius: 999px; background: rgba(241, 196, 15, 0.14); color: var(--yellow); font-weight: 600; letter-spacing: .02em; }
+  .tool-meta { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+  .tool-badge { display: inline-flex; align-items: center; padding: 1px 6px; border-radius: 999px; background: var(--bg); color: var(--muted); font-size: 10px; }
+  .tool-summary { color: var(--fg); min-width: 0; }
+  .quote { color: var(--yellow); }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .tool-command { margin: 0; background: rgba(0,0,0,.18); border-radius: 4px; padding: 6px 8px; overflow-x: auto; }
+  .tool-command code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--fg); white-space: pre-wrap; word-break: break-word; display: block; }
+  .tool-more { align-self: flex-start; cursor: pointer; color: var(--muted); font-size: 10px; border: 0; background: none; padding: 0; }
   .msg.heartbeat_trigger { background: #1a2030; border-left: 3px solid var(--accent); color: var(--text); align-self: flex-end; }
   .msg.heartbeat_finished { color: var(--muted); font-size: 11px; }
   .msg.status { color: var(--muted); font-size: 11px; text-align: center; align-self: center; }
@@ -423,7 +435,7 @@
       label = 'you';
       html = '<p>' + escHtml(event.content || '') + '</p>';
     } else if (etype === 'tool') {
-      html = escHtml(`[${event.name}] ` + JSON.stringify(event.input || {}));
+      html = renderToolCall(event.name, event.input || {});
     } else if (etype === 'heartbeat_trigger') {
       label = '⏱ server';
       html = '<em>heartbeat — checking tasks</em>';
@@ -617,6 +629,68 @@
 
   function escHtml(s) {
     return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  function truncText(value, max) {
+    const s = String(value ?? '');
+    return s.length > max ? s.slice(0, Math.max(0, max - 1)) + '…' : s;
+  }
+
+  function renderToolCall(name, input) {
+    const safeName = escHtml(name || 'tool');
+    const badgeHtml = label => `<span class="tool-badge">${escHtml(label)}</span>`;
+    const card = (summary, extra = '', meta = '') => `
+      <div class="tool-card">
+        <div class="tool-head">
+          <div class="tool-main">
+            <span class="tool-name">${safeName}</span>
+            ${summary ? `<span class="tool-summary">${summary}</span>` : ''}
+          </div>
+          ${meta ? `<div class="tool-meta">${meta}</div>` : ''}
+        </div>
+        ${extra}
+      </div>`;
+
+    if (name === 'bash') {
+      const cmd = String(input.command || '');
+      const badges = [];
+      if (input.timeout) badges.push(`${Math.floor(Number(input.timeout) / 1000)}s`);
+      if (input.pty) badges.push('pty');
+      const lines = cmd.split('\n');
+      const isLong = lines.length > 5 || cmd.length > 300;
+      const collapsedCmd = isLong ? lines.slice(0, 3).join('\n') : cmd;
+      const codeId = `tool-code-${Math.random().toString(36).slice(2, 10)}`;
+      const extra = `
+        <pre class="tool-command"><code id="${codeId}" data-full="${escHtml(cmd)}" data-collapsed="${escHtml(collapsedCmd)}">${escHtml(collapsedCmd)}</code></pre>
+        ${isLong ? `<button class="tool-more" onclick="(function(btn, code){ const expanded = btn.dataset.expanded === '1'; code.innerHTML = expanded ? code.dataset.collapsed : code.dataset.full; btn.dataset.expanded = expanded ? '0' : '1'; btn.textContent = expanded ? '▼ show more' : '▲ show less'; })(this, document.getElementById('${codeId}'))">▼ show more</button>` : ''}`;
+      return card('', extra, badges.map(badgeHtml).join(''));
+    }
+
+    if (name === 'web_search') {
+      return card(`🔍 <span class="quote">&quot;${escHtml(input.query || '')}&quot;</span>`);
+    }
+
+    if (name === 'send_to_session') {
+      const sessionId = escHtml(input.session_id || 'unknown');
+      const message = escHtml(truncText(input.message || '', 80));
+      return card(`→ <span class="mono">${sessionId}</span> ${message}`);
+    }
+
+    if (name === 'fetch_url') {
+      return card(`🌐 <span class="mono">${escHtml(truncText(input.url || '', 120))}</span>`);
+    }
+
+    if (name === 'propose_entity_update' || name === 'update_meta_memory') {
+      const target = input.file_path || input.layer || 'target';
+      const reason = truncText(input.reason || '', 60);
+      return card(`<span class="mono">${escHtml(target)}</span>${reason ? ` — ${escHtml(reason)}` : ''}`);
+    }
+
+    const entries = Object.entries(input || {})
+      .filter(([, value]) => value !== undefined && value !== null && value !== '')
+      .slice(0, 2)
+      .map(([key, value]) => `${escHtml(key)}=${escHtml(truncText(typeof value === 'string' ? value : JSON.stringify(value), 40))}`);
+    return card(entries.join(' · ') || '(no args)');
   }
 
   init();
