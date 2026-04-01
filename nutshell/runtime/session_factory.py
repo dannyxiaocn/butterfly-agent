@@ -15,7 +15,13 @@ from pathlib import Path
 
 from nutshell.runtime.params import ensure_session_params, write_session_params
 from nutshell.runtime.status import ensure_session_status, write_session_status
-from nutshell.runtime.meta_session import ensure_meta_session, sync_from_entity
+from nutshell.runtime.meta_session import (
+    _meta_is_synced,
+    check_meta_alignment,
+    ensure_meta_session,
+    populate_meta_from_entity,
+    sync_from_entity,
+)
 
 _REPO_ROOT = Path(__file__).parent.parent.parent
 _DEFAULT_SESSIONS_BASE = _REPO_ROOT / "sessions"
@@ -118,83 +124,62 @@ def init_session(
         json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
     )
 
-    # Load entity and copy files to core/
     entity_dir = ent_base / entity_name
-    agent = None
-    if entity_dir.exists():
-        try:
-            from nutshell.llm_engine.loader import AgentLoader
-            agent = AgentLoader().load(entity_dir)
-        except Exception as e:
-            print(f"[session_factory] Warning: failed to load entity '{entity_name}': {e}")
 
     # Load entity-level param overrides (persistent, default_task, etc.)
     entity_params = _load_entity_params(entity_dir)
-    # Entity heartbeat_interval overrides the caller's default
     effective_heartbeat = entity_params.pop("heartbeat_interval", None) or heartbeat
 
-    if agent is not None:
-        _write_if_absent(core_dir / "system.md", agent.system_prompt or "")
-        _write_if_absent(core_dir / "heartbeat.md", agent.heartbeat_prompt or "")
-        _write_if_absent(core_dir / "session.md", agent.session_context_template or "")
-
-        for t in agent.tools:
-            tool_json = core_dir / "tools" / f"{t.name}.json"
-            if not tool_json.exists():
-                schema = {
-                    "name": t.name,
-                    "description": t.description,
-                    "input_schema": t.schema,
-                }
-                tool_json.write_text(
-                    json.dumps(schema, indent=2, ensure_ascii=False), encoding="utf-8"
-                )
-
-        for s in agent.skills:
-            skill_dir = core_dir / "skills" / s.name
-            if not skill_dir.exists():
-                if s.location is not None:
-                    src_dir = s.location.parent
-                    if src_dir.is_dir():
-                        shutil.copytree(src_dir, skill_dir, dirs_exist_ok=True)
-                    else:
-                        skill_dir.mkdir(parents=True, exist_ok=True)
-                        shutil.copy2(s.location, skill_dir / "SKILL.md")
-                else:
-                    skill_dir.mkdir(parents=True, exist_ok=True)
-                    content = (
-                        f"---\nname: {s.name}\ndescription: {s.description}\n---\n\n{s.body}\n"
-                    )
-                    (skill_dir / "SKILL.md").write_text(content, encoding="utf-8")
-
-        if not (core_dir / "params.json").exists():
-            from nutshell.llm_engine.registry import provider_name as pname
-            entity_provider = pname(agent._provider) or "anthropic"
-            extra: dict = {}
-            if getattr(agent, "fallback_model", ""):
-                extra["fallback_model"] = agent.fallback_model
-            if getattr(agent, "_fallback_provider_str", ""):
-                extra["fallback_provider"] = agent._fallback_provider_str
-            write_session_params(
-                session_dir,
-                heartbeat_interval=effective_heartbeat,
-                model=agent.model,
-                provider=entity_provider,
-                **extra,
-                **entity_params,
-            )
+    # Config always comes from meta session; meta is initially populated from entity.
+    meta_dir = ensure_meta_session(entity_name, s_base=s_base)
+    if entity_dir.exists():
+        if not _meta_is_synced(meta_dir):
+            populate_meta_from_entity(entity_name, ent_base, s_base)
         else:
-            write_session_params(session_dir, heartbeat_interval=effective_heartbeat, **entity_params)
+            check_meta_alignment(entity_name, ent_base, s_base)
+
+    meta_core_dir = meta_dir / "core"
+    for fname in ("system.md", "heartbeat.md", "session.md"):
+        src = meta_core_dir / fname
+        _write_if_absent(core_dir / fname, src.read_text(encoding="utf-8") if src.exists() else "")
+
+    meta_tools_dir = meta_core_dir / "tools"
+    if meta_tools_dir.is_dir():
+        for src in sorted(meta_tools_dir.glob('*.json')):
+            dst = core_dir / "tools" / src.name
+            if not dst.exists():
+                shutil.copy2(src, dst)
+
+    meta_skills_dir = meta_core_dir / "skills"
+    if meta_skills_dir.is_dir():
+        for src in sorted(meta_skills_dir.rglob('*')):
+            rel = src.relative_to(meta_skills_dir)
+            dst = core_dir / "skills" / rel
+            if src.is_dir():
+                dst.mkdir(parents=True, exist_ok=True)
+            else:
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                if not dst.exists():
+                    shutil.copy2(src, dst)
+
+    if not (core_dir / "params.json").exists():
+        try:
+            import yaml
+            manifest = yaml.safe_load((entity_dir / 'agent.yaml').read_text(encoding='utf-8')) if (entity_dir / 'agent.yaml').exists() else {}
+        except Exception:
+            manifest = {}
+        extra: dict = {}
+        if manifest.get('fallback_model'):
+            extra['fallback_model'] = manifest['fallback_model']
+        if manifest.get('fallback_provider'):
+            extra['fallback_provider'] = manifest['fallback_provider']
+        model = manifest.get('model')
+        provider = manifest.get('provider') or 'anthropic'
+        write_session_params(session_dir, heartbeat_interval=effective_heartbeat, model=model, provider=provider, **extra, **entity_params)
     else:
-        for fname in ("system.md", "heartbeat.md", "session.md"):
-            _write_if_absent(core_dir / fname, "")
-        if not (core_dir / "params.json").exists():
-            ensure_session_params(session_dir, heartbeat_interval=effective_heartbeat, **entity_params)
-        else:
-            write_session_params(session_dir, heartbeat_interval=effective_heartbeat, **entity_params)
-
-    # Seed memory from entity-level meta-session first, with entity/ as fallback.
-    meta_dir = ensure_meta_session(entity_name)
+        write_session_params(session_dir, heartbeat_interval=effective_heartbeat, **entity_params)
+    # Seed mutable state from meta session, with entity memory as bootstrap fallback.
+    meta_dir = ensure_meta_session(entity_name, s_base=s_base)
     sync_from_entity(entity_name, ent_base)
 
     meta_memory = meta_dir / "core" / "memory.md"

@@ -1,4 +1,4 @@
-# Nutshell `v1.3.42`
+# Nutshell `v1.3.43`
 
 A minimal Python agent runtime. Agents run as persistent server-managed sessions with autonomous heartbeat ticking. **Primary interface: CLI.**
 
@@ -786,3 +786,11 @@ When multiple agent sessions work on the same git repository, a **master/sub** c
 
 ### v1.0.0 — v1.1.5
 - Dual-directory session layout. Entity inheritance (`extends`). Skills system. Provider layer (Anthropic, Kimi). Web UI. SSE streaming.
+
+
+## Changelog
+
+### v1.3.43
+- meta-session strict alignment with entity config
+- new `alignment_blocked` session status and watcher-side blocking
+- `nutshell meta --check/--sync` for resolving entity/meta drift

@@ -1372,7 +1372,7 @@ def _read_meta_info(meta_dir: Path) -> dict:
         "memory_bytes": memory_path.stat().st_size if memory_path.exists() else 0,
         "memory_layers": sorted([p.stem for p in memory_dir.glob("*.md")]) if memory_dir.is_dir() else [],
         "playground_files": sorted([str(p.relative_to(playground_dir)) for p in playground_dir.rglob("*") if p.is_file()]) if playground_dir.is_dir() else [],
-        "params_exists": (meta_dir / "params.json").exists(),
+        "params_exists": (meta_dir / "core" / "params.json").exists(),
     }
 
 
@@ -1385,15 +1385,48 @@ def _add_meta_parser(subparsers) -> None:
     p.add_argument("entity", nargs="?", default=None, help="Entity name (optional)")
     p.add_argument("--memory", action="store_true", help="Print meta memory.md content")
     p.add_argument("--json", action="store_true", dest="as_json", help="Output as JSON")
+    p.add_argument("--check", action="store_true", help="Show alignment diff for a specific entity")
+    p.add_argument("--sync", choices=["entity-wins", "meta-wins"], help="Resolve alignment conflict")
     p.add_argument("--sessions-base", type=Path, default=_DEFAULT_SESSIONS_BASE, help=argparse.SUPPRESS)
     p.set_defaults(func=cmd_meta)
 
 
 def cmd_meta(args) -> int:
+    from nutshell.runtime.meta_session import (
+        MetaAlignmentError,
+        check_meta_alignment,
+        compute_meta_diffs,
+        sync_entity_to_meta,
+        sync_meta_to_entity,
+    )
+
     base = args.sessions_base
     if not base.exists():
         print("No meta sessions found.")
         return 0
+
+    if args.check or args.sync:
+        if not args.entity:
+            print("Error: ENTITY is required for --check/--sync.", file=sys.stderr)
+            return 2
+        meta_dir = base / f"{args.entity}_meta"
+        if not meta_dir.is_dir():
+            print(f"No meta-session found for entity: {args.entity}", file=sys.stderr)
+            return 1
+        if args.sync == "entity-wins":
+            sync_entity_to_meta(args.entity, s_base=base)
+            print(f"Synced entity → meta for {args.entity}")
+            return 0
+        if args.sync == "meta-wins":
+            sync_meta_to_entity(args.entity, s_base=base)
+            print(f"Synced meta → entity for {args.entity}")
+            return 0
+        diffs = compute_meta_diffs(args.entity, s_base=base)
+        if not diffs:
+            print(f"Meta-session aligned: {args.entity}")
+            return 0
+        print(MetaAlignmentError(args.entity, diffs).format_report())
+        return 1
 
     if args.entity:
         meta_dir = base / f"{args.entity}_meta"

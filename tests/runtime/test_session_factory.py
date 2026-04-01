@@ -1,18 +1,27 @@
+import pytest
+
 import nutshell.runtime.meta_session as ms
+from nutshell.runtime.meta_session import MetaAlignmentError
 from nutshell.runtime.session_factory import init_session
 
 
-def test_init_session_seeds_memory_from_meta_session(tmp_path):
+def _seed_entity(tmp_path):
     entity_base = tmp_path / 'entity'
-    (entity_base / 'demo').mkdir(parents=True)
-    (entity_base / 'demo' / 'agent.yaml').write_text(
-        'name: demo\n'
-        'model: claude-sonnet-4-6\n'
-        'provider: anthropic\n'
-        'tools: []\n'
-        'skills: []\n',
-        encoding='utf-8',
-    )
+    ent = entity_base / 'demo'
+    (ent / 'prompts').mkdir(parents=True)
+    (ent / 'tools').mkdir()
+    (ent / 'skills' / 'alpha').mkdir(parents=True)
+    (ent / 'prompts' / 'system.md').write_text('sys\n', encoding='utf-8')
+    (ent / 'prompts' / 'heartbeat.md').write_text('beat\n', encoding='utf-8')
+    (ent / 'prompts' / 'session.md').write_text('sess\n', encoding='utf-8')
+    (ent / 'tools' / 'bash.json').write_text('{"name":"bash","description":"x","input_schema":{"type":"object"}}', encoding='utf-8')
+    (ent / 'skills' / 'alpha' / 'SKILL.md').write_text('# alpha\n', encoding='utf-8')
+    (ent / 'agent.yaml').write_text('name: demo\nmodel: claude-sonnet-4-6\nprovider: anthropic\ntools: []\nskills: []\n', encoding='utf-8')
+    return entity_base
+
+
+def test_init_session_seeds_memory_from_meta_session(tmp_path):
+    entity_base = _seed_entity(tmp_path)
     (tmp_path / 'sessions' / 'demo_meta' / 'core' / 'memory').mkdir(parents=True)
     (tmp_path / 'sessions' / 'demo_meta' / 'playground').mkdir(parents=True)
     (tmp_path / 'sessions' / 'demo_meta' / 'core' / 'memory.md').write_text('meta primary', encoding='utf-8')
@@ -26,3 +35,21 @@ def test_init_session_seeds_memory_from_meta_session(tmp_path):
     assert (core / 'memory.md').read_text(encoding='utf-8') == 'meta primary'
     assert (core / 'memory' / 'layer.md').read_text(encoding='utf-8') == 'meta layer'
     assert (tmp_path / 'sessions' / 's1' / 'playground' / 'seed.txt').read_text(encoding='utf-8') == 'seed'
+
+
+def test_init_session_auto_populates_meta_when_unsynced(tmp_path):
+    entity_base = _seed_entity(tmp_path)
+    ms._SESSIONS_DIR = tmp_path / 'sessions'
+    init_session('s1', 'demo', sessions_base=tmp_path / 'sessions', system_sessions_base=tmp_path / '_sessions', entity_base=entity_base)
+    meta = tmp_path / 'sessions' / 'demo_meta' / 'core'
+    assert (meta / '.entity_synced').exists()
+    assert (tmp_path / 'sessions' / 's1' / 'core' / 'system.md').read_text(encoding='utf-8') == 'sys'
+
+
+def test_init_session_raises_on_misaligned_meta(tmp_path):
+    entity_base = _seed_entity(tmp_path)
+    ms._SESSIONS_DIR = tmp_path / 'sessions'
+    ms.populate_meta_from_entity('demo', entity_base, tmp_path / 'sessions')
+    (tmp_path / 'sessions' / 'demo_meta' / 'core' / 'system.md').write_text('drift\n', encoding='utf-8')
+    with pytest.raises(MetaAlignmentError):
+        init_session('s1', 'demo', sessions_base=tmp_path / 'sessions', system_sessions_base=tmp_path / '_sessions', entity_base=entity_base)
