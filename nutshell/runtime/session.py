@@ -13,6 +13,7 @@ from nutshell.runtime.params import ensure_session_params, read_session_params
 from nutshell.runtime.model_eval import evaluate_task_complexity, suggest_model
 from nutshell.llm_engine.registry import provider_name, resolve_provider
 from nutshell.runtime.status import ensure_session_status, read_session_status, write_session_status
+from nutshell.tool_engine.sandbox import BashSandbox
 
 if TYPE_CHECKING:
     from nutshell.runtime.ipc import FileIPC
@@ -168,6 +169,16 @@ class Session:
                 default_workdir=str(self.session_dir),
                 blocked_patterns=blocked_patterns,
             ).load_dir(self.core_dir / "tools")
+            bash_sandbox = BashSandbox(blocked_patterns)
+            for i, t in enumerate(tools):
+                if t.name == "bash":
+                    executor = BashExecutor(workdir=str(self.session_dir), sandbox=bash_sandbox)
+
+                    async def _bash_impl(**kwargs):
+                        return await executor.execute(**kwargs)
+
+                    tools[i] = Tool(name=t.name, description=t.description, func=_bash_impl, schema=t.schema)
+                    break
         except (FileNotFoundError, PermissionError):
             tools = []
         except Exception as e:
