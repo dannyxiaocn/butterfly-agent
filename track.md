@@ -45,7 +45,7 @@
 
 ## Module 4 · Entity 继承系统改进
 
-- [ ] **meta session 完备，entity 保留继承标识**：  
+- [x] **meta session 完备，entity 保留继承标识** (commit: b4fbc50)：  
   - meta session 展开后完全看不到继承关系（扁平化），对 agent 透明  
   - entity 定义里保留标识：`link`（指向 parent）、`own`（自己独有）、`append`（在 parent 基础上追加）  
   - meta session 的「自己部分」完全独立，entity 更新只更新继承的部分  
