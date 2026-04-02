@@ -1,4 +1,4 @@
-# Nutshell `v1.3.47`
+# Nutshell `v1.3.54`
 
 A minimal Python agent runtime. Agents run as persistent server-managed sessions with autonomous heartbeat ticking. **Primary interface: CLI.**
 
@@ -9,7 +9,6 @@ A minimal Python agent runtime. Agents run as persistent server-managed sessions
 ```bash
 pip install -e .
 export ANTHROPIC_API_KEY=...
-export OPENAI_API_KEY=...           # optional: enables openai_agent (Codex)
 export KIMI_FOR_CODING_API_KEY=...  # optional: enables kimi_agent
 export BRAVE_API_KEY=...            # optional: enables web_search (default provider)
 export TAVILY_API_KEY=...           # optional: enables web_search via Tavily
@@ -528,8 +527,6 @@ When multiple agent sessions work on the same git repository, a **master/sub** c
 
 ### v1.3.38
 - **TUI removed** — `ui/tui.py` deleted; `nutshell-tui` entry point and `textual` dependency removed from `pyproject.toml`; all references cleaned from `ui/cli/main.py` and `README.md`. Web UI is for humans, CLI is for agents.
-- **`entity/openai_agent/`** — new entity extending `agent`, using `openai` provider + `codex-mini-latest` model; enables default agent to spawn Codex as a sub-agent alongside `kimi_agent`
-- **`multi-agent` skill** — entity selection table updated to include `openai_agent`
 
 ### v1.3.37
 - **Agent entity prompt improvements** (v1.1.0) — rewrote `entity/agent/` prompts based on context engineering and agent prompting best practices research
