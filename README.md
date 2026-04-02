@@ -1,4 +1,4 @@
-# Nutshell `v1.3.46`
+# Nutshell `v1.3.47`
 
 A minimal Python agent runtime. Agents run as persistent server-managed sessions with autonomous heartbeat ticking. **Primary interface: CLI.**
 
@@ -789,6 +789,16 @@ When multiple agent sessions work on the same git repository, a **master/sub** c
 
 
 ## Changelog
+
+### v1.3.47
+- **bridge layer** (`nutshell/runtime/bridge.py`): unified client-side session abstraction inspired by claude-code's replBridge patterns
+- `BoundedIDSet`: FIFO ring buffer for event dedup — prevents echo and SSE reconnect re-delivery (O(1), O(capacity) memory)
+- `BridgeSession`: wraps FileIPC with `send_message()`, `send_interrupt()`, `iter_events()` (sync+async), `wait_for_reply()` / `async_wait_for_reply()` — used by all frontends
+- **soft interrupt**: `POST /api/sessions/{id}/interrupt` — drains pending input queue, defers next heartbeat tick, emits `{"type":"interrupted"}` event
+- `ipc.py`: added `send_interrupt()` + `poll_interrupt(offset)` for daemon-side interrupt detection
+- `session.py`: daemon loop checks interrupt each cycle before processing inputs
+- `app.py`: SSE frames now carry `id: <seq>` header (Last-Event-ID standard reconnect); send_message uses BridgeSession; new interrupt endpoint
+- `weixin.py`: replaced inline `_wait_for_agent_reply` with `BridgeSession.async_wait_for_reply(msg_id)` — uses `user_input_id` matching (no more false matches from concurrent heartbeat turns)
 
 ### v1.3.46
 - **meta session as real agent**: `start_meta_agent()` creates `_sessions/<entity>_meta/` so watcher starts it as a persistent agent

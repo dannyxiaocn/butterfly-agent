@@ -215,18 +215,9 @@ class WeixinBridge:
         )
 
     # ── Agent reply waiting ───────────────────────────────────────────────────
-
-    async def _wait_for_agent_reply(self, ipc, ctx_offset: int) -> str | None:
-        """Poll context.jsonl until an 'agent' event appears after ctx_offset."""
-        deadline = time.monotonic() + _REPLY_TIMEOUT
-        last_offset = ctx_offset
-        while time.monotonic() < deadline:
-            await asyncio.sleep(0.5)
-            for event, new_off in ipc.tail_context(last_offset):
-                last_offset = new_off
-                if event.get("type") == "agent":
-                    return (event.get("content") or "").strip()
-        return None
+    # Delegated to BridgeSession.async_wait_for_reply() which uses
+    # user_input_id matching (more reliable than watching for 'agent' event
+    # type, which could be from a concurrent heartbeat turn).
 
     # ── Command handling ──────────────────────────────────────────────────────
 
@@ -382,11 +373,10 @@ class WeixinBridge:
             return
 
         async with self._lock:
-            from nutshell.runtime.ipc import FileIPC
-            ipc = FileIPC(sys_dir)
-            ctx_before = ipc.context_size()
-            ipc.send_message(text)
-            reply = await self._wait_for_agent_reply(ipc, ctx_before)
+            from nutshell.runtime.bridge import BridgeSession
+            bridge = BridgeSession(sys_dir)
+            msg_id = bridge.send_message(text, caller="human")
+            reply = await bridge.async_wait_for_reply(msg_id, timeout=_REPLY_TIMEOUT)
 
         if reply:
             await self._send_text(client, from_user, reply, ctx_token)

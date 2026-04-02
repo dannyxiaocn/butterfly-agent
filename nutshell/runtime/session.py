@@ -474,6 +474,7 @@ class Session:
         # Skip existing context events — only process new user_input events.
         # Starting at current file size prevents replay of prior session messages.
         input_offset = ipc.context_size()
+        interrupt_offset = ipc.events_size()  # only look at NEW interrupt events
 
         # Initialise heartbeat timer.
         # Use last_run_at from status.json so the interval is correctly preserved
@@ -500,6 +501,22 @@ class Session:
 
         try:
             while True:
+                # Check for interrupt control events (soft interrupt).
+                # Drains pending inputs and skips the next heartbeat.
+                interrupted, interrupt_offset = ipc.poll_interrupt(interrupt_offset)
+                if interrupted:
+                    inputs, input_offset = ipc.poll_inputs(input_offset)  # drain queue
+                    if inputs:
+                        self._append_event({
+                            "type": "interrupted",
+                            "discarded": len(inputs),
+                        })
+                    else:
+                        self._append_event({"type": "interrupted", "discarded": 0})
+                    last_tick_time = asyncio.get_event_loop().time()  # defer next heartbeat
+                    await asyncio.sleep(0.5)
+                    continue
+
                 # Poll for new user_input events
                 inputs, input_offset = ipc.poll_inputs(input_offset)
                 for msg in inputs:

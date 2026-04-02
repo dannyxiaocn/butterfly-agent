@@ -162,7 +162,41 @@ class FileIPC:
         self.append_context({"type": "user_input", "content": content, "id": msg_id})
         return msg_id
 
+    def send_interrupt(self) -> None:
+        """Append an interrupt control event to events.jsonl.
+
+        The session's run_daemon_loop polls for this via poll_interrupt() and
+        responds with a soft interrupt: drains pending inputs and skips the
+        next heartbeat tick.
+        """
+        self.append_event({"type": "interrupt"})
+
     # ── Daemon-side read ─────────────────────────────────────────────────────
+
+    def poll_interrupt(self, offset: int) -> tuple[bool, int]:
+        """Read events.jsonl for an 'interrupt' event at or after offset.
+
+        Returns (found, new_offset). The daemon calls this each cycle; when
+        found=True it should drain pending inputs, skip the next heartbeat,
+        and emit {"type": "interrupted"} back to events.jsonl.
+        """
+        if not self.events_path.exists():
+            return False, offset
+        found = False
+        with self.events_path.open("r", encoding="utf-8") as f:
+            f.seek(offset)
+            data = f.read()
+            new_offset = f.tell()
+        for line in data.splitlines():
+            line = line.strip()
+            if line:
+                try:
+                    event = json.loads(line)
+                    if event.get("type") == "interrupt":
+                        found = True
+                except json.JSONDecodeError:
+                    pass
+        return found, new_offset
 
     def poll_inputs(self, offset: int) -> tuple[list[dict], int]:
         """Read new user_input events from context.jsonl starting at byte offset.

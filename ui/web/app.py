@@ -34,9 +34,19 @@ _DEFAULT_PORT = 8080
 _HTML = (Path(__file__).parent / "index.html").read_text(encoding="utf-8")
 
 
-def _sse_format(event: dict) -> str:
+def _sse_format(event: dict, seq: int | None = None) -> str:
+    """Format a server-sent event.
+
+    Includes an 'id:' line when seq is provided, enabling browsers to
+    send Last-Event-ID on reconnect. The seq number is a monotonic integer
+    over the combined (context + events) stream — not a file byte offset.
+    Clients pass it back as ?events_seq=N so the server can skip already-seen
+    events rather than relying on fragile byte offsets.
+    """
     etype = event.get("type", "message")
     data = json.dumps(event, ensure_ascii=False)
+    if seq is not None:
+        return f"id: {seq}\nevent: {etype}\ndata: {data}\n\n"
     return f"event: {etype}\ndata: {data}\n\n"
 
 
@@ -101,40 +111,60 @@ def create_app(sessions_dir: Path, system_sessions_dir: Path | None = None) -> F
 
     @app.post("/api/sessions/{session_id}/messages")
     async def send_message(session_id: str, body: dict):
-        from nutshell.runtime.ipc import FileIPC
+        from nutshell.runtime.bridge import BridgeSession
         system_dir = system_sessions_dir / session_id
         if not system_dir.exists():
             raise HTTPException(404, f"Session not found: {session_id}")
         if _is_meta_session_id(session_id):
             raise HTTPException(403, "Direct chat with meta sessions is disabled.")
-        msg_id = FileIPC(system_dir).send_message(body.get("content", ""))
+        msg_id = BridgeSession(system_dir).send_message(body.get("content", ""))
         return {"id": msg_id}
+
+    @app.post("/api/sessions/{session_id}/interrupt")
+    async def interrupt_session_handler(session_id: str):
+        """Send a soft interrupt to the session.
+
+        Drains any pending queued inputs and defers the next heartbeat tick.
+        In-progress turns run to completion.
+        """
+        from nutshell.runtime.bridge import BridgeSession
+        system_dir = system_sessions_dir / session_id
+        if not system_dir.exists():
+            raise HTTPException(404, f"Session not found: {session_id}")
+        BridgeSession(system_dir).send_interrupt()
+        return {"ok": True}
 
     @app.get("/api/sessions/{session_id}/events")
     async def stream_events(session_id: str, context_since: int = 0, events_since: int = 0):
+        """SSE stream of display events for a session.
+
+        Query params:
+            context_since  — resume context.jsonl from this byte offset
+            events_since   — resume events.jsonl from this byte offset
+
+        Each SSE frame carries an 'id:' line with a monotonic sequence number.
+        On reconnect, the browser sends Last-Event-ID automatically; the client
+        JS should also pass context_since/events_since from the last /history
+        response to avoid replaying the full backlog.
+
+        Event dedup is handled by BridgeSession.async_iter_events(), which
+        uses a BoundedIDSet ring buffer to drop re-delivered events.
+        """
         system_dir = system_sessions_dir / session_id
         if not system_dir.exists():
             raise HTTPException(404, f"Session not found: {session_id}")
 
         async def generator() -> AsyncIterator[str]:
-            from nutshell.runtime.ipc import FileIPC
-            ipc = FileIPC(system_dir)
-            ctx_offset = context_since
-            evt_offset = events_since
-            for event, new_offset in ipc.tail_context(ctx_offset):
-                ctx_offset = new_offset
-                yield _sse_format(event)
-            for event, new_offset in ipc.tail_runtime_events(evt_offset):
-                evt_offset = new_offset
-                yield _sse_format(event)
-            while True:
-                await asyncio.sleep(0.3)
-                for event, new_offset in ipc.tail_context(ctx_offset):
-                    ctx_offset = new_offset
-                    yield _sse_format(event)
-                for event, new_offset in ipc.tail_runtime_events(evt_offset):
-                    evt_offset = new_offset
-                    yield _sse_format(event)
+            from nutshell.runtime.bridge import BridgeSession
+            bridge = BridgeSession(system_dir)
+            seq = 0
+            async for event, _ctx, _evt in bridge.async_iter_events(
+                context_offset=context_since,
+                events_offset=events_since,
+                poll_interval=0.3,
+            ):
+                yield _sse_format(event, seq=seq)
+                seq += 1
 
         return StreamingResponse(
             generator(),
