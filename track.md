@@ -28,7 +28,7 @@
 
 ## Module 3 · Meta-session 完善
 
-- [ ] **整理现有 entity**：审查 `entity/` 下所有 entity（agent, cli_os, game_player, kimi_agent, nutshell_dev, nutshell_dev_codex, openai_agent, persistent_agent, receptionist, yisebi），归档或删除无用的，补全缺少描述/用途不明的。
+- [x] **整理现有 entity** (commit: bc2cc6f)：新增 `entity/README.md` 作为内建 entity catalog，并为 10 个活跃 entity 补齐 `README.md`，明确用途、状态与保留原因；新增 `tests/test_entity_catalog.py` 防止再次出现用途不明的 entity。
 - [ ] **meta session 作为 entity 实例化单位**：确认 `sessions/<entity>_meta/` 完整继承 memory + playground；补全对应文档和 agent.yaml 里的说明字段。
 - [ ] **给 meta session 配工具：子 session 管理**：  
   - `list_child_sessions(entity)` — 列出 entity 所有子 session + status  
