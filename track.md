@@ -35,7 +35,7 @@
   - `get_session_info(session_id)` — 获取 session manifest + 最近 turns + tasks  
   - `archive_session(session_id)` — 将 session 移到 `_archived/` 而非删除  
   - dream 机制：meta session 定期（24h）审查子 session，决定 keep / archive
-- [ ] **Bridge 子进程标注 + Persistent agent 标识**：  
+- [x] **Bridge 子进程标注 + Persistent agent 标识** (commit: d773ed7)：  
   - 已 link 到 bridge 的子进程：状态显示 `napping`（嫩绿色灯），而非普通 idle  
   - persistent agent（`params.json` 里 `persistent: true`）：单独颜色/图标，表示一直在运行  
   - 在 `nutshell friends` 和 web UI 中体现
