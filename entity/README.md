@@ -15,6 +15,7 @@ This directory contains the built-in agent entities shipped with nutshell.
 | `nutshell_dev_codex` | Codex-flavoured nutshell development agent with dedicated memory templates | active internal developer |
 | `persistent_agent` | Always-on background agent with long heartbeat and default maintenance task | active runtime utility |
 | `tool_manager` | Persistent audit analyst for tool/skill usage trends, efficiency, and improvement suggestions | active runtime utility |
+| `tool_craftsman` | Persistent craftsman focused on improving tool and skill definitions, ergonomics, and guardrails | active internal maintainer |
 | `receptionist` | Front-desk coordinator that delegates work to worker agents | active coordination specialist |
 | `yisebi` | Opinionated social-commentary specialist for social-media style tasks | active specialist |
 

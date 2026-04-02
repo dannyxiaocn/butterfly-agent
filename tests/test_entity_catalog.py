@@ -11,9 +11,12 @@ ACTIVE_ENTITIES = [
     "cli_os",
     "game_player",
     "kimi_agent",
+    "dev_maintainer",
     "nutshell_dev",
     "nutshell_dev_codex",
     "persistent_agent",
+    "tool_craftsman",
+    "tool_manager",
     "receptionist",
     "yisebi",
 ]

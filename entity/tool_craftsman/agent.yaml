@@ -1,0 +1,11 @@
+name: tool_craftsman
+description: Tool/skill 质量打磨专员，不断迭代优化工具与技能的设计与实现
+extends: nutshell_dev_codex
+model: openai-codex/gpt-5.4
+provider: codex-oauth
+release_policy: persistent
+max_iterations: 20
+params:
+  persistent: true
+  heartbeat_interval: 43200  # 12h
+  default_task: 审查 entity/agent/tools/ 和 entity/agent/skills/ 中的 tool/skill 定义，找出描述不清晰、参数设计不合理或缺失边界检查的地方，提出改进建议并写入 playground/craft_report.md

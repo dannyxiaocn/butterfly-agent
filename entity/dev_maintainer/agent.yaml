@@ -11,4 +11,4 @@ params:
   default_task: >-
     运行 pytest tests/ -q 确认无 bug。
     检查是否有冗余代码、重复实现或可简化的模块。
-    输出检查报告到 playground/maintenance_report.md。
+    输出检查报告到 _sessions/dev_stats/maintenance_report.md。

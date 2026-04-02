@@ -39,13 +39,20 @@ async def archive_session(
         return f"Error: session '{session_id}' not found."
 
     try:
+        manifest = _safe_load_json(src_system / "manifest.json") if src_system.exists() else {}
+        entity_name = manifest.get("entity", "")
+        audit_src = src_session / "core" / "audit.jsonl"
+        if audit_src.exists() and entity_name:
+            meta_audit_dir = system_base / f"{entity_name}_meta" / "core" / "audit"
+            meta_audit_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(audit_src, meta_audit_dir / f"{session_id}.jsonl")
+
         if src_session.exists():
             dst_session.parent.mkdir(parents=True, exist_ok=True)
             if dst_session.exists():
                 shutil.rmtree(dst_session)
             shutil.move(str(src_session), str(dst_session))
 
-        manifest = _safe_load_json(src_system / "manifest.json") if src_system.exists() else {}
         if src_system.exists():
             dst_system.parent.mkdir(parents=True, exist_ok=True)
             if dst_system.exists():
