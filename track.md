@@ -71,7 +71,7 @@
 
 ## Module 7 · 工具 Stats 系统
 
-- [ ] **Harness 分层命名**：  
+- [x] **Harness 分层命名** (commit: c24b4b6)：  
   - `harness`（保留）= agent 自我感知组件的总称  
   - 拆分为：`sys_harness`（系统基础，每 turn 自动写）+ `audit_harness`（工具/skill 使用审计，跨 session 聚合）  
   - 读读 harness 相关 blog，明确定义边界
