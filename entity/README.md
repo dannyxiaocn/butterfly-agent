@@ -10,9 +10,11 @@ This directory contains the built-in agent entities shipped with nutshell.
 | `cli_os` | Shell-heavy exploration agent for immersive CLI / VM-style tasks | active specialist |
 | `game_player` | Game-solving specialist for puzzles, strategy, and challenge workflows | active specialist |
 | `kimi_agent` | Kimi-based specialist inheriting the default agent stack | active provider variant |
+| `dev_maintainer` | Persistent code-quality maintainer for tests, simplification, and cleanup guidance | active internal maintainer |
 | `nutshell_dev` | Nutshell development agent with project-specific skills and task heartbeat | active internal developer |
 | `nutshell_dev_codex` | Codex-flavoured nutshell development agent with dedicated memory templates | active internal developer |
 | `persistent_agent` | Always-on background agent with long heartbeat and default maintenance task | active runtime utility |
+| `tool_manager` | Persistent audit analyst for tool/skill usage trends, efficiency, and improvement suggestions | active runtime utility |
 | `receptionist` | Front-desk coordinator that delegates work to worker agents | active coordination specialist |
 | `yisebi` | Opinionated social-commentary specialist for social-media style tasks | active specialist |
 

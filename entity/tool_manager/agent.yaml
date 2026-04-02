@@ -1,0 +1,13 @@
+name: tool_manager
+description: 'Tool & skill 匠人。定期聚合各 session 的 audit.jsonl，分析工具使用热力图与效率，提出改进建议。'
+extends: agent
+model: claude-sonnet-4-6
+provider: anthropic
+release_policy: persistent
+max_iterations: 20
+params:
+  persistent: true
+  heartbeat_interval: 43200  # 12h
+  default_task: >-
+    扫描所有 session 的 core/audit.jsonl，统计各 tool 的调用频率和 token 消耗。
+    输出摘要到 playground/tool_stats_report.md，并记录到 memory.md。

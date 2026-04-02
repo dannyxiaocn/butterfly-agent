@@ -1,0 +1,14 @@
+name: dev_maintainer
+description: '代码质量卫士。保证 nutshell 代码无 bug、功能最精简，定期跑测试并提出清理建议。'
+extends: nutshell_dev_codex
+model: openai-codex/gpt-5.4
+provider: codex-oauth
+release_policy: persistent
+max_iterations: 20
+params:
+  persistent: true
+  heartbeat_interval: 86400  # 24h
+  default_task: >-
+    运行 pytest tests/ -q 确认无 bug。
+    检查是否有冗余代码、重复实现或可简化的模块。
+    输出检查报告到 playground/maintenance_report.md。
