@@ -176,7 +176,7 @@ sessions/<entity>_meta/       ← ordinary session reserved as entity-level muta
 └── playground/               ← shared workspace seed inherited by new sessions
 ```
 
-`entity/` remains configuration-only. New runtime sessions seed memory and playground state from `sessions/<entity>_meta/` when present, and fall back to `entity/<name>/memory.md` + `entity/<name>/memory/` for backward compatibility. Agents should use `update_meta_memory` for mutable cross-session state, not `propose_entity_update`.
+`entity/` remains configuration-only. New runtime sessions seed memory and playground state from `sessions/<entity>_meta/` when present, and fall back to `entity/<name>/memory.md` + `entity/<name>/memory/` for backward compatibility. Mutable cross-session state is maintained by the meta session; use `propose_entity_update` only for durable entity changes that require review.
 
 ```
 
@@ -259,7 +259,6 @@ Continue working on your tasks. When all tasks are done, respond with: SESSION_F
 | `spawn_session` | Create a new sub-session |
 | `recall_memory` | Search memory.md + memory/*.md |
 | `propose_entity_update` | Submit a permanent improvement for human review |
-| `update_meta_memory` | Persist cross-session mutable memory to `<entity>_meta` session |
 | `reload_capabilities` | Hot-reload tools + skills from core/ |
 
 **`web_search`**: default provider Brave (`BRAVE_API_KEY`). Switch to Tavily: `"tool_providers": {"web_search": "tavily"}` in `params.json`.
@@ -511,14 +510,13 @@ When multiple agent sessions work on the same git repository, a **master/sub** c
 ### v1.3.42
 - **Web UI rich tool call rendering** — `ui/web/index.html` now renders tool calls as structured cards instead of raw JSON.
 - `bash` calls show a yellow tool badge header, timeout/pty badges, and a monospace command block with collapsible long commands (`▼ show more`).
-- Added tailored summaries for `web_search`, `send_to_session`, `fetch_url`, `propose_entity_update`, and `update_meta_memory`, plus a concise fallback for other tools.
+- Added tailored summaries for `web_search`, `send_to_session`, `fetch_url`, and `propose_entity_update`, plus a concise fallback for other tools.
 
 ### v1.3.41
 - **Meta-session layer via ordinary sessions** — entity-level mutable state now lives in `sessions/<entity>_meta/` instead of `entity/` or a separate top-level directory. Each meta-session uses the normal session layout (`core/memory.md`, `core/memory/`, `playground/`, optional `core/params.json`).
 - **`session_factory.init_session()` seeding updated** — new sessions seed memory layers and playground files from `<entity>_meta`, with fallback to legacy `entity/<name>/memory.md` and `entity/<name>/memory/` for backward compatibility. Idempotency preserved.
-- **New built-in tool: `update_meta_memory`** — agents can persist cross-session mutable memory directly to their entity's meta-session without human approval.
 - **New CLI: `nutshell meta [ENTITY]`** — inspect meta-session state and optionally print `core/memory.md`.
-- Added tests for meta-session bootstrap, session seeding, and `update_meta_memory`; full suite now passing (752 tests).
+- Added tests for meta-session bootstrap and session seeding; full suite now passing (752 tests).
 
 
 ### v1.3.39

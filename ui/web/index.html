@@ -875,7 +875,7 @@
     if (name === 'web_search') return card(`🔍 <span class="quote">&quot;${escHtml(input.query || '')}&quot;</span>`);
     if (name === 'send_to_session') return card(`→ <span class="mono">${escHtml(input.session_id || 'unknown')}</span> ${escHtml(truncText(input.message || '', 80))}`);
     if (name === 'fetch_url') return card(`🌐 <span class="mono">${escHtml(truncText(input.url || '', 120))}</span>`);
-    if (name === 'propose_entity_update' || name === 'update_meta_memory') {
+    if (name === 'propose_entity_update') {
       const target = input.file_path || input.layer || 'target';
       const reason = truncText(input.reason || '', 60);
       return card(`<span class="mono">${escHtml(target)}</span>${reason ? ` — ${escHtml(reason)}` : ''}`);

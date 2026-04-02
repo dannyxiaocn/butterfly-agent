@@ -461,7 +461,7 @@ Responsibilities:
 - Keep the entity's meta memory accurate and concise
 
 You have access to bash to inspect sessions, read their content, and delete them when appropriate.
-Use update_meta_memory to record what you learn.
+Meta-session memory is system-managed; keep it current through your own heartbeat-driven maintenance.
 """
 
 _META_HEARTBEAT_PROMPT = """Dream cycle: Review all child sessions for this entity.

@@ -127,7 +127,7 @@ Switch in session: edit `sessions/<id>/core/params.json` → `{"provider": "open
 ## Built-in tools (agent entity, 11 tools)
 
 `bash`, `web_search`, `send_to_session`, `spawn_session`, `propose_entity_update`,  
-`fetch_url`, `recall_memory`, `state_diff`, `git_checkpoint`, `app_notify`, `update_meta_memory`
+`fetch_url`, `recall_memory`, `state_diff`, `git_checkpoint`, `app_notify`
 
 `reload_capabilities` is always injected by `_load_session_capabilities()` (not from YAML).
 
