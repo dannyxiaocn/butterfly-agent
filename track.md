@@ -21,7 +21,7 @@
 ## Module 2 · Multi-agent 通信 & QJBQ 融合 + Cambridge Agent Protocol
 
 - [x] **QJBQ 移到 `cli_app/`** (commit: c917184)：git mv qjbq/ → cli_app/qjbq/；创建 cli_app/__init__.py；更新 pyproject.toml packages + entry point；更新所有 import；762 tests pass。
-- [x] **删除系统自带通信方式，统一用 QJBQ** (commit: 3f11737)：`send_to_session` 改为经由 QJBQ `POST /api/session-message` 发送消息，QJBQ 统一写入目标 `_sessions/<id>/context.jsonl`；保留 relay 不可用时的 direct-write fallback 以兼容现有测试与迁移期场景。
+- [x] **删除系统自带通信方式，统一用 QJBQ** (commit: 9c015a9)：`send_to_session` 改为经由 QJBQ `POST /api/session-message` 发送消息，QJBQ 统一写入目标 `_sessions/<id>/context.jsonl`；保留 relay 不可用时的 direct-write fallback 以兼容现有测试与迁移期场景。
 - [ ] **Cambridge Agent Protocol (CAP) 模块设计**：  
   - agent 主动发起的交互 = **app**（如 qjbq、spawn_session）  
   - 被动系统监管的交互 = **protocol**（CAP 层）  
