@@ -67,6 +67,21 @@ def _make_app_notify() -> Callable:
     from nutshell.tool_engine.providers.app_notify import app_notify
     return app_notify
 
+
+def _make_list_child_sessions() -> Callable:
+    from nutshell.tool_engine.providers.list_child_sessions import list_child_sessions
+    return list_child_sessions
+
+
+def _make_get_session_info() -> Callable:
+    from nutshell.tool_engine.providers.get_session_info import get_session_info
+    return get_session_info
+
+
+def _make_archive_session() -> Callable:
+    from nutshell.tool_engine.providers.archive_session import archive_session
+    return archive_session
+
 _BUILTIN_FACTORIES: dict[str, Callable[[], Callable]] = {
     "bash":                   _make_bash,
     "web_search":             _make_web_search,
@@ -78,6 +93,9 @@ _BUILTIN_FACTORIES: dict[str, Callable[[], Callable]] = {
     "state_diff":             _make_state_diff,
     "git_checkpoint":         _make_git_checkpoint,
     "app_notify":             _make_app_notify,
+    "list_child_sessions":    _make_list_child_sessions,
+    "get_session_info":       _make_get_session_info,
+    "archive_session":        _make_archive_session,
 }
 
 

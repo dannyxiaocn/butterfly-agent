@@ -27,8 +27,16 @@ tools:
   - tools/state_diff.json
   - tools/git_checkpoint.json
   - tools/app_notify.json
+  - tools/list_child_sessions.json
+  - tools/get_session_info.json
+  - tools/archive_session.json
 
 skills:
   - skills/creator-mode
   - skills/multi-agent
   - skills/model-selection
+
+meta_session: >-
+  This entity instantiates child sessions via sessions/<entity>_meta/, which
+  holds the flattened inherited config plus mutable shared memory/playground
+  state for future sessions.

@@ -330,11 +330,15 @@ def sync_meta_to_entity(entity_name: str, entity_base: Path | None = None, s_bas
     _mark_meta_synced(meta_dir, entity_name)
 
 
-def sync_from_entity(entity_name: str, entity_base: Path | None = None) -> None:
-    """Bootstrap meta-session memory from entity memory on first use."""
+def sync_from_entity(entity_name: str, entity_base: Path | None = None, s_base: Path | None = None) -> None:
+    """Bootstrap meta-session mutable state from the entity on first use.
+
+    This seeds the meta session as the concrete entity instantiation unit for
+    mutable state: primary memory, layered memory, and shared playground files.
+    Existing meta-session files are preserved."""
     entity_root = entity_base or (_REPO_ROOT / 'entity')
     entity_dir = entity_root / entity_name
-    meta_dir = ensure_meta_session(entity_name)
+    meta_dir = ensure_meta_session(entity_name, s_base=s_base)
     core_dir = meta_dir / 'core'
     meta_memory = core_dir / 'memory.md'
     if meta_memory.exists() and meta_memory.read_text(encoding='utf-8').strip():
@@ -352,6 +356,19 @@ def sync_from_entity(entity_name: str, entity_base: Path | None = None) -> None:
             dst_file = meta_memory_dir / src_file.name
             if not dst_file.exists():
                 shutil.copy2(src_file, dst_file)
+
+    entity_playground_dir = entity_dir / 'playground'
+    if entity_playground_dir.is_dir():
+        meta_playground_dir = meta_dir / 'playground'
+        meta_playground_dir.mkdir(parents=True, exist_ok=True)
+        for src_path in sorted(entity_playground_dir.rglob('*')):
+            if src_path.is_dir():
+                continue
+            rel = src_path.relative_to(entity_playground_dir)
+            dst_path = meta_playground_dir / rel
+            dst_path.parent.mkdir(parents=True, exist_ok=True)
+            if not dst_path.exists():
+                shutil.copy2(src_path, dst_path)
 
 
 def _load_gene_commands(entity_name: str, entity_base: Path | None = None) -> list[str]:

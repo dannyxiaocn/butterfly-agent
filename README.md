@@ -175,7 +175,7 @@ sessions/<entity>_meta/       ← ordinary session reserved as entity-level muta
 └── playground/               ← shared workspace seed inherited by new sessions
 ```
 
-`entity/` remains configuration-only. New runtime sessions seed memory and playground state from `sessions/<entity>_meta/` when present, and fall back to `entity/<name>/memory.md` + `entity/<name>/memory/` for backward compatibility. Mutable cross-session state is maintained by the meta session; use `propose_entity_update` only for durable entity changes that require review.
+`entity/` remains configuration-only. `sessions/<entity>_meta/` is the concrete instantiation unit for each entity: it seeds child sessions with inherited prompts/tools/skills plus mutable state from `core/memory.md`, `core/memory/`, and `playground/`. On first bootstrap, meta sessions copy memory and playground defaults from `entity/<name>/`; afterwards mutable cross-session state lives in the meta session. Use `propose_entity_update` only for durable entity changes that require review.
 
 ```
 
@@ -513,6 +513,7 @@ When multiple agent sessions work on the same git repository, a **master/sub** c
 
 ### v1.3.41
 - **Meta-session layer via ordinary sessions** — entity-level mutable state now lives in `sessions/<entity>_meta/` instead of `entity/` or a separate top-level directory. Each meta-session uses the normal session layout (`core/memory.md`, `core/memory/`, `playground/`, optional `core/params.json`).
+- **Meta session = entity instance** — child sessions are instantiated from the meta session, not directly from `entity/`: config is flattened into the meta session, while mutable memory and shared playground files are inherited from `sessions/<entity>_meta/`.
 - **`session_factory.init_session()` seeding updated** — new sessions seed memory layers and playground files from `<entity>_meta`, with fallback to legacy `entity/<name>/memory.md` and `entity/<name>/memory/` for backward compatibility. Idempotency preserved.
 - **New CLI: `nutshell meta [ENTITY]`** — inspect meta-session state and optionally print `core/memory.md`.
 - Added tests for meta-session bootstrap and session seeding; full suite now passing (752 tests).

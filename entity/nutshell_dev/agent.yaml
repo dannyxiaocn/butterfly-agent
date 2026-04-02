@@ -17,3 +17,8 @@ skills:
   - skills/creator-mode
   - skills/multi-agent
   - skills/model-selection
+
+meta_session: >-
+  This entity instantiates child sessions via sessions/<entity>_meta/, which
+  holds the flattened inherited config plus mutable shared memory/playground
+  state for future sessions.

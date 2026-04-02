@@ -1,0 +1,9 @@
+{
+  "name": "list_child_sessions",
+  "description": "List non-meta child sessions for the current entity by reading _sessions/ manifests and excluding archived sessions.",
+  "input_schema": {
+    "type": "object",
+    "properties": {},
+    "required": []
+  }
+}

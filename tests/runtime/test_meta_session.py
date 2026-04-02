@@ -90,3 +90,26 @@ def test_sync_entity_to_meta_and_sync_meta_to_entity(tmp_path, monkeypatch):
     (entity_base / 'demo' / 'prompts' / 'system.md').write_text('entity wins\n', encoding='utf-8')
     sync_entity_to_meta('demo', entity_base)
     assert (meta_dir / 'core' / 'system.md').read_text(encoding='utf-8') == 'entity wins'
+
+
+def test_sync_from_entity_bootstraps_playground_when_empty(tmp_path, monkeypatch):
+    entity_base = tmp_path / 'entity'
+    playground_dir = entity_base / 'demo' / 'playground' / 'shared'
+    playground_dir.mkdir(parents=True)
+    (playground_dir / 'seed.txt').write_text('hello', encoding='utf-8')
+    monkeypatch.setattr('nutshell.runtime.meta_session._SESSIONS_DIR', tmp_path / 'sessions')
+    sync_from_entity('demo', entity_base)
+    meta_dir = get_meta_dir('demo')
+    assert (meta_dir / 'playground' / 'shared' / 'seed.txt').read_text(encoding='utf-8') == 'hello'
+
+
+def test_sync_from_entity_does_not_overwrite_meta_playground(tmp_path, monkeypatch):
+    entity_base = tmp_path / 'entity'
+    playground_dir = entity_base / 'demo' / 'playground'
+    playground_dir.mkdir(parents=True)
+    (playground_dir / 'config.txt').write_text('entity version', encoding='utf-8')
+    monkeypatch.setattr('nutshell.runtime.meta_session._SESSIONS_DIR', tmp_path / 'sessions')
+    meta_dir = ensure_meta_session('demo')
+    (meta_dir / 'playground' / 'config.txt').write_text('meta version', encoding='utf-8')
+    sync_from_entity('demo', entity_base)
+    assert (meta_dir / 'playground' / 'config.txt').read_text(encoding='utf-8') == 'meta version'

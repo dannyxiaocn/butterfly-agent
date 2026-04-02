@@ -1,0 +1,14 @@
+{
+  "name": "get_session_info",
+  "description": "Get session metadata, recent turns, tasks excerpt, and memory file list for a given session.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "session_id": {
+        "type": "string",
+        "description": "Target session ID."
+      }
+    },
+    "required": ["session_id"]
+  }
+}
