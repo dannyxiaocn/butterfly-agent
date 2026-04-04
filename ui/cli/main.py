@@ -143,6 +143,30 @@ def _read_all_sessions(
     return _sort_sessions(results)
 
 
+def cmd_chat(args) -> int:
+    from ui.cli.chat import _continue_session, _new_session
+    inject = _parse_inject_memory(getattr(args, "inject_memory", None))
+    if args.session:
+        if inject:
+            # Write injected memory to existing session
+            session_dir = args.sessions_base / args.session
+            if session_dir.exists():
+                _write_inject_memory(session_dir, inject)
+        return _continue_session(
+            args.session, args.message,
+            no_wait=args.no_wait, timeout=args.timeout,
+            system_base=args.system_base,
+        )
+    return _new_session(
+        args.entity, args.message,
+        no_wait=args.no_wait, timeout=args.timeout,
+        system_base=args.system_base,
+        sessions_base=args.sessions_base,
+        inject_memory=inject,
+        keep_alive=getattr(args, 'keep_alive', False),
+    )
+
+
 # ── Subcommand: chat ──────────────────────────────────────────────────────────
 
 def _add_chat_parser(subparsers) -> None:
@@ -177,47 +201,6 @@ def _add_chat_parser(subparsers) -> None:
                    dest="inject_memory",
                    help="Inject a memory layer: KEY=VALUE or KEY=@FILE (repeatable)")
     p.set_defaults(func=cmd_chat)
-
-
-def cmd_chat(args) -> int:
-    from ui.cli.chat import _continue_session, _new_session
-    inject = _parse_inject_memory(getattr(args, "inject_memory", None))
-    if args.session:
-        if inject:
-            # Write injected memory to existing session
-            session_dir = args.sessions_base / args.session
-            if session_dir.exists():
-                _write_inject_memory(session_dir, inject)
-        return _continue_session(
-            args.session, args.message,
-            no_wait=args.no_wait, timeout=args.timeout,
-            system_base=args.system_base,
-        )
-    return _new_session(
-        args.entity, args.message,
-        no_wait=args.no_wait, timeout=args.timeout,
-        system_base=args.system_base,
-        sessions_base=args.sessions_base,
-        inject_memory=inject,
-        keep_alive=getattr(args, 'keep_alive', False),
-    )
-
-
-# ── Subcommand: sessions ──────────────────────────────────────────────────────
-
-def _add_sessions_parser(subparsers) -> None:
-    p = subparsers.add_parser(
-        "sessions",
-        help="List all sessions.",
-        description="List all sessions with status, entity, and last-run time.",
-    )
-    p.add_argument("--json", action="store_true", dest="as_json",
-                   help="Output as JSON array (useful for agents)")
-    p.add_argument("--system-base", type=Path, default=_DEFAULT_SYSTEM_BASE,
-                   help=argparse.SUPPRESS)
-    p.add_argument("--sessions-base", type=Path, default=_DEFAULT_SESSIONS_BASE,
-                   help=argparse.SUPPRESS)
-    p.set_defaults(func=cmd_sessions)
 
 
 def cmd_sessions(args) -> int:
@@ -255,6 +238,48 @@ def cmd_sessions(args) -> int:
     return 0
 
 
+# ── Subcommand: sessions ──────────────────────────────────────────────────────
+
+def _add_sessions_parser(subparsers) -> None:
+    p = subparsers.add_parser(
+        "sessions",
+        help="List all sessions.",
+        description="List all sessions with status, entity, and last-run time.",
+    )
+    p.add_argument("--json", action="store_true", dest="as_json",
+                   help="Output as JSON array (useful for agents)")
+    p.add_argument("--system-base", type=Path, default=_DEFAULT_SYSTEM_BASE,
+                   help=argparse.SUPPRESS)
+    p.add_argument("--sessions-base", type=Path, default=_DEFAULT_SESSIONS_BASE,
+                   help=argparse.SUPPRESS)
+    p.set_defaults(func=cmd_sessions)
+
+
+def cmd_new(args) -> int:
+    from nutshell.runtime.session_factory import init_session
+    session_id = args.session_id or datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    entity_dir = _REPO_ROOT / "entity" / args.entity
+    if not entity_dir.exists():
+        print(f"Error: entity '{args.entity}' not found in entity/", file=sys.stderr)
+        return 1
+    try:
+        init_session(
+            session_id=session_id,
+            entity_name=args.entity,
+            sessions_base=args.sessions_base,
+            system_sessions_base=args.system_base,
+            heartbeat=args.heartbeat,
+        )
+    except Exception as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    inject = _parse_inject_memory(getattr(args, "inject_memory", None))
+    if inject:
+        _write_inject_memory(args.sessions_base / session_id, inject)
+    print(session_id)
+    return 0
+
+
 # ── Subcommand: new ───────────────────────────────────────────────────────────
 
 def _add_new_parser(subparsers) -> None:
@@ -287,44 +312,6 @@ def _add_new_parser(subparsers) -> None:
     p.set_defaults(func=cmd_new)
 
 
-def cmd_new(args) -> int:
-    from nutshell.runtime.session_factory import init_session
-    session_id = args.session_id or datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    entity_dir = _REPO_ROOT / "entity" / args.entity
-    if not entity_dir.exists():
-        print(f"Error: entity '{args.entity}' not found in entity/", file=sys.stderr)
-        return 1
-    try:
-        init_session(
-            session_id=session_id,
-            entity_name=args.entity,
-            sessions_base=args.sessions_base,
-            system_sessions_base=args.system_base,
-            heartbeat=args.heartbeat,
-        )
-    except Exception as exc:
-        print(f"Error: {exc}", file=sys.stderr)
-        return 1
-    inject = _parse_inject_memory(getattr(args, "inject_memory", None))
-    if inject:
-        _write_inject_memory(args.sessions_base / session_id, inject)
-    print(session_id)
-    return 0
-
-
-# ── Subcommand: stop ──────────────────────────────────────────────────────────
-
-def _add_stop_parser(subparsers) -> None:
-    p = subparsers.add_parser(
-        "stop",
-        help="Stop a session's heartbeat.",
-    )
-    p.add_argument("session_id", help="Session ID to stop")
-    p.add_argument("--system-base", type=Path, default=_DEFAULT_SYSTEM_BASE,
-                   help=argparse.SUPPRESS)
-    p.set_defaults(func=cmd_stop)
-
-
 def cmd_stop(args) -> int:
     from nutshell.runtime.status import write_session_status
     system_dir = args.system_base / args.session_id
@@ -341,17 +328,17 @@ def cmd_stop(args) -> int:
     return 0
 
 
-# ── Subcommand: start ─────────────────────────────────────────────────────────
+# ── Subcommand: stop ──────────────────────────────────────────────────────────
 
-def _add_start_parser(subparsers) -> None:
+def _add_stop_parser(subparsers) -> None:
     p = subparsers.add_parser(
-        "start",
-        help="Resume a stopped session (requires server to be running).",
+        "stop",
+        help="Stop a session's heartbeat.",
     )
-    p.add_argument("session_id", help="Session ID to resume")
+    p.add_argument("session_id", help="Session ID to stop")
     p.add_argument("--system-base", type=Path, default=_DEFAULT_SYSTEM_BASE,
                    help=argparse.SUPPRESS)
-    p.set_defaults(func=cmd_start)
+    p.set_defaults(func=cmd_stop)
 
 
 def cmd_start(args) -> int:
@@ -367,6 +354,19 @@ def cmd_start(args) -> int:
     )
     print(f"Started: {args.session_id}")
     return 0
+
+
+# ── Subcommand: start ─────────────────────────────────────────────────────────
+
+def _add_start_parser(subparsers) -> None:
+    p = subparsers.add_parser(
+        "start",
+        help="Resume a stopped session (requires server to be running).",
+    )
+    p.add_argument("session_id", help="Session ID to resume")
+    p.add_argument("--system-base", type=Path, default=_DEFAULT_SYSTEM_BASE,
+                   help=argparse.SUPPRESS)
+    p.set_defaults(func=cmd_start)
 
 
 # ── Subcommand: log ───────────────────────────────────────────────────────────
@@ -433,36 +433,6 @@ def _load_context(path) -> tuple[dict, list]:
             turns.append(ev)
     return inputs_by_id, turns
 
-def _add_log_parser(subparsers) -> None:
-    p = subparsers.add_parser(
-        "log",
-        help="Show recent conversation history for a session.",
-        description=(
-            "Display the last N conversation turns from a session.\n\n"
-            "Examples:\n"
-            "  nutshell log                                  Show latest session, last 5 turns\n"
-            "  nutshell log 2026-03-25_10-00-00              Specific session\n"
-            "  nutshell log -n 20                            Last 20 turns\n"
-            "  nutshell log --since now                      Bookmark 'now', future calls show new turns only\n"
-            "  nutshell log --since 2026-03-25T12:00:00      Turns after a specific time\n"
-            "  nutshell log --watch                          Poll every 2s for new turns (Ctrl-C to stop)\n"
-        ),
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    p.add_argument("session_id", nargs="?", default=None,
-                   help="Session ID (default: most recently active session)")
-    p.add_argument("-n", type=int, default=5, dest="num_turns",
-                   metavar="N", help="Number of turns to show (default: 5)")
-    p.add_argument("--since", type=str, default=None, metavar="TIMESTAMP",
-                   help="Only show turns after this time (ISO-8601, UNIX epoch, or 'now')")
-    p.add_argument("--watch", action="store_true", default=False,
-                   help="Poll for new turns every 2 seconds (implies --since now if --since not set)")
-    p.add_argument("--system-base", type=Path, default=_DEFAULT_SYSTEM_BASE,
-                   help=argparse.SUPPRESS)
-    p.add_argument("--sessions-base", type=Path, default=_DEFAULT_SESSIONS_BASE,
-                   help=argparse.SUPPRESS)
-    p.set_defaults(func=cmd_log)
-
 
 def _fmt_msg_content(content) -> str:
     """Flatten message content to a display string (handles str and list)."""
@@ -482,6 +452,66 @@ def _fmt_msg_content(content) -> str:
                     parts.append(f"[result: {preview}]")
         return " ".join(p for p in parts if p)
     return str(content)
+
+
+def _print_turns(turns: list[dict], inputs_by_id: dict[str, dict]) -> None:
+    """Print a list of turns with their associated user inputs."""
+    for turn in turns:
+        uid = turn.get("user_input_id")
+        user_ev = inputs_by_id.get(uid) if uid else None
+        ts = (user_ev or turn).get("ts", "")[:16].replace("T", " ")
+
+        # User line
+        user_text = user_ev.get("content", "") if user_ev else ""
+        if user_text:
+            print(f"  USER  {ts}  {user_text}")
+
+        # Agent messages (skip the echoed user message)
+        messages = turn.get("messages", [])
+        for msg in messages:
+            role = msg.get("role", "")
+            if role == "assistant":
+                text = _fmt_msg_content(msg.get("content", ""))
+                if text:
+                    print(f"  AGENT          {text}")
+            elif role == "tool":
+                pass  # skip tool results in display
+
+        # Token usage
+        usage = turn.get("usage")
+        if usage and (usage.get("input") or usage.get("output")):
+            parts = []
+            if usage.get("input"):
+                parts.append(f"↑{usage['input']}")
+            if usage.get("output"):
+                parts.append(f"↓{usage['output']}")
+            if usage.get("cache_read"):
+                parts.append(f"📦{usage['cache_read']}")
+            print(f"         {'  '.join(parts)}")
+        print()
+
+
+def _watch_log(args, session_id: str, context_path, since_ts: float) -> int:
+    """Poll context.jsonl for new turns every 2 seconds."""
+    import time
+
+    cursor = since_ts
+    print(f"[{session_id}] watching for new turns (Ctrl-C to stop) …")
+    try:
+        while True:
+            if context_path.exists():
+                inputs_by_id, turns = _load_context(context_path)
+                new_turns = [t for t in turns if (_turn_ts(t) or 0) > cursor]
+                if new_turns:
+                    _print_turns(new_turns, inputs_by_id)
+                    # Advance cursor to latest turn
+                    latest = max((_turn_ts(t) or 0) for t in new_turns)
+                    if latest > cursor:
+                        cursor = latest
+            time.sleep(2)
+    except KeyboardInterrupt:
+        print("\n[watch stopped]")
+        return 0
 
 
 def cmd_log(args) -> int:
@@ -549,88 +579,35 @@ def cmd_log(args) -> int:
     _print_turns(turns_to_show, inputs_by_id)
     return 0
 
-
-def _watch_log(args, session_id: str, context_path, since_ts: float) -> int:
-    """Poll context.jsonl for new turns every 2 seconds."""
-    import time
-
-    cursor = since_ts
-    print(f"[{session_id}] watching for new turns (Ctrl-C to stop) …")
-    try:
-        while True:
-            if context_path.exists():
-                inputs_by_id, turns = _load_context(context_path)
-                new_turns = [t for t in turns if (_turn_ts(t) or 0) > cursor]
-                if new_turns:
-                    _print_turns(new_turns, inputs_by_id)
-                    # Advance cursor to latest turn
-                    latest = max((_turn_ts(t) or 0) for t in new_turns)
-                    if latest > cursor:
-                        cursor = latest
-            time.sleep(2)
-    except KeyboardInterrupt:
-        print("\n[watch stopped]")
-        return 0
-
-
-def _print_turns(turns: list[dict], inputs_by_id: dict[str, dict]) -> None:
-    """Print a list of turns with their associated user inputs."""
-    for turn in turns:
-        uid = turn.get("user_input_id")
-        user_ev = inputs_by_id.get(uid) if uid else None
-        ts = (user_ev or turn).get("ts", "")[:16].replace("T", " ")
-
-        # User line
-        user_text = user_ev.get("content", "") if user_ev else ""
-        if user_text:
-            print(f"  USER  {ts}  {user_text}")
-
-        # Agent messages (skip the echoed user message)
-        messages = turn.get("messages", [])
-        for msg in messages:
-            role = msg.get("role", "")
-            if role == "assistant":
-                text = _fmt_msg_content(msg.get("content", ""))
-                if text:
-                    print(f"  AGENT          {text}")
-            elif role == "tool":
-                pass  # skip tool results in display
-
-        # Token usage
-        usage = turn.get("usage")
-        if usage and (usage.get("input") or usage.get("output")):
-            parts = []
-            if usage.get("input"):
-                parts.append(f"↑{usage['input']}")
-            if usage.get("output"):
-                parts.append(f"↓{usage['output']}")
-            if usage.get("cache_read"):
-                parts.append(f"📦{usage['cache_read']}")
-            print(f"         {'  '.join(parts)}")
-        print()
-
-
-# ── Subcommand: token-report ──────────────────────────────────────────────────
-
-def _add_token_report_parser(subparsers) -> None:
+def _add_log_parser(subparsers) -> None:
     p = subparsers.add_parser(
-        "token-report",
-        help="Show per-turn token usage breakdown for a session.",
+        "log",
+        help="Show recent conversation history for a session.",
         description=(
-            "Display token costs per turn with totals and cache efficiency.\n\n"
+            "Display the last N conversation turns from a session.\n\n"
             "Examples:\n"
-            "  nutshell token-report                       Latest session\n"
-            "  nutshell token-report 2026-03-25_10-00-00   Specific session\n"
+            "  nutshell log                                  Show latest session, last 5 turns\n"
+            "  nutshell log 2026-03-25_10-00-00              Specific session\n"
+            "  nutshell log -n 20                            Last 20 turns\n"
+            "  nutshell log --since now                      Bookmark 'now', future calls show new turns only\n"
+            "  nutshell log --since 2026-03-25T12:00:00      Turns after a specific time\n"
+            "  nutshell log --watch                          Poll every 2s for new turns (Ctrl-C to stop)\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument("session_id", nargs="?", default=None,
                    help="Session ID (default: most recently active session)")
+    p.add_argument("-n", type=int, default=5, dest="num_turns",
+                   metavar="N", help="Number of turns to show (default: 5)")
+    p.add_argument("--since", type=str, default=None, metavar="TIMESTAMP",
+                   help="Only show turns after this time (ISO-8601, UNIX epoch, or 'now')")
+    p.add_argument("--watch", action="store_true", default=False,
+                   help="Poll for new turns every 2 seconds (implies --since now if --since not set)")
     p.add_argument("--system-base", type=Path, default=_DEFAULT_SYSTEM_BASE,
                    help=argparse.SUPPRESS)
     p.add_argument("--sessions-base", type=Path, default=_DEFAULT_SESSIONS_BASE,
                    help=argparse.SUPPRESS)
-    p.set_defaults(func=cmd_token_report)
+    p.set_defaults(func=cmd_log)
 
 
 def cmd_token_report(args) -> int:
@@ -739,17 +716,17 @@ def cmd_token_report(args) -> int:
     return 0
 
 
-# ── Subcommand: tasks ─────────────────────────────────────────────────────────
+# ── Subcommand: token-report ──────────────────────────────────────────────────
 
-def _add_tasks_parser(subparsers) -> None:
+def _add_token_report_parser(subparsers) -> None:
     p = subparsers.add_parser(
-        "tasks",
-        help="Show a session's task board (core/tasks.md).",
+        "token-report",
+        help="Show per-turn token usage breakdown for a session.",
         description=(
-            "Display the task board for a session.\n\n"
+            "Display token costs per turn with totals and cache efficiency.\n\n"
             "Examples:\n"
-            "  nutshell tasks                       Show latest session's tasks\n"
-            "  nutshell tasks 2026-03-25_10-00-00   Show specific session\n"
+            "  nutshell token-report                       Latest session\n"
+            "  nutshell token-report 2026-03-25_10-00-00   Specific session\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -759,7 +736,7 @@ def _add_tasks_parser(subparsers) -> None:
                    help=argparse.SUPPRESS)
     p.add_argument("--sessions-base", type=Path, default=_DEFAULT_SESSIONS_BASE,
                    help=argparse.SUPPRESS)
-    p.set_defaults(func=cmd_tasks)
+    p.set_defaults(func=cmd_token_report)
 
 
 def cmd_tasks(args) -> int:
@@ -792,20 +769,17 @@ def cmd_tasks(args) -> int:
     return 0
 
 
-# ── Subcommand: prompt-stats ──────────────────────────────────────────────────
+# ── Subcommand: tasks ─────────────────────────────────────────────────────────
 
-_MEMORY_LAYER_INLINE_LINES = 60  # must match Agent._MEMORY_LAYER_INLINE_LINES
-
-
-def _add_prompt_stats_parser(subparsers) -> None:
+def _add_tasks_parser(subparsers) -> None:
     p = subparsers.add_parser(
-        "prompt-stats",
-        help="Show prompt space breakdown for a session.",
+        "tasks",
+        help="Show a session's task board (core/tasks.md).",
         description=(
-            "Display a component-by-component breakdown of system prompt size.\n\n"
+            "Display the task board for a session.\n\n"
             "Examples:\n"
-            "  nutshell prompt-stats                       Latest session\n"
-            "  nutshell prompt-stats 2026-03-25_10-00-00   Specific session\n"
+            "  nutshell tasks                       Show latest session's tasks\n"
+            "  nutshell tasks 2026-03-25_10-00-00   Show specific session\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -815,7 +789,12 @@ def _add_prompt_stats_parser(subparsers) -> None:
                    help=argparse.SUPPRESS)
     p.add_argument("--sessions-base", type=Path, default=_DEFAULT_SESSIONS_BASE,
                    help=argparse.SUPPRESS)
-    p.set_defaults(func=cmd_prompt_stats)
+    p.set_defaults(func=cmd_tasks)
+
+
+# ── Subcommand: prompt-stats ──────────────────────────────────────────────────
+
+_MEMORY_LAYER_INLINE_LINES = 60  # must match Agent._MEMORY_LAYER_INLINE_LINES
 
 
 def _prompt_stats_row(label: str, content: str, note: str = "") -> tuple[str, int, int, int]:
@@ -932,6 +911,68 @@ def cmd_prompt_stats(args) -> int:
     return 0
 
 
+def _add_prompt_stats_parser(subparsers) -> None:
+    p = subparsers.add_parser(
+        "prompt-stats",
+        help="Show prompt space breakdown for a session.",
+        description=(
+            "Display a component-by-component breakdown of system prompt size.\n\n"
+            "Examples:\n"
+            "  nutshell prompt-stats                       Latest session\n"
+            "  nutshell prompt-stats 2026-03-25_10-00-00   Specific session\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p.add_argument("session_id", nargs="?", default=None,
+                   help="Session ID (default: most recently active session)")
+    p.add_argument("--system-base", type=Path, default=_DEFAULT_SYSTEM_BASE,
+                   help=argparse.SUPPRESS)
+    p.add_argument("--sessions-base", type=Path, default=_DEFAULT_SESSIONS_BASE,
+                   help=argparse.SUPPRESS)
+    p.set_defaults(func=cmd_prompt_stats)
+
+
+def cmd_entity(args) -> int:
+    if args.entity_cmd == "new":
+        from ui.cli.new_agent import _ask_name, _ask_parent, create_entity
+        entity_dir = Path(args.entity_dir)
+        name = args.name or _ask_name()
+        if args.standalone:
+            parent = None
+        elif args.extends:
+            parent = args.extends
+        else:
+            parent = _ask_parent(entity_dir)
+        try:
+            created = create_entity(name, entity_dir, parent)
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+        print(f"Created: {created}/")
+        if parent:
+            print(f"  (extends '{parent}')")
+        return 0
+
+    if args.entity_cmd == "log":
+        from nutshell.runtime.entity_updates import get_entity_version, get_entity_changelog
+        entity_dir = Path(args.entity_dir)
+        entity_path = entity_dir / args.name
+        if not entity_path.exists():
+            print(f"Error: entity '{args.name}' not found in {entity_dir}/", file=sys.stderr)
+            return 1
+        version = get_entity_version(args.name, repo_root=entity_dir.parent)
+        changelog = get_entity_changelog(args.name, repo_root=entity_dir.parent)
+        print(f"Entity: {args.name}  (v{version})")
+        print("─" * 60)
+        if changelog:
+            print(changelog)
+        else:
+            print("(no changelog entries yet — changes are recorded when updates are applied)")
+        return 0
+
+    return 0
+
+
 # ── Subcommand: entity ────────────────────────────────────────────────────────
 
 def _add_entity_parser(subparsers) -> None:
@@ -981,45 +1022,9 @@ def _add_entity_parser(subparsers) -> None:
     p.set_defaults(func=cmd_entity)
 
 
-def cmd_entity(args) -> int:
-    if args.entity_cmd == "new":
-        from ui.cli.new_agent import _ask_name, _ask_parent, create_entity
-        entity_dir = Path(args.entity_dir)
-        name = args.name or _ask_name()
-        if args.standalone:
-            parent = None
-        elif args.extends:
-            parent = args.extends
-        else:
-            parent = _ask_parent(entity_dir)
-        try:
-            created = create_entity(name, entity_dir, parent)
-        except ValueError as exc:
-            print(f"Error: {exc}", file=sys.stderr)
-            return 1
-        print(f"Created: {created}/")
-        if parent:
-            print(f"  (extends '{parent}')")
-        return 0
-
-    if args.entity_cmd == "log":
-        from nutshell.runtime.entity_updates import get_entity_version, get_entity_changelog
-        entity_dir = Path(args.entity_dir)
-        entity_path = entity_dir / args.name
-        if not entity_path.exists():
-            print(f"Error: entity '{args.name}' not found in {entity_dir}/", file=sys.stderr)
-            return 1
-        version = get_entity_version(args.name, repo_root=entity_dir.parent)
-        changelog = get_entity_changelog(args.name, repo_root=entity_dir.parent)
-        print(f"Entity: {args.name}  (v{version})")
-        print("─" * 60)
-        if changelog:
-            print(changelog)
-        else:
-            print("(no changelog entries yet — changes are recorded when updates are applied)")
-        return 0
-
-    return 0
+def cmd_review(args) -> int:
+    from ui.cli.review_updates import review_updates
+    return review_updates(list_only=args.list)
 
 
 # ── Subcommand: review ────────────────────────────────────────────────────────
@@ -1031,18 +1036,6 @@ def _add_review_parser(subparsers) -> None:
     )
     p.add_argument("--list", action="store_true", help="List only, don't prompt")
     p.set_defaults(func=cmd_review)
-
-
-def cmd_review(args) -> int:
-    from ui.cli.review_updates import review_updates
-    return review_updates(list_only=args.list)
-
-
-# ── Subcommands: server / web ─────────────────────────────────────────────────
-
-def _add_exec_parser(subparsers, name: str, help_text: str) -> None:
-    p = subparsers.add_parser(name, help=help_text)
-    p.set_defaults(func=lambda args: _exec_entrypoint(name))
 
 
 def _exec_entrypoint(name: str) -> int:
@@ -1065,6 +1058,32 @@ def _exec_entrypoint(name: str) -> int:
         return 0
     print(f"Error: unknown entrypoint '{name}'", file=sys.stderr)
     return 1
+
+
+# ── Subcommands: server / web ─────────────────────────────────────────────────
+
+def _add_exec_parser(subparsers, name: str, help_text: str) -> None:
+    p = subparsers.add_parser(name, help=help_text)
+    p.set_defaults(func=lambda args: _exec_entrypoint(name))
+
+
+def cmd_kanban(args) -> int:
+    from ui.cli.kanban import build_kanban, format_kanban_table, format_kanban_json
+    sessions = _read_all_sessions(
+        sessions_base=args.sessions_base,
+        system_base=args.system_base,
+    )
+    if args.session:
+        sessions = [s for s in sessions if s.get("id") == args.session]
+        if not sessions:
+            print(f"Error: session '{args.session}' not found", file=sys.stderr)
+            return 1
+    entries = build_kanban(sessions, sessions_base=args.sessions_base)
+    if args.as_json:
+        print(format_kanban_json(entries))
+    else:
+        print(format_kanban_table(entries))
+    return 0
 
 
 
@@ -1098,22 +1117,17 @@ def _add_kanban_parser(subparsers) -> None:
     p.set_defaults(func=cmd_kanban)
 
 
-def cmd_kanban(args) -> int:
-    from ui.cli.kanban import build_kanban, format_kanban_table, format_kanban_json
+def cmd_friends(args) -> int:
+    from ui.cli.friends import build_friends_list, format_friends_table, format_friends_json
     sessions = _read_all_sessions(
         sessions_base=args.sessions_base,
         system_base=args.system_base,
     )
-    if args.session:
-        sessions = [s for s in sessions if s.get("id") == args.session]
-        if not sessions:
-            print(f"Error: session '{args.session}' not found", file=sys.stderr)
-            return 1
-    entries = build_kanban(sessions, sessions_base=args.sessions_base)
+    friends = build_friends_list(sessions)
     if args.as_json:
-        print(format_kanban_json(entries))
+        print(format_friends_json(friends))
     else:
-        print(format_kanban_table(entries))
+        print(format_friends_table(friends))
     return 0
 
 
@@ -1140,18 +1154,9 @@ def _add_friends_parser(subparsers) -> None:
     p.set_defaults(func=cmd_friends)
 
 
-def cmd_friends(args) -> int:
-    from ui.cli.friends import build_friends_list, format_friends_table, format_friends_json
-    sessions = _read_all_sessions(
-        sessions_base=args.sessions_base,
-        system_base=args.system_base,
-    )
-    friends = build_friends_list(sessions)
-    if args.as_json:
-        print(format_friends_json(friends))
-    else:
-        print(format_friends_table(friends))
-    return 0
+def _cmd_repo_skill(args) -> int:
+    from ui.cli.repo_skill import cmd_repo_skill
+    return cmd_repo_skill(args)
 
 
 # ── Subcommand: repo-skill ────────────────────────────────────────────────────
@@ -1177,9 +1182,9 @@ def _add_repo_skill_parser(subparsers) -> None:
     p.set_defaults(func=_cmd_repo_skill)
 
 
-def _cmd_repo_skill(args) -> int:
-    from ui.cli.repo_skill import cmd_repo_skill
-    return cmd_repo_skill(args)
+def _cmd_repo_dev(args) -> int:
+    from ui.cli.repo_skill import cmd_repo_dev
+    return cmd_repo_dev(args)
 
 
 # ── Subcommand: repo-dev ──────────────────────────────────────────────────────
@@ -1205,9 +1210,9 @@ def _add_repo_dev_parser(subparsers) -> None:
     p.set_defaults(func=_cmd_repo_dev)
 
 
-def _cmd_repo_dev(args) -> int:
-    from ui.cli.repo_skill import cmd_repo_dev
-    return cmd_repo_dev(args)
+def _cmd_visit(args) -> int:
+    from ui.cli.visit import cmd_visit
+    return cmd_visit(args)
 
 
 
@@ -1236,11 +1241,6 @@ def _add_visit_parser(subparsers) -> None:
     p.add_argument("--sessions-base", type=Path, default=_DEFAULT_SESSIONS_BASE,
                    help=argparse.SUPPRESS)
     p.set_defaults(func=_cmd_visit)
-
-
-def _cmd_visit(args) -> int:
-    from ui.cli.visit import cmd_visit
-    return cmd_visit(args)
 
 # ── Subcommand: os ─────────────────────────────────────────────────────────
 
@@ -1278,36 +1278,6 @@ def _find_recent_cli_os_session(
         except (ValueError, TypeError):
             continue
     return None
-
-
-def _add_os_parser(subparsers) -> None:
-    p = subparsers.add_parser(
-        "os",
-        help="Launch a CLI-OS playground session.",
-        description=(
-            "Start an interactive CLI-OS session — a Linux-like playground\n"
-            "where the agent is root and can freely code, explore, and build.\n\n"
-            "If a cli_os session was created within the last 24 hours,\n"
-            "it will be continued automatically.\n\n"
-            "Examples:\n"
-            "  nutshell os                         # open / resume CLI-OS\n"
-            "  nutshell os 'build me a web server' # open with a task\n"
-        ),
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    p.add_argument("message", nargs="?", default=None,
-                   help="Optional message to send (default: greeting)")
-    p.add_argument("--new", action="store_true", dest="force_new",
-                   help="Force a new session (ignore recent ones)")
-    p.add_argument("--timeout", type=float, default=300.0,
-                   help="Seconds to wait for a response (default: 300)")
-    p.add_argument("--no-wait", action="store_true",
-                   help="Fire-and-forget (don't wait for response)")
-    p.add_argument("--system-base", type=Path, default=_DEFAULT_SYSTEM_BASE,
-                   help=argparse.SUPPRESS)
-    p.add_argument("--sessions-base", type=Path, default=_DEFAULT_SESSIONS_BASE,
-                   help=argparse.SUPPRESS)
-    p.set_defaults(func=cmd_os)
 
 
 def cmd_os(args) -> int:
@@ -1354,20 +1324,34 @@ def cmd_os(args) -> int:
     return 0
 
 
-
-# ── Subcommand: dream ─────────────────────────────────────────────────────────
-
-def _add_dream_parser(subparsers) -> None:
+def _add_os_parser(subparsers) -> None:
     p = subparsers.add_parser(
-        "dream",
-        help="Trigger the meta agent to run its dream cycle.",
-        description="Sends a wake-up message to the entity's meta session, prompting it to review all child sessions.",
+        "os",
+        help="Launch a CLI-OS playground session.",
+        description=(
+            "Start an interactive CLI-OS session — a Linux-like playground\n"
+            "where the agent is root and can freely code, explore, and build.\n\n"
+            "If a cli_os session was created within the last 24 hours,\n"
+            "it will be continued automatically.\n\n"
+            "Examples:\n"
+            "  nutshell os                         # open / resume CLI-OS\n"
+            "  nutshell os 'build me a web server' # open with a task\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p.add_argument("entity", help="Entity name")
-    p.add_argument("--message", default="看任务来执行", help="Message to send (default: '看任务来执行')")
-    p.add_argument("--sessions-base", type=Path, default=_DEFAULT_SESSIONS_BASE, help=argparse.SUPPRESS)
-    p.add_argument("--system-base", type=Path, default=_DEFAULT_SYSTEM_BASE, help=argparse.SUPPRESS)
-    p.set_defaults(func=cmd_dream)
+    p.add_argument("message", nargs="?", default=None,
+                   help="Optional message to send (default: greeting)")
+    p.add_argument("--new", action="store_true", dest="force_new",
+                   help="Force a new session (ignore recent ones)")
+    p.add_argument("--timeout", type=float, default=300.0,
+                   help="Seconds to wait for a response (default: 300)")
+    p.add_argument("--no-wait", action="store_true",
+                   help="Fire-and-forget (don't wait for response)")
+    p.add_argument("--system-base", type=Path, default=_DEFAULT_SYSTEM_BASE,
+                   help=argparse.SUPPRESS)
+    p.add_argument("--sessions-base", type=Path, default=_DEFAULT_SESSIONS_BASE,
+                   help=argparse.SUPPRESS)
+    p.set_defaults(func=cmd_os)
 
 
 def cmd_dream(args) -> int:
@@ -1389,6 +1373,22 @@ def cmd_dream(args) -> int:
     return 0
 
 
+
+# ── Subcommand: dream ─────────────────────────────────────────────────────────
+
+def _add_dream_parser(subparsers) -> None:
+    p = subparsers.add_parser(
+        "dream",
+        help="Trigger the meta agent to run its dream cycle.",
+        description="Sends a wake-up message to the entity's meta session, prompting it to review all child sessions.",
+    )
+    p.add_argument("entity", help="Entity name")
+    p.add_argument("--message", default="看任务来执行", help="Message to send (default: '看任务来执行')")
+    p.add_argument("--sessions-base", type=Path, default=_DEFAULT_SESSIONS_BASE, help=argparse.SUPPRESS)
+    p.add_argument("--system-base", type=Path, default=_DEFAULT_SYSTEM_BASE, help=argparse.SUPPRESS)
+    p.set_defaults(func=cmd_dream)
+
+
 # ── Subcommand: meta ──────────────────────────────────────────────────────────
 
 def _read_meta_info(meta_dir: Path) -> dict:
@@ -1404,22 +1404,6 @@ def _read_meta_info(meta_dir: Path) -> dict:
         "playground_files": sorted([str(p.relative_to(playground_dir)) for p in playground_dir.rglob("*") if p.is_file()]) if playground_dir.is_dir() else [],
         "params_exists": (meta_dir / "core" / "params.json").exists(),
     }
-
-
-def _add_meta_parser(subparsers) -> None:
-    p = subparsers.add_parser(
-        "meta",
-        help="Show entity meta-session info.",
-        description="Show all or one _meta session state.",
-    )
-    p.add_argument("entity", nargs="?", default=None, help="Entity name (optional)")
-    p.add_argument("--memory", action="store_true", help="Print meta memory.md content")
-    p.add_argument("--json", action="store_true", dest="as_json", help="Output as JSON")
-    p.add_argument("--check", action="store_true", help="Show alignment diff for a specific entity")
-    p.add_argument("--sync", choices=["entity-wins", "meta-wins"], help="Resolve alignment conflict")
-    p.add_argument("--init", action="store_true", help="Re-run gene commands (delete marker and re-execute)")
-    p.add_argument("--sessions-base", type=Path, default=_DEFAULT_SESSIONS_BASE, help=argparse.SUPPRESS)
-    p.set_defaults(func=cmd_meta)
 
 
 def cmd_meta(args) -> int:
@@ -1505,6 +1489,22 @@ def cmd_meta(args) -> int:
         if idx != len(infos) - 1:
             print()
     return 0
+
+
+def _add_meta_parser(subparsers) -> None:
+    p = subparsers.add_parser(
+        "meta",
+        help="Show entity meta-session info.",
+        description="Show all or one _meta session state.",
+    )
+    p.add_argument("entity", nargs="?", default=None, help="Entity name (optional)")
+    p.add_argument("--memory", action="store_true", help="Print meta memory.md content")
+    p.add_argument("--json", action="store_true", dest="as_json", help="Output as JSON")
+    p.add_argument("--check", action="store_true", help="Show alignment diff for a specific entity")
+    p.add_argument("--sync", choices=["entity-wins", "meta-wins"], help="Resolve alignment conflict")
+    p.add_argument("--init", action="store_true", help="Re-run gene commands (delete marker and re-execute)")
+    p.add_argument("--sessions-base", type=Path, default=_DEFAULT_SESSIONS_BASE, help=argparse.SUPPRESS)
+    p.set_defaults(func=cmd_meta)
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
