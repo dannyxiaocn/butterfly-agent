@@ -57,6 +57,19 @@ class Session:
     creation is idempotent (existing files are never overwritten).
     """
 
+    _DEFAULT_PERSISTENT_PROMPT = (
+        "Check for incoming messages from other agents. "
+        "Review your current state. If nothing needs attention, rest."
+    )
+
+    @property
+    def _context_path(self) -> Path:
+        return self.system_dir / "context.jsonl"
+
+    @property
+    def _events_path(self) -> Path:
+        return self.system_dir / "events.jsonl"
+
     def __init__(
         self,
         agent: Agent,
@@ -288,6 +301,178 @@ class Session:
             pass
         self._agent._history = history
 
+    def _write_sys_harness(self, result: AgentResult, triggered_by: str, *, auto_model_override: dict | None = None) -> None:
+        """Write a per-turn performance snapshot to core/memory/harness.md.
+
+        Gives the agent a compact, always-visible summary of its recent
+        performance so it can self-adjust (e.g. use fewer tool calls, be
+        more concise, stay within token budgets).
+
+        The file is a memory layer — auto-injected into every activation
+        via the standard memory_layers mechanism.
+        """
+        usage = result.usage
+        history_turns = len(self._agent._history)
+        tool_names = sorted({tc.name for tc in result.tool_calls}) if result.tool_calls else []
+
+        # When auto_model is active, self._agent.model is the override; report the
+        # configured model instead so the snapshot reflects the session's actual setting.
+        configured_model = auto_model_override["original_model"] if auto_model_override else self._agent.model
+        provider_key = provider_name(self._agent._provider) or "unknown"
+
+        lines = [
+            "# Harness — Last Turn Performance",
+            "",
+            f"| Metric | Value |",
+            f"|--------|-------|",
+            f"| triggered_by | {triggered_by} |",
+            f"| provider | {provider_key} |",
+            f"| model | {configured_model} |",
+            f"| iterations | {result.iterations} |",
+            f"| tool_calls | {len(result.tool_calls)} |",
+            f"| tools_used | {', '.join(tool_names) if tool_names else '(none)'} |",
+            f"| input_tokens | {usage.input_tokens:,} |",
+            f"| output_tokens | {usage.output_tokens:,} |",
+            f"| total_tokens | {usage.total_tokens:,} |",
+            f"| cache_read | {usage.cache_read_tokens:,} |",
+            f"| cache_write | {usage.cache_write_tokens:,} |",
+            f"| history_turns | {history_turns} |",
+        ]
+        if auto_model_override:
+            lines.append(f"| auto_model_used | {auto_model_override['suggested_model']} (complexity={auto_model_override['complexity']}) |")
+        harness_path = self.core_dir / "memory" / "harness.md"
+        harness_path.parent.mkdir(parents=True, exist_ok=True)
+        harness_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    def _write_audit_entry(self, result: AgentResult, triggered_by: str, *, auto_model_override: dict | None = None) -> None:
+        """Append a machine-readable harness audit record to core/audit.jsonl."""
+        tool_names = sorted({tc.name for tc in result.tool_calls}) if result.tool_calls else []
+        usage = result.usage
+        configured_model = auto_model_override["original_model"] if auto_model_override else self._agent.model
+        entry = {
+            "ts": datetime.now().isoformat(),
+            "session_id": self._session_id,
+            "entity": self.system_dir.name,
+            "triggered_by": triggered_by,
+            "iterations": result.iterations,
+            "tool_calls": len(result.tool_calls),
+            "tools_used": tool_names,
+            "total_tokens": usage.total_tokens,
+            "input_tokens": usage.input_tokens,
+            "output_tokens": usage.output_tokens,
+            "model": configured_model,
+            "provider": provider_name(self._agent._provider) or "unknown",
+        }
+        audit_path = self.core_dir / "audit.jsonl"
+        audit_path.parent.mkdir(parents=True, exist_ok=True)
+        with audit_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+    # ── Internal ───────────────────────────────────────────────────
+
+    def _write_harness_snapshot(self, result: AgentResult, triggered_by: str, *, auto_model_override: dict | None = None) -> None:
+        """Write both agent-visible and audit harness outputs for a turn."""
+        self._write_sys_harness(result, triggered_by, auto_model_override=auto_model_override)
+        self._write_audit_entry(result, triggered_by, auto_model_override=auto_model_override)
+
+    def _append_context(self, event: dict) -> None:
+        """Append a conversation event (user_input or turn) to context.jsonl."""
+        if self._ipc is not None:
+            self._ipc.append_context(event)
+        else:
+            event.setdefault("ts", datetime.now().isoformat())
+            with self._context_path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(event, ensure_ascii=False) + "\n")
+
+    def _append_event(self, event: dict) -> None:
+        """Append a runtime/UI event to events.jsonl."""
+        if self._ipc is not None:
+            self._ipc.append_event(event)
+        else:
+            event.setdefault("ts", datetime.now().isoformat())
+            with self._events_path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(event, ensure_ascii=False) + "\n")
+
+    def _set_model_status(self, state: str, source: str) -> str:
+        ts = datetime.now().isoformat()
+        self._append_event({"type": "model_status", "state": state, "source": source, "ts": ts})
+        updates: dict = {"model_state": state, "model_source": source}
+        if state == "idle":
+            updates["last_run_at"] = ts
+        write_session_status(self.system_dir, **updates)
+        return ts
+
+    def _make_tool_call_callback(self):
+        """Return (callback, counter) pair for streaming tool call events.
+
+        The callback writes a tool_call event to context.jsonl for each tool
+        invoked, giving the UI real-time visibility before results return.
+        The counter reports how many tool calls were streamed (used to mark
+        the turn with has_streaming_tools=True so history doesn't duplicate them).
+        """
+        count: list[int] = [0]
+
+        def on_tool_call(name: str, input: dict) -> None:
+            count[0] += 1
+            self._append_event({"type": "tool_call", "name": name, "input": input})
+
+        def get_count() -> int:
+            return count[0]
+
+        return on_tool_call, get_count
+
+    def _make_text_chunk_callback(self):
+        """Return a sync callback that writes throttled partial_text events.
+
+        Chunks are buffered and flushed every ~150 characters to limit
+        write frequency while still giving the UI near-real-time feedback.
+
+        The returned callback has a ``.flush()`` attribute that must be
+        called after ``agent.run()`` completes to emit any remaining
+        buffered text.  Without this, the last <150-char segment of
+        every tool-call iteration would be silently dropped.
+        """
+        buf: list[str] = []
+        buf_len: list[int] = [0]
+        FLUSH_THRESHOLD = 150
+
+        def on_chunk(chunk: str) -> None:
+            buf.append(chunk)
+            buf_len[0] += len(chunk)
+            if buf_len[0] >= FLUSH_THRESHOLD:
+                accumulated = "".join(buf)
+                self._append_event({"type": "partial_text", "content": accumulated})
+                buf.clear()
+                buf_len[0] = 0
+
+        def flush() -> None:
+            """Emit any remaining buffered text as a final partial_text event."""
+            if buf:
+                self._append_event({"type": "partial_text", "content": "".join(buf)})
+                buf.clear()
+                buf_len[0] = 0
+
+        on_chunk.flush = flush  # type: ignore[attr-defined]
+        return on_chunk
+
+    def _serialize_message_content(self, content):
+        if not isinstance(content, list):
+            return content
+        # Return plain dict copies. Do NOT add extra fields (e.g. ts) that the
+        # Anthropic API rejects when these blocks are loaded back into history.
+        return [dict(block) if isinstance(block, dict) else block for block in content]
+
+    def _serialize_turn_messages(self, messages: list) -> list[dict]:
+        serialized: list[dict] = []
+        for message in messages:
+            entry = {
+                "role": message.role,
+                "ts": datetime.now().isoformat(),
+                "content": self._serialize_message_content(message.content),
+            }
+            serialized.append(entry)
+        return serialized
+
     # ── Activation ────────────────────────────────────────────────
 
     async def chat(self, message: str, *, user_input_id: str | None = None, caller_type: str = "human") -> AgentResult:
@@ -332,11 +517,6 @@ class Session:
         self._write_harness_snapshot(result, "user")
         self._set_model_status("idle", "user")
         return result
-
-    _DEFAULT_PERSISTENT_PROMPT = (
-        "Check for incoming messages from other agents. "
-        "Review your current state. If nothing needs attention, rest."
-    )
 
     async def tick(self) -> AgentResult | None:
         """Single heartbeat: run agent if tasks are non-empty.
@@ -484,6 +664,25 @@ class Session:
             coordinator.release(self._session_id)
         except Exception:
             pass  # best-effort cleanup
+
+    def _reshape_history(self, new_content: str) -> str:
+        """Clean up orphaned trailing user message before processing new user input.
+
+        If the agent history ends with an unresponded user message (e.g., a
+        heartbeat prompt interrupted mid-run), we either drop it (if it was a
+        heartbeat prompt) or merge it with the new message (if it was a real
+        user message), to prevent consecutive user messages which the API rejects.
+        """
+        if not self._agent._history or self._agent._history[-1].role != "user":
+            return new_content
+        last = self._agent._history[-1]
+        last_content = last.content if isinstance(last.content, str) else ""
+        self._agent._history.pop()
+        if "Heartbeat activation" in last_content or last_content.startswith("[Heartbeat "):
+            # Orphaned heartbeat prompt/marker — drop it, use new message as-is
+            return new_content
+        # Orphaned real user message — merge with new input
+        return f"{last_content}\n\n{new_content}"
 
     # ── Server loop ────────────────────────────────────────────────
 
@@ -651,202 +850,3 @@ class Session:
     @property
     def tasks_path(self) -> Path:
         return self.core_dir / "tasks.md"
-
-    @property
-    def _context_path(self) -> Path:
-        return self.system_dir / "context.jsonl"
-
-    @property
-    def _events_path(self) -> Path:
-        return self.system_dir / "events.jsonl"
-
-    # ── Internal ───────────────────────────────────────────────────
-
-    def _write_harness_snapshot(self, result: AgentResult, triggered_by: str, *, auto_model_override: dict | None = None) -> None:
-        """Write both agent-visible and audit harness outputs for a turn."""
-        self._write_sys_harness(result, triggered_by, auto_model_override=auto_model_override)
-        self._write_audit_entry(result, triggered_by, auto_model_override=auto_model_override)
-
-    def _write_sys_harness(self, result: AgentResult, triggered_by: str, *, auto_model_override: dict | None = None) -> None:
-        """Write a per-turn performance snapshot to core/memory/harness.md.
-
-        Gives the agent a compact, always-visible summary of its recent
-        performance so it can self-adjust (e.g. use fewer tool calls, be
-        more concise, stay within token budgets).
-
-        The file is a memory layer — auto-injected into every activation
-        via the standard memory_layers mechanism.
-        """
-        usage = result.usage
-        history_turns = len(self._agent._history)
-        tool_names = sorted({tc.name for tc in result.tool_calls}) if result.tool_calls else []
-
-        # When auto_model is active, self._agent.model is the override; report the
-        # configured model instead so the snapshot reflects the session's actual setting.
-        configured_model = auto_model_override["original_model"] if auto_model_override else self._agent.model
-        provider_key = provider_name(self._agent._provider) or "unknown"
-
-        lines = [
-            "# Harness — Last Turn Performance",
-            "",
-            f"| Metric | Value |",
-            f"|--------|-------|",
-            f"| triggered_by | {triggered_by} |",
-            f"| provider | {provider_key} |",
-            f"| model | {configured_model} |",
-            f"| iterations | {result.iterations} |",
-            f"| tool_calls | {len(result.tool_calls)} |",
-            f"| tools_used | {', '.join(tool_names) if tool_names else '(none)'} |",
-            f"| input_tokens | {usage.input_tokens:,} |",
-            f"| output_tokens | {usage.output_tokens:,} |",
-            f"| total_tokens | {usage.total_tokens:,} |",
-            f"| cache_read | {usage.cache_read_tokens:,} |",
-            f"| cache_write | {usage.cache_write_tokens:,} |",
-            f"| history_turns | {history_turns} |",
-        ]
-        if auto_model_override:
-            lines.append(f"| auto_model_used | {auto_model_override['suggested_model']} (complexity={auto_model_override['complexity']}) |")
-        harness_path = self.core_dir / "memory" / "harness.md"
-        harness_path.parent.mkdir(parents=True, exist_ok=True)
-        harness_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-    def _write_audit_entry(self, result: AgentResult, triggered_by: str, *, auto_model_override: dict | None = None) -> None:
-        """Append a machine-readable harness audit record to core/audit.jsonl."""
-        tool_names = sorted({tc.name for tc in result.tool_calls}) if result.tool_calls else []
-        usage = result.usage
-        configured_model = auto_model_override["original_model"] if auto_model_override else self._agent.model
-        entry = {
-            "ts": datetime.now().isoformat(),
-            "session_id": self._session_id,
-            "entity": self.system_dir.name,
-            "triggered_by": triggered_by,
-            "iterations": result.iterations,
-            "tool_calls": len(result.tool_calls),
-            "tools_used": tool_names,
-            "total_tokens": usage.total_tokens,
-            "input_tokens": usage.input_tokens,
-            "output_tokens": usage.output_tokens,
-            "model": configured_model,
-            "provider": provider_name(self._agent._provider) or "unknown",
-        }
-        audit_path = self.core_dir / "audit.jsonl"
-        audit_path.parent.mkdir(parents=True, exist_ok=True)
-        with audit_path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
-
-    def _append_context(self, event: dict) -> None:
-        """Append a conversation event (user_input or turn) to context.jsonl."""
-        if self._ipc is not None:
-            self._ipc.append_context(event)
-        else:
-            event.setdefault("ts", datetime.now().isoformat())
-            with self._context_path.open("a", encoding="utf-8") as f:
-                f.write(json.dumps(event, ensure_ascii=False) + "\n")
-
-    def _append_event(self, event: dict) -> None:
-        """Append a runtime/UI event to events.jsonl."""
-        if self._ipc is not None:
-            self._ipc.append_event(event)
-        else:
-            event.setdefault("ts", datetime.now().isoformat())
-            with self._events_path.open("a", encoding="utf-8") as f:
-                f.write(json.dumps(event, ensure_ascii=False) + "\n")
-
-    def _set_model_status(self, state: str, source: str) -> str:
-        ts = datetime.now().isoformat()
-        self._append_event({"type": "model_status", "state": state, "source": source, "ts": ts})
-        updates: dict = {"model_state": state, "model_source": source}
-        if state == "idle":
-            updates["last_run_at"] = ts
-        write_session_status(self.system_dir, **updates)
-        return ts
-
-    def _make_tool_call_callback(self):
-        """Return (callback, counter) pair for streaming tool call events.
-
-        The callback writes a tool_call event to context.jsonl for each tool
-        invoked, giving the UI real-time visibility before results return.
-        The counter reports how many tool calls were streamed (used to mark
-        the turn with has_streaming_tools=True so history doesn't duplicate them).
-        """
-        count: list[int] = [0]
-
-        def on_tool_call(name: str, input: dict) -> None:
-            count[0] += 1
-            self._append_event({"type": "tool_call", "name": name, "input": input})
-
-        def get_count() -> int:
-            return count[0]
-
-        return on_tool_call, get_count
-
-    def _reshape_history(self, new_content: str) -> str:
-        """Clean up orphaned trailing user message before processing new user input.
-
-        If the agent history ends with an unresponded user message (e.g., a
-        heartbeat prompt interrupted mid-run), we either drop it (if it was a
-        heartbeat prompt) or merge it with the new message (if it was a real
-        user message), to prevent consecutive user messages which the API rejects.
-        """
-        if not self._agent._history or self._agent._history[-1].role != "user":
-            return new_content
-        last = self._agent._history[-1]
-        last_content = last.content if isinstance(last.content, str) else ""
-        self._agent._history.pop()
-        if "Heartbeat activation" in last_content or last_content.startswith("[Heartbeat "):
-            # Orphaned heartbeat prompt/marker — drop it, use new message as-is
-            return new_content
-        # Orphaned real user message — merge with new input
-        return f"{last_content}\n\n{new_content}"
-
-    def _make_text_chunk_callback(self):
-        """Return a sync callback that writes throttled partial_text events.
-
-        Chunks are buffered and flushed every ~150 characters to limit
-        write frequency while still giving the UI near-real-time feedback.
-
-        The returned callback has a ``.flush()`` attribute that must be
-        called after ``agent.run()`` completes to emit any remaining
-        buffered text.  Without this, the last <150-char segment of
-        every tool-call iteration would be silently dropped.
-        """
-        buf: list[str] = []
-        buf_len: list[int] = [0]
-        FLUSH_THRESHOLD = 150
-
-        def on_chunk(chunk: str) -> None:
-            buf.append(chunk)
-            buf_len[0] += len(chunk)
-            if buf_len[0] >= FLUSH_THRESHOLD:
-                accumulated = "".join(buf)
-                self._append_event({"type": "partial_text", "content": accumulated})
-                buf.clear()
-                buf_len[0] = 0
-
-        def flush() -> None:
-            """Emit any remaining buffered text as a final partial_text event."""
-            if buf:
-                self._append_event({"type": "partial_text", "content": "".join(buf)})
-                buf.clear()
-                buf_len[0] = 0
-
-        on_chunk.flush = flush  # type: ignore[attr-defined]
-        return on_chunk
-
-    def _serialize_turn_messages(self, messages: list) -> list[dict]:
-        serialized: list[dict] = []
-        for message in messages:
-            entry = {
-                "role": message.role,
-                "ts": datetime.now().isoformat(),
-                "content": self._serialize_message_content(message.content),
-            }
-            serialized.append(entry)
-        return serialized
-
-    def _serialize_message_content(self, content):
-        if not isinstance(content, list):
-            return content
-        # Return plain dict copies. Do NOT add extra fields (e.g. ts) that the
-        # Anthropic API rejects when these blocks are loaded back into history.
-        return [dict(block) if isinstance(block, dict) else block for block in content]
