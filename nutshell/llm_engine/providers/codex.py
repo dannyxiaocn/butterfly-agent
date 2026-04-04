@@ -29,74 +29,6 @@ _CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 _JWT_AUTH_CLAIM = "https://api.openai.com/auth"
 
 
-class CodexProvider(Provider):
-    """LLM provider backed by OpenAI Codex via ChatGPT Plus OAuth.
-
-    Uses ``~/.codex/auth.json`` written by the official ``codex`` CLI.
-    Access tokens are refreshed automatically.
-    """
-
-    def __init__(self, max_tokens: int = 8096) -> None:
-        self.max_tokens = max_tokens
-
-    # ------------------------------------------------------------------
-    # Provider interface
-    # ------------------------------------------------------------------
-
-    async def complete(
-        self,
-        messages: list["Message"],
-        tools: list["Tool"],
-        system_prompt: str,
-        model: str,
-        *,
-        on_text_chunk: Callable[[str], None] | None = None,
-        cache_system_prefix: str = "",
-        cache_last_human_turn: bool = False,
-        thinking: bool = False,
-        thinking_budget: int = 8000,
-    ) -> tuple[str, list[ToolCall], TokenUsage]:
-        access_token, account_id = self._get_auth()
-        headers = _build_headers(access_token, account_id)
-        body = _build_request_body(model, system_prompt, messages, tools)
-
-        import httpx
-
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            async with client.stream("POST", _CODEX_URL, headers=headers, json=body) as resp:
-                if resp.status_code != 200:
-                    error_text = await resp.aread()
-                    raise RuntimeError(
-                        f"Codex API error {resp.status_code}: {error_text.decode()[:500]}"
-                    )
-                return await _parse_sse_stream(resp, on_text_chunk)
-
-    # ------------------------------------------------------------------
-    # Auth helpers
-    # ------------------------------------------------------------------
-
-    def _get_auth(self) -> tuple[str, str]:
-        """Return (access_token, account_id), refreshing if needed."""
-        auth = _read_auth()
-        tokens = auth.get("tokens", {})
-        access_token = tokens.get("access_token", "")
-        refresh_token = tokens.get("refresh_token", "")
-
-        if _is_token_expired(access_token):
-            if not refresh_token:
-                raise RuntimeError(
-                    "Codex access token expired and no refresh_token available. "
-                    "Run `codex login` to re-authenticate."
-                )
-            tokens = _refresh_access_token(refresh_token)
-            auth["tokens"] = tokens
-            _write_auth(auth)
-            access_token = tokens["access_token"]
-
-        account_id = _extract_account_id(access_token)
-        return access_token, account_id
-
-
 # ======================================================================
 # Auth I/O
 # ======================================================================
@@ -115,6 +47,14 @@ def _write_auth(auth: dict[str, Any]) -> None:
     _AUTH_PATH.write_text(json.dumps(auth, indent=2), encoding="utf-8")
 
 
+def _b64decode_pad(s: str) -> bytes:
+    import base64
+    pad = 4 - len(s) % 4
+    if pad != 4:
+        s += "=" * pad
+    return base64.urlsafe_b64decode(s)
+
+
 def _is_token_expired(token: str, buffer_seconds: int = 300) -> bool:
     """Return True if JWT is expired or will expire within buffer_seconds."""
     if not token:
@@ -126,14 +66,6 @@ def _is_token_expired(token: str, buffer_seconds: int = 300) -> bool:
         return time.time() + buffer_seconds >= exp
     except Exception:
         return True
-
-
-def _b64decode_pad(s: str) -> bytes:
-    import base64
-    pad = 4 - len(s) % 4
-    if pad != 4:
-        s += "=" * pad
-    return base64.urlsafe_b64decode(s)
 
 
 def _extract_account_id(token: str) -> str:
@@ -194,31 +126,6 @@ def _build_headers(access_token: str, account_id: str) -> dict[str, str]:
     }
 
 
-def _build_request_body(
-    model: str,
-    system_prompt: str,
-    messages: list["Message"],
-    tools: list["Tool"],
-) -> dict[str, Any]:
-    # Strip "openai-codex/" prefix if present — bare model id for the endpoint
-    model_id = model.split("/")[-1] if "/" in model else model
-
-    body: dict[str, Any] = {
-        "model": model_id,
-        "store": False,
-        "stream": True,
-        "instructions": system_prompt,
-        "input": _convert_messages(messages),
-        "text": {"verbosity": "medium"},
-        "include": ["reasoning.encrypted_content"],
-        "tool_choice": "auto",
-        "parallel_tool_calls": True,
-    }
-    if tools:
-        body["tools"] = [_tool_to_responses_api(t) for t in tools]
-    return body
-
-
 def _tool_to_responses_api(tool: "Tool") -> dict[str, Any]:
     api = tool.to_api_dict()
     return {
@@ -228,25 +135,6 @@ def _tool_to_responses_api(tool: "Tool") -> dict[str, Any]:
         "parameters": api.get("input_schema", {"type": "object", "properties": {}}),
         "strict": None,
     }
-
-
-# ======================================================================
-# Message conversion (nutshell → Responses API)
-# ======================================================================
-
-
-def _convert_messages(messages: list["Message"]) -> list[dict[str, Any]]:
-    result: list[dict[str, Any]] = []
-    for msg in messages:
-        if msg.role == "user":
-            item = _convert_user(msg)
-            if item:
-                result.append(item)
-        elif msg.role == "assistant":
-            result.extend(_convert_assistant(msg))
-        elif msg.role == "tool":
-            result.extend(_convert_tool_result(msg))
-    return result
 
 
 def _convert_user(msg: "Message") -> dict[str, Any] | None:
@@ -340,6 +228,59 @@ def _convert_tool_result(msg: "Message") -> list[dict[str, Any]]:
 
 
 # ======================================================================
+# Message conversion (nutshell → Responses API)
+# ======================================================================
+
+
+def _convert_messages(messages: list["Message"]) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    for msg in messages:
+        if msg.role == "user":
+            item = _convert_user(msg)
+            if item:
+                result.append(item)
+        elif msg.role == "assistant":
+            result.extend(_convert_assistant(msg))
+        elif msg.role == "tool":
+            result.extend(_convert_tool_result(msg))
+    return result
+
+
+def _build_request_body(
+    model: str,
+    system_prompt: str,
+    messages: list["Message"],
+    tools: list["Tool"],
+) -> dict[str, Any]:
+    # Strip "openai-codex/" prefix if present — bare model id for the endpoint
+    model_id = model.split("/")[-1] if "/" in model else model
+
+    body: dict[str, Any] = {
+        "model": model_id,
+        "store": False,
+        "stream": True,
+        "instructions": system_prompt,
+        "input": _convert_messages(messages),
+        "text": {"verbosity": "medium"},
+        "include": ["reasoning.encrypted_content"],
+        "tool_choice": "auto",
+        "parallel_tool_calls": True,
+    }
+    if tools:
+        body["tools"] = [_tool_to_responses_api(t) for t in tools]
+    return body
+
+
+def _parse_args(args_str: str) -> dict[str, Any]:
+    if not args_str:
+        return {}
+    try:
+        return json.loads(args_str)
+    except json.JSONDecodeError:
+        return {}
+
+
+# ======================================================================
 # SSE streaming parser
 # ======================================================================
 
@@ -424,10 +365,69 @@ async def _parse_sse_stream(
     return text, tool_calls, usage
 
 
-def _parse_args(args_str: str) -> dict[str, Any]:
-    if not args_str:
-        return {}
-    try:
-        return json.loads(args_str)
-    except json.JSONDecodeError:
-        return {}
+class CodexProvider(Provider):
+    """LLM provider backed by OpenAI Codex via ChatGPT Plus OAuth.
+
+    Uses ``~/.codex/auth.json`` written by the official ``codex`` CLI.
+    Access tokens are refreshed automatically.
+    """
+
+    def __init__(self, max_tokens: int = 8096) -> None:
+        self.max_tokens = max_tokens
+
+    # ------------------------------------------------------------------
+    # Auth helpers
+    # ------------------------------------------------------------------
+
+    def _get_auth(self) -> tuple[str, str]:
+        """Return (access_token, account_id), refreshing if needed."""
+        auth = _read_auth()
+        tokens = auth.get("tokens", {})
+        access_token = tokens.get("access_token", "")
+        refresh_token = tokens.get("refresh_token", "")
+
+        if _is_token_expired(access_token):
+            if not refresh_token:
+                raise RuntimeError(
+                    "Codex access token expired and no refresh_token available. "
+                    "Run `codex login` to re-authenticate."
+                )
+            tokens = _refresh_access_token(refresh_token)
+            auth["tokens"] = tokens
+            _write_auth(auth)
+            access_token = tokens["access_token"]
+
+        account_id = _extract_account_id(access_token)
+        return access_token, account_id
+
+    # ------------------------------------------------------------------
+    # Provider interface
+    # ------------------------------------------------------------------
+
+    async def complete(
+        self,
+        messages: list["Message"],
+        tools: list["Tool"],
+        system_prompt: str,
+        model: str,
+        *,
+        on_text_chunk: Callable[[str], None] | None = None,
+        cache_system_prefix: str = "",
+        cache_last_human_turn: bool = False,
+        thinking: bool = False,
+        thinking_budget: int = 8000,
+    ) -> tuple[str, list[ToolCall], TokenUsage]:
+        access_token, account_id = self._get_auth()
+        headers = _build_headers(access_token, account_id)
+        body = _build_request_body(model, system_prompt, messages, tools)
+
+        import httpx
+
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            async with client.stream("POST", _CODEX_URL, headers=headers, json=body) as resp:
+                if resp.status_code != 200:
+                    error_text = await resp.aread()
+                    raise RuntimeError(
+                        f"Codex API error {resp.status_code}: {error_text.decode()[:500]}"
+                    )
+                return await _parse_sse_stream(resp, on_text_chunk)
