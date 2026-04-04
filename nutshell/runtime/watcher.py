@@ -30,29 +30,90 @@ class SessionWatcher:
         self._finished: set[str] = set()  # session_ids that have completed
         self._entity_counts: dict[str, int] = {}  # entity → session count (updated per scan)
 
-    async def run(self, stop_event: asyncio.Event) -> None:
-        """Main watcher loop. Runs until stop_event is set."""
-        print(f"[server] Watching: {self.system_sessions_dir.absolute()}")
+    async def _start_session(
+        self, session_id: str, system_dir: Path, manifest: dict
+    ) -> None:
+        """Create a minimal agent from params and run server loop."""
+        from nutshell.runtime.session import Session
+        from nutshell.runtime.ipc import FileIPC
+        from nutshell.runtime.status import read_session_status
+        from nutshell.runtime.params import read_session_params
 
-        # Initial scan — recover existing sessions
-        discovered = await self._scan()
-        if discovered:
-            ids = ", ".join(discovered)
-            print(f"[server] Discovered: {ids} [total {len(discovered)}]")
+        session_dir = self.sessions_dir / session_id
 
-        while not stop_event.is_set():
-            await asyncio.sleep(1.0)
-            new = await self._scan()
-            for sid in new:
-                print(f"[server] Discovered: {sid}")
+        from nutshell.runtime.meta_session import check_meta_alignment, MetaAlignmentError, get_meta_session_id
+        entity_name = manifest.get("entity", "")
+        meta_session_id = f"{entity_name}_meta" if entity_name else ""
+        if entity_name and session_id != meta_session_id:
+            try:
+                check_meta_alignment(entity_name)
+            except MetaAlignmentError as e:
+                print(f"\n[server] ⚠️  ALIGNMENT CONFLICT: entity {e.entity_name}")
+                print(e.format_report())
+                print(f"[server] Resolve with:")
+                print(f"[server]   nutshell meta {e.entity_name} --sync entity-wins  # entity overwrites meta")
+                print(f"[server]   nutshell meta {e.entity_name} --sync meta-wins    # meta updates entity")
+                print(f"[server] Sessions blocked until resolved.")
+                from nutshell.runtime.status import write_session_status
+                write_session_status(system_dir, status="alignment_blocked")
+                return
 
-        # Cancel all active session tasks on shutdown
-        tasks = list(self._active.values())
-        if tasks:
-            for task in tasks:
-                task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
-        print("[server] All sessions stopped.")
+        # Read heartbeat_interval from core/params.json (source of truth).
+        heartbeat = float(read_session_params(session_dir).get("heartbeat_interval") or 600.0)
+
+        try:
+            if self._agent_factory is not None:
+                agent = self._agent_factory(manifest)
+            else:
+                from nutshell.core.agent import Agent
+                from nutshell.llm_engine.registry import resolve_provider
+
+                params = read_session_params(session_dir)
+                provider_str = (params.get("provider") or "anthropic").lower()
+                provider = resolve_provider(provider_str)
+                model = params.get("model") or None
+                agent_kwargs: dict = {}
+                if model:
+                    agent_kwargs["model"] = model
+                if params.get("fallback_model"):
+                    agent_kwargs["fallback_model"] = params["fallback_model"]
+                if params.get("fallback_provider"):
+                    agent_kwargs["fallback_provider"] = params["fallback_provider"]
+                agent = Agent(provider=provider, **agent_kwargs)
+        except Exception as exc:
+            print(f"[server] Failed to create agent for {session_id}: {exc}")
+            # Mark as stopped so the watcher doesn't retry indefinitely
+            from nutshell.runtime.status import write_session_status
+            write_session_status(system_dir, status="stopped")
+            return
+
+        ipc = FileIPC(system_dir)
+        session = Session(
+            agent,
+            session_id=session_id,
+            base_dir=self.sessions_dir,
+            system_base=system_dir.parent,
+            heartbeat=heartbeat,
+        )
+
+        # Always load history (needed for user messages even when tasks are empty)
+        context_path = system_dir / "context.jsonl"
+        if context_path.exists() and context_path.stat().st_size > 0:
+            session.load_history()
+
+        # Only announce if tasks have pending work — empty/idle sessions are silent
+        tasks_path = session_dir / "core" / "tasks.md"
+        has_tasks = tasks_path.exists() and tasks_path.read_text(encoding="utf-8").strip()
+        if has_tasks:
+            print(f"[server] Resumed: {session_id} ({len(agent._history)} messages, tasks pending)")
+
+        try:
+            await session.run_daemon_loop(ipc)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            print(f"[server] Session {session_id} crashed: {exc}")
+            ipc.append_event({"type": "error", "content": str(exc)})
 
     async def _scan(self) -> list[str]:
         """Scan system_sessions_dir for new or recovered manifests. Returns newly started IDs."""
@@ -140,87 +201,26 @@ class SessionWatcher:
 
         return discovered
 
-    async def _start_session(
-        self, session_id: str, system_dir: Path, manifest: dict
-    ) -> None:
-        """Create a minimal agent from params and run server loop."""
-        from nutshell.runtime.session import Session
-        from nutshell.runtime.ipc import FileIPC
-        from nutshell.runtime.status import read_session_status
-        from nutshell.runtime.params import read_session_params
+    async def run(self, stop_event: asyncio.Event) -> None:
+        """Main watcher loop. Runs until stop_event is set."""
+        print(f"[server] Watching: {self.system_sessions_dir.absolute()}")
 
-        session_dir = self.sessions_dir / session_id
+        # Initial scan — recover existing sessions
+        discovered = await self._scan()
+        if discovered:
+            ids = ", ".join(discovered)
+            print(f"[server] Discovered: {ids} [total {len(discovered)}]")
 
-        from nutshell.runtime.meta_session import check_meta_alignment, MetaAlignmentError, get_meta_session_id
-        entity_name = manifest.get("entity", "")
-        meta_session_id = f"{entity_name}_meta" if entity_name else ""
-        if entity_name and session_id != meta_session_id:
-            try:
-                check_meta_alignment(entity_name)
-            except MetaAlignmentError as e:
-                print(f"\n[server] ⚠️  ALIGNMENT CONFLICT: entity {e.entity_name}")
-                print(e.format_report())
-                print(f"[server] Resolve with:")
-                print(f"[server]   nutshell meta {e.entity_name} --sync entity-wins  # entity overwrites meta")
-                print(f"[server]   nutshell meta {e.entity_name} --sync meta-wins    # meta updates entity")
-                print(f"[server] Sessions blocked until resolved.")
-                from nutshell.runtime.status import write_session_status
-                write_session_status(system_dir, status="alignment_blocked")
-                return
+        while not stop_event.is_set():
+            await asyncio.sleep(1.0)
+            new = await self._scan()
+            for sid in new:
+                print(f"[server] Discovered: {sid}")
 
-        # Read heartbeat_interval from core/params.json (source of truth).
-        heartbeat = float(read_session_params(session_dir).get("heartbeat_interval") or 600.0)
-
-        try:
-            if self._agent_factory is not None:
-                agent = self._agent_factory(manifest)
-            else:
-                from nutshell.core.agent import Agent
-                from nutshell.llm_engine.registry import resolve_provider
-
-                params = read_session_params(session_dir)
-                provider_str = (params.get("provider") or "anthropic").lower()
-                provider = resolve_provider(provider_str)
-                model = params.get("model") or None
-                agent_kwargs: dict = {}
-                if model:
-                    agent_kwargs["model"] = model
-                if params.get("fallback_model"):
-                    agent_kwargs["fallback_model"] = params["fallback_model"]
-                if params.get("fallback_provider"):
-                    agent_kwargs["fallback_provider"] = params["fallback_provider"]
-                agent = Agent(provider=provider, **agent_kwargs)
-        except Exception as exc:
-            print(f"[server] Failed to create agent for {session_id}: {exc}")
-            # Mark as stopped so the watcher doesn't retry indefinitely
-            from nutshell.runtime.status import write_session_status
-            write_session_status(system_dir, status="stopped")
-            return
-
-        ipc = FileIPC(system_dir)
-        session = Session(
-            agent,
-            session_id=session_id,
-            base_dir=self.sessions_dir,
-            system_base=system_dir.parent,
-            heartbeat=heartbeat,
-        )
-
-        # Always load history (needed for user messages even when tasks are empty)
-        context_path = system_dir / "context.jsonl"
-        if context_path.exists() and context_path.stat().st_size > 0:
-            session.load_history()
-
-        # Only announce if tasks have pending work — empty/idle sessions are silent
-        tasks_path = session_dir / "core" / "tasks.md"
-        has_tasks = tasks_path.exists() and tasks_path.read_text(encoding="utf-8").strip()
-        if has_tasks:
-            print(f"[server] Resumed: {session_id} ({len(agent._history)} messages, tasks pending)")
-
-        try:
-            await session.run_daemon_loop(ipc)
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            print(f"[server] Session {session_id} crashed: {exc}")
-            ipc.append_event({"type": "error", "content": str(exc)})
+        # Cancel all active session tasks on shutdown
+        tasks = list(self._active.values())
+        if tasks:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+        print("[server] All sessions stopped.")
