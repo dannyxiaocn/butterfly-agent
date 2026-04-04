@@ -21,6 +21,25 @@ class AgentLoader(BaseLoader[Agent]):
     def __init__(self, impl_registry: dict[str, Callable] | None = None) -> None:
         self._impl_registry = impl_registry or {}
 
+    def _ancestor_dirs(self, path: Path) -> list[Path]:
+        """Return [path, parent, grandparent, ...] by walking the extends chain."""
+        dirs: list[Path] = []
+        current = path
+        while True:
+            dirs.append(current)
+            try:
+                config = AgentConfig.from_path(current)
+            except Exception:
+                break
+            extends = config.extends
+            if not extends:
+                break
+            parent = current.parent / extends
+            if not (parent / "agent.yaml").exists():
+                break
+            current = parent
+        return dirs
+
     def load(self, path: Path) -> Agent:
         """Load agent from a directory containing agent.yaml."""
         path = Path(path)
@@ -132,25 +151,6 @@ class AgentLoader(BaseLoader[Agent]):
             if subdir.is_dir() and (subdir / "agent.yaml").exists():
                 agents.append(self.load(subdir))
         return agents
-
-    def _ancestor_dirs(self, path: Path) -> list[Path]:
-        """Return [path, parent, grandparent, ...] by walking the extends chain."""
-        dirs: list[Path] = []
-        current = path
-        while True:
-            dirs.append(current)
-            try:
-                config = AgentConfig.from_path(current)
-            except Exception:
-                break
-            extends = config.extends
-            if not extends:
-                break
-            parent = current.parent / extends
-            if not (parent / "agent.yaml").exists():
-                break
-            current = parent
-        return dirs
 
     def load_from_entity(self, name: str) -> Agent:
         """Load agent by entity name from the default entity/ directory."""
