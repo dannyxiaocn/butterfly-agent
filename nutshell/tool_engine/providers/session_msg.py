@@ -24,6 +24,51 @@ _DEFAULT_QJBQ_BASE_URL = os.environ.get("QJBQ_BASE_URL", "http://127.0.0.1:8081"
 _POLL_INTERVAL = 0.5
 
 
+
+
+def _append_jsonl(path: Path, event: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(event, ensure_ascii=False) + "\n")
+
+
+def _find_turn(ctx_path: Path, msg_id: str) -> str | None:
+    """Scan context.jsonl for a turn with user_input_id == msg_id.
+
+    Returns the last assistant text if found, else None.
+    Returns empty string if the turn exists but has no text.
+    """
+    if not ctx_path.exists():
+        return None
+    try:
+        with ctx_path.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if event.get("type") != "turn":
+                    continue
+                if event.get("user_input_id") != msg_id:
+                    continue
+                for msg in reversed(event.get("messages", [])):
+                    if msg.get("role") == "assistant":
+                        content = msg.get("content", "")
+                        if isinstance(content, str):
+                            return content
+                        if isinstance(content, list):
+                            for block in content:
+                                if isinstance(block, dict) and block.get("type") == "text":
+                                    return block.get("text", "")
+                return ""
+    except Exception:
+        return None
+    return None
+
+
 async def send_to_session(
     *,
     session_id: str,
@@ -105,14 +150,6 @@ async def send_to_session(
 
     return f"Timeout: no response from session '{session_id}' within {timeout:.0f}s."
 
-
-
-
-def _append_jsonl(path: Path, event: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(event, ensure_ascii=False) + "\n")
-
 def _extract_error_detail(resp: httpx.Response) -> str:
     try:
         data = resp.json()
@@ -121,40 +158,3 @@ def _extract_error_detail(resp: httpx.Response) -> str:
         return text or f"HTTP {resp.status_code}"
     detail = data.get("detail") if isinstance(data, dict) else None
     return str(detail or f"HTTP {resp.status_code}")
-
-
-def _find_turn(ctx_path: Path, msg_id: str) -> str | None:
-    """Scan context.jsonl for a turn with user_input_id == msg_id.
-
-    Returns the last assistant text if found, else None.
-    Returns empty string if the turn exists but has no text.
-    """
-    if not ctx_path.exists():
-        return None
-    try:
-        with ctx_path.open("r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    event = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if event.get("type") != "turn":
-                    continue
-                if event.get("user_input_id") != msg_id:
-                    continue
-                for msg in reversed(event.get("messages", [])):
-                    if msg.get("role") == "assistant":
-                        content = msg.get("content", "")
-                        if isinstance(content, str):
-                            return content
-                        if isinstance(content, list):
-                            for block in content:
-                                if isinstance(block, dict) and block.get("type") == "text":
-                                    return block.get("text", "")
-                return ""
-    except Exception:
-        return None
-    return None
