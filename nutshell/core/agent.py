@@ -12,6 +12,29 @@ from nutshell.core.types import AgentResult, Message, ToolCall
 _DEFAULT_MODEL = "claude-sonnet-4-6"
 
 
+async def _execute_tools(
+    tool_calls: list[ToolCall],
+    tool_map: dict[str, Tool],
+    *,
+    on_tool_done: OnToolDone | None = None,
+) -> list[dict]:
+    """Execute tool calls concurrently and return Anthropic-format tool_result blocks."""
+    async def _call(tc: ToolCall) -> dict:
+        tool = tool_map.get(tc.name)
+        if tool is None:
+            content = f"Error: tool '{tc.name}' not found."
+        else:
+            try:
+                content = await tool.execute(**tc.input)
+            except Exception as exc:
+                content = f"Error executing '{tc.name}': {exc}"
+        if on_tool_done:
+            on_tool_done(tc.name, tc.input, content)
+        return {"type": "tool_result", "tool_use_id": tc.id, "content": content}
+
+    return list(await asyncio.gather(*[_call(tc) for tc in tool_calls]))
+
+
 class Agent:
     """A minimal LLM agent.
 
@@ -27,6 +50,10 @@ class Agent:
                   is used with the ANTHROPIC_API_KEY environment variable.
         max_iterations: Max tool-call loops per run (default: 20).
     """
+
+    # Memory layers longer than this many lines are truncated in the prompt.
+    # The agent reads the full layer on demand via bash: cat core/memory/<name>.md
+    _MEMORY_LAYER_INLINE_LINES: int = 60
 
     def __init__(
         self,
@@ -80,10 +107,6 @@ class Agent:
             from nutshell.llm_engine.registry import resolve_provider
             self._fallback_provider = resolve_provider(self._fallback_provider_str)
         return self._fallback_provider
-
-    # Memory layers longer than this many lines are truncated in the prompt.
-    # The agent reads the full layer on demand via bash: cat core/memory/<name>.md
-    _MEMORY_LAYER_INLINE_LINES: int = 60
 
     @classmethod
     def _render_memory_layer(cls, name: str, content: str) -> str:
@@ -256,26 +279,3 @@ class Agent:
     def close(self) -> None:
         """Clear conversation history."""
         self._history = []
-
-
-async def _execute_tools(
-    tool_calls: list[ToolCall],
-    tool_map: dict[str, Tool],
-    *,
-    on_tool_done: OnToolDone | None = None,
-) -> list[dict]:
-    """Execute tool calls concurrently and return Anthropic-format tool_result blocks."""
-    async def _call(tc: ToolCall) -> dict:
-        tool = tool_map.get(tc.name)
-        if tool is None:
-            content = f"Error: tool '{tc.name}' not found."
-        else:
-            try:
-                content = await tool.execute(**tc.input)
-            except Exception as exc:
-                content = f"Error executing '{tc.name}': {exc}"
-        if on_tool_done:
-            on_tool_done(tc.name, tc.input, content)
-        return {"type": "tool_result", "tool_use_id": tc.id, "content": content}
-
-    return list(await asyncio.gather(*[_call(tc) for tc in tool_calls]))
