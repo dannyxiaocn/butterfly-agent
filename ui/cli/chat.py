@@ -152,6 +152,25 @@ def _continue_session(
     return 0
 
 
+def _stop_daemon(
+    stop_event_holder: list,
+    daemon_thread: threading.Thread,
+    join_timeout: float = 5.0,
+) -> None:
+    """Signal daemon to stop and wait for thread to finish."""
+    if stop_event_holder:
+        stop_ev = stop_event_holder[0]
+        # stop_ev lives in an asyncio loop on the daemon thread;
+        # call_soon_threadsafe would be ideal, but we can't easily get the loop.
+        # Setting a threading.Event equivalent works since run_daemon_loop
+        # checks asyncio.Event.is_set() which is thread-safe for reads.
+        try:
+            stop_ev.set()
+        except RuntimeError:
+            pass  # event loop may already be closed
+    daemon_thread.join(timeout=join_timeout)
+
+
 # ── New session ───────────────────────────────────────────────────────────────
 
 def _new_session(
@@ -280,25 +299,6 @@ def _new_session(
         print(reply)
         print(f"\nSession: {session_id}")
         return 0
-
-
-def _stop_daemon(
-    stop_event_holder: list,
-    daemon_thread: threading.Thread,
-    join_timeout: float = 5.0,
-) -> None:
-    """Signal daemon to stop and wait for thread to finish."""
-    if stop_event_holder:
-        stop_ev = stop_event_holder[0]
-        # stop_ev lives in an asyncio loop on the daemon thread;
-        # call_soon_threadsafe would be ideal, but we can't easily get the loop.
-        # Setting a threading.Event equivalent works since run_daemon_loop
-        # checks asyncio.Event.is_set() which is thread-safe for reads.
-        try:
-            stop_ev.set()
-        except RuntimeError:
-            pass  # event loop may already be closed
-    daemon_thread.join(timeout=join_timeout)
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
