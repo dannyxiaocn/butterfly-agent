@@ -60,4 +60,4 @@ bridge = WeixinBridge(sessions_dir, system_sessions_dir)
 - 强依赖 `nutshell.runtime`：创建 session、读写状态、发送 IPC 事件、等待回复。
 - 间接依赖 `entity/`：用户在 UI 中选择的 entity 会被 runtime 实例化。
 - 部分 CLI 命令依赖 `nutshell.core` / `tool_engine` 提供的能力信息展示。
-- 被测试覆盖于 `tests/test_cli_*`、`tests/test_friends.py`、`tests/test_new_agent.py`、`tests/test_qjbq_server.py` 等。
+- 被测试覆盖于 `tests/test_cli_*`、`tests/test_friends.py`、`tests/test_new_agent.py` 等。

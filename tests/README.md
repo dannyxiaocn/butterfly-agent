@@ -19,7 +19,6 @@
 - `test_new_agent.py`：新 session 创建测试。
 - `test_persistent_mode.py`：persistent 模式与默认任务行为测试。
 - `test_prompt_cache.py`：prompt cache 行为测试。
-- `test_qjbq_server.py`：QjbQ / session message relay 测试。
 - `test_reload_tool.py`：能力热重载测试。
 - `test_repo_dev.py` / `test_repo_skill.py`：仓库开发/skill 相关流程测试。
 - `test_sandbox.py`：sandbox 行为测试。

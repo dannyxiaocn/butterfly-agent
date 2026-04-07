@@ -1,4 +1,4 @@
-# Nutshell `v1.3.72`
+# Nutshell `v1.3.73`
 
 A minimal Python agent runtime. Agents run as persistent server-managed sessions with autonomous heartbeat ticking.
 
