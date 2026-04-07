@@ -1,5 +1,5 @@
 name: tool_manager
-description: 'Tool & skill 匠人。定期聚合各 session 的 audit.jsonl，分析工具使用热力图与效率，提出改进建议。'
+description: 'Tool & skill 匠人。定期聚合各 session 的事件与上下文记录，分析工具使用热力图与活跃模式，提出改进建议。'
 extends: agent
 model: claude-sonnet-4-6
 provider: anthropic
@@ -8,7 +8,7 @@ params:
   persistent: true
   heartbeat_interval: 43200  # 12h
   default_task: >-
-    扫描 _sessions/*/core/audit.jsonl，并在缺失时回退扫描 sessions/*/core/audit.jsonl。
-    统计每个 tool 的调用次数、总 input tokens、总 output tokens、平均 tokens/call。
+    扫描 _sessions/*/events.jsonl 中的 tool_call 事件，并结合 _sessions/*/context.jsonl 的 turn 记录观察活跃模式。
+    统计每个 tool 的调用次数、涉及的 session 数，以及最近一次出现时间。
     将按调用次数降序排列的 markdown 表格报告写入 _sessions/tool_stats/report.md（必要时创建目录）。
     把本次统计摘要也写入自己的 memory.md。

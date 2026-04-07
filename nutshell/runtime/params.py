@@ -10,7 +10,6 @@ DEFAULT_PARAMS: dict = {
     "tool_providers": {"web_search": "brave"},  # web_search: "brave" | "tavily"
     "persistent": False,    # True → tick() fires even when tasks.md is empty
     "default_task": None,   # prompt used when persistent=True and tasks.md is empty
-    "auto_model": False,    # True → auto-select model based on task complexity
     "thinking": False,      # True → enable extended thinking for this session
     "thinking_budget": 8000,  # budget_tokens for extended thinking (Anthropic/Kimi only)
     "thinking_effort": "high",  # reasoning effort level (Codex only): none/minimal/low/medium/high/xhigh

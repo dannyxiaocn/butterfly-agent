@@ -18,9 +18,8 @@
 - `test_fetch_url.py`：URL 抓取工具测试。
 - `test_friends.py`：session 间通信相关 CLI/逻辑测试。
 - `test_git_checkpoint.py` / `test_git_coordinator.py`：git 集成测试。
-- `test_harness.py`：harness/执行统计相关测试。
+- `test_agent_iterations.py`：`AgentResult.iterations` 与工具循环迭代计数测试。
 - `test_ipc.py`：文件 IPC 测试。
-- `test_model_eval.py`：模型配置解析测试。
 - `test_new_agent.py`：新 session 创建测试。
 - `test_persistent_agent.py`：persistent agent 行为测试。
 - `test_prompt_cache.py`：prompt cache 行为测试。
@@ -39,7 +38,6 @@
 
 ### `runtime/`
 - `test_gene.py`：session/entity 基因或模板复制相关测试。
-- `test_harness_audit.py`：runtime 审计记录测试。
 - `test_meta_session.py`：meta session 对齐与共享层测试。
 - `test_runtime_watcher.py`：runtime watcher 集成测试。
 - `test_session_factory.py`：session 初始化工厂测试。

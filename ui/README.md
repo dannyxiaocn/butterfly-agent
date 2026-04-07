@@ -24,7 +24,7 @@
 ## 关键设计 / 架构说明
 - UI 层尽量薄：主要做参数解析、展示和协议转换，不重新实现 agent/runtime 逻辑。
 - CLI 与 Web 共用同一套 session 目录和 runtime 机制，因此行为一致、状态共享。
-- Web 端通过 HTTP API + runtime 文件协议操作 session，不直接持有复杂会话状态。
+- Web 端通过 HTTP API + runtime 文件协议操作 session，不直接持有复杂会话状态；展示内容来自 session 文件、context/events 与显式参数。
 - `weixin.py` 作为外部渠道桥接，复用 session/send/wait reply 机制，而不是单独实现聊天系统。
 - 命令按职责拆分为多个 CLI 模块，避免单一入口文件膨胀。
 

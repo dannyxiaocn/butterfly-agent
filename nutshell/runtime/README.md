@@ -12,10 +12,9 @@
 - `git_coordinator.py`：会话内 git 协调辅助，处理 checkpoint/工作树交互。
 - `ipc.py`：基于文件的 IPC 实现；读写 `events.jsonl`、`context.jsonl` 等。
 - `meta_session.py`：meta session 机制；校验 entity 与 meta 状态对齐、同步共享可变层。
-- `model_eval.py`：模型配置解析/选择辅助逻辑。
-- `params.py`：读取与写入 `core/params.json` 等运行参数。
+- `params.py`：读取与写入 `core/params.json` 等显式运行参数。
 - `server.py`：runtime server 入口，启动 watcher 等后台服务。
-- `session.py`：`Session` 主体；负责加载 core/ 资源、驱动 Agent、持久化历史与 heartbeat。
+- `session.py`：`Session` 主体；负责加载 core/ 资源、驱动 Agent、持久化上下文/事件与 heartbeat。
 - `session_factory.py`：初始化 `sessions/<id>/` 与 `_sessions/<id>/` 目录结构。
 - `status.py`：`status.json` 读写与 pid 存活检测。
 - `watcher.py`：轮询 `_sessions/`，自动发现并拉起 session daemon。
@@ -24,6 +23,7 @@
 - runtime 将“entity 定义”和“session 实例”分离：entity 是模板，session 是落盘后的运行实例。
 - 用户可编辑文件放在 `sessions/<id>/`，系统内部状态放在 `_sessions/<id>/`；避免职责混杂。
 - `Session` 是运行时核心：每次激活前重新从 `core/` 读取 prompt、memory、skills、tools，实现热更新。
+- provider/model/thinking 等运行参数由 `core/params.json` 与 entity 默认值显式决定，runtime 不做基于任务内容的自动切模型。
 - `watcher.py` 采用轮询而非复杂文件监听，优先保证恢复能力与跨平台可用性。
 - meta session 机制把继承展开后的共享记忆/可变 playground 提升到 entity 实例层，后续子 session 可复用。
 - IPC 采用 JSONL 文件协议，便于 CLI、Web、测试和其他进程统一接入。

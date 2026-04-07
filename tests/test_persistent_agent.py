@@ -158,7 +158,7 @@ async def test_tick_persistent_uses_builtin_fallback_when_no_default_task(tmp_pa
 
 @pytest.mark.asyncio
 async def test_tick_persistent_triggered_by_heartbeat_default(tmp_path):
-    """tick() logs triggered_by='heartbeat_default' for persistent activations."""
+    """tick() writes triggered_by='heartbeat_default' into persisted turn context."""
     from nutshell.runtime.session import Session
 
     provider = MockProvider([("ok", [])])
@@ -176,9 +176,13 @@ async def test_tick_persistent_triggered_by_heartbeat_default(tmp_path):
     result = await session.tick()
     assert result is not None
 
-    # Check harness snapshot has triggered_by = heartbeat_default
-    harness = (session.core_dir / "memory" / "harness.md").read_text()
-    assert "heartbeat_default" in harness
+    turns = [
+        json.loads(line)
+        for line in session._context_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert turns[-1]["type"] == "turn"
+    assert turns[-1]["triggered_by"] == "heartbeat_default"
 
 
 @pytest.mark.asyncio
@@ -202,10 +206,13 @@ async def test_tick_with_real_tasks_ignores_persistent(tmp_path):
     result = await session.tick()
     assert result is not None
 
-    # Harness should show triggered_by=heartbeat (not heartbeat_default)
-    harness = (session.core_dir / "memory" / "harness.md").read_text()
-    assert "triggered_by | heartbeat" in harness
-    assert "heartbeat_default" not in harness
+    turns = [
+        json.loads(line)
+        for line in session._context_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert turns[-1]["type"] == "turn"
+    assert turns[-1]["triggered_by"] == "heartbeat"
 
 
 # ── session_factory — entity params propagation ───────────────────

@@ -1,4 +1,4 @@
-# Nutshell `v1.3.70`
+# Nutshell `v1.3.71`
 
 A minimal Python agent runtime. Agents run as persistent server-managed sessions with autonomous heartbeat ticking.
 
@@ -62,9 +62,9 @@ sessions/<id>/           ← agent-visible
     system.md            system prompt
     heartbeat.md         heartbeat prompt
     memory.md            persistent memory (auto-injected)
-    memory/              named memory layers (*.md)
+    memory/              named memory layers (*.md, loaded as-is each activation)
     tasks.md             task board — non-empty triggers next heartbeat
-    params.json          runtime config (model, provider, thinking, ...)
+    params.json          explicit runtime config (model, provider, thinking, ...)
     tools/  skills/      agent-created tools and skills
   playground/            agent's free workspace
 
@@ -117,7 +117,7 @@ nutshell review                                  # review pending entity updates
 | `openai` | OpenAIProvider | `OPENAI_API_KEY` |
 | `kimi-coding-plan` | KimiForCodingProvider | `KIMI_FOR_CODING_API_KEY` |
 
-Switch via `sessions/<id>/core/params.json`:
+Switch explicitly via `sessions/<id>/core/params.json`:
 ```json
 {"provider": "anthropic", "model": "claude-opus-4-6", "thinking": true}
 ```
@@ -129,7 +129,7 @@ See `nutshell/llm_engine/README.md` for full provider docs including thinking/ef
 ## Testing
 
 ```bash
-pytest tests/ -q          # 632 tests
+pytest tests/ -q
 pytest tests/runtime/ -q  # runtime only
 ```
 

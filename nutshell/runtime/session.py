@@ -10,8 +10,7 @@ from nutshell.core.agent import Agent
 from nutshell.core.tool import Tool
 from nutshell.core.types import AgentResult
 from nutshell.runtime.params import ensure_session_params, read_session_params
-from nutshell.runtime.model_eval import evaluate_task_complexity, suggest_model
-from nutshell.llm_engine.registry import provider_name, resolve_provider
+from nutshell.llm_engine.registry import resolve_provider
 from nutshell.runtime.status import ensure_session_status, read_session_status, write_session_status
 from nutshell.tool_engine.executor.terminal.bash_terminal import BashExecutor
 
@@ -330,7 +329,6 @@ class Session:
         if result.usage and result.usage.total_tokens > 0:
             turn["usage"] = result.usage.as_dict()
         self._append_context(turn)
-        self._write_harness_snapshot(result, "user")
         self._set_model_status("idle", "user")
         return result
 
@@ -348,41 +346,21 @@ class Session:
         **Persistent mode**: when ``persistent=True`` in params.json and tasks
         are empty, the agent is still activated using ``default_task`` (or a
         built-in fallback prompt).  This keeps the agent alive indefinitely.
-
-        **Auto-model**: when ``auto_model=True`` in params.json, evaluates
-        task complexity and temporarily overrides the agent model for this
-        tick.  The original model is restored after the tick completes.
         """
         tasks_content = self.tasks_path.read_text(encoding="utf-8").strip()
+        params = read_session_params(self.session_dir)
 
         # Determine triggered_by label for logging
         triggered_by = "heartbeat"
 
         if not tasks_content:
             # Check persistent mode
-            params = read_session_params(self.session_dir)
             if not params.get("persistent"):
                 return None
             # Persistent mode — use default_task as the prompt
             default_task = params.get("default_task") or self._DEFAULT_PERSISTENT_PROMPT
             tasks_content = default_task
             triggered_by = "heartbeat_default"
-
-        # ── Auto-model selection ───────────────────────────────────
-        auto_model_override: dict | None = None
-        params = read_session_params(self.session_dir)
-        if params.get("auto_model"):
-            original_model = self._agent.model
-            provider_key = (params.get("provider") or "anthropic").lower()
-            complexity = evaluate_task_complexity(tasks_content)
-            suggested = suggest_model(complexity, provider_key)
-            if suggested and suggested != original_model:
-                self._agent.model = suggested
-                auto_model_override = {
-                    "original_model": original_model,
-                    "suggested_model": suggested,
-                    "complexity": complexity,
-                }
 
         # Snapshot history so we can roll back if SESSION_FINISHED
         history_snapshot = list(self._agent._history)
@@ -412,8 +390,6 @@ class Session:
                     on_tool_call=tool_call_cb,
                 )
         except BaseException:
-            if auto_model_override:
-                self._agent.model = auto_model_override["original_model"]
             self._set_model_status("idle", triggered_by)
             raise
         finally:
@@ -449,11 +425,6 @@ class Session:
                 if result.usage and result.usage.total_tokens > 0:
                     turn["usage"] = result.usage.as_dict()
                 self._append_context(turn)
-                self._write_harness_snapshot(result, triggered_by, auto_model_override=auto_model_override)
-
-        # ── Restore original model after auto-model override ──
-        if auto_model_override:
-            self._agent.model = auto_model_override["original_model"]
 
         self._set_model_status("idle", triggered_by)
         return result
@@ -662,78 +633,6 @@ class Session:
         return self.system_dir / "events.jsonl"
 
     # ── Internal ───────────────────────────────────────────────────
-
-    def _write_harness_snapshot(self, result: AgentResult, triggered_by: str, *, auto_model_override: dict | None = None) -> None:
-        """Write both agent-visible and audit harness outputs for a turn."""
-        self._write_sys_harness(result, triggered_by, auto_model_override=auto_model_override)
-        self._write_audit_entry(result, triggered_by, auto_model_override=auto_model_override)
-
-    def _write_sys_harness(self, result: AgentResult, triggered_by: str, *, auto_model_override: dict | None = None) -> None:
-        """Write a per-turn performance snapshot to core/memory/harness.md.
-
-        Gives the agent a compact, always-visible summary of its recent
-        performance so it can self-adjust (e.g. use fewer tool calls, be
-        more concise, stay within token budgets).
-
-        The file is a memory layer — auto-injected into every activation
-        via the standard memory_layers mechanism.
-        """
-        usage = result.usage
-        history_turns = len(self._agent._history)
-        tool_names = sorted({tc.name for tc in result.tool_calls}) if result.tool_calls else []
-
-        # When auto_model is active, self._agent.model is the override; report the
-        # configured model instead so the snapshot reflects the session's actual setting.
-        configured_model = auto_model_override["original_model"] if auto_model_override else self._agent.model
-        provider_key = provider_name(self._agent._provider) or "unknown"
-
-        lines = [
-            "# Harness — Last Turn Performance",
-            "",
-            f"| Metric | Value |",
-            f"|--------|-------|",
-            f"| triggered_by | {triggered_by} |",
-            f"| provider | {provider_key} |",
-            f"| model | {configured_model} |",
-            f"| iterations | {result.iterations} |",
-            f"| tool_calls | {len(result.tool_calls)} |",
-            f"| tools_used | {', '.join(tool_names) if tool_names else '(none)'} |",
-            f"| input_tokens | {usage.input_tokens:,} |",
-            f"| output_tokens | {usage.output_tokens:,} |",
-            f"| total_tokens | {usage.total_tokens:,} |",
-            f"| cache_read | {usage.cache_read_tokens:,} |",
-            f"| cache_write | {usage.cache_write_tokens:,} |",
-            f"| history_turns | {history_turns} |",
-        ]
-        if auto_model_override:
-            lines.append(f"| auto_model_used | {auto_model_override['suggested_model']} (complexity={auto_model_override['complexity']}) |")
-        harness_path = self.core_dir / "memory" / "harness.md"
-        harness_path.parent.mkdir(parents=True, exist_ok=True)
-        harness_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-    def _write_audit_entry(self, result: AgentResult, triggered_by: str, *, auto_model_override: dict | None = None) -> None:
-        """Append a machine-readable harness audit record to core/audit.jsonl."""
-        tool_names = sorted({tc.name for tc in result.tool_calls}) if result.tool_calls else []
-        usage = result.usage
-        configured_model = auto_model_override["original_model"] if auto_model_override else self._agent.model
-        entry = {
-            "ts": datetime.now().isoformat(),
-            "session_id": self._session_id,
-            "entity": self.system_dir.name,
-            "triggered_by": triggered_by,
-            "iterations": result.iterations,
-            "tool_calls": len(result.tool_calls),
-            "tools_used": tool_names,
-            "total_tokens": usage.total_tokens,
-            "input_tokens": usage.input_tokens,
-            "output_tokens": usage.output_tokens,
-            "model": configured_model,
-            "provider": provider_name(self._agent._provider) or "unknown",
-        }
-        audit_path = self.core_dir / "audit.jsonl"
-        audit_path.parent.mkdir(parents=True, exist_ok=True)
-        with audit_path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
     def _append_context(self, event: dict) -> None:
         """Append a conversation event (user_input or turn) to context.jsonl."""

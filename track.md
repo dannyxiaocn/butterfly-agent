@@ -6,12 +6,6 @@
 
 ---
 
-## Module 0 · DEBUG（快速修）
-
-- [x] **harness.md 模型字段错误** (commit: fada1b0)：`session.py:658` `self._agent.model` 写入的是 agent.yaml 里的 model 字符串（如 `openai-codex/gpt-5.4`），但有些 session 里 model 不一致（例如同一 entity 出现 `gpt-5.4` 和 `openai-codex/gpt-5.4` 两种写法）。需要 provider 在 `complete()` 后回填实际 model ID，或者从 provider 读取 `actual_model`，写入 harness 时加 `provider` 字段一并显示。
-
----
-
 ## Module 1 · CLI 清理
 
 - [x] **删除遗留 `nutshell chat` 旧接口和 dui 系列命令** (commit: 95c593f)
@@ -62,10 +56,9 @@
 
 ## Module 7 · 工具 Stats 系统
 
-- [x] **Harness 分层命名** (commit: c24b4b6)：sys_harness（每 turn 自动写）+ audit_harness（跨 session 聚合）。
 - [x] **Token 计算器 tool** (commit: cb43c19)：count_tokens(text, model)；anthropic tokenizer / tiktoken / chars 估算。
-- [x] **Tool manager persistent agent** (commit: 3130b36)：聚合 harness 数据，输出 tool 使用热力图到 `_sessions/tool_stats/`。
-- [x] **Nutshell 专职 persistent agent 体系** (commit: 369fede)：dev_maintainer + tool_craftsman；audit 数据保留在 meta session。
+- [x] **Tool manager persistent agent** (commit: 3130b36)：聚合 runtime 事件与上下文数据，输出 tool 使用热力图到 `_sessions/tool_stats/`。
+- [x] **Nutshell 专职 persistent agent 体系** (commit: 369fede)：dev_maintainer + tool_craftsman；维护数据保留在 meta session。
 
 ---
 
@@ -116,7 +109,6 @@
 - [x] memory recall skill (5dd735b v1.2.3)
 - [x] creator mode skill (d86c2b6)
 - [x] entity 版本控制 + propose_entity_update review 流程 (3abfba4 v1.2.1 / d239374 v1.3.14)
-- [x] 权限/安全性 sandbox (272c76b v1.3.19)
 - [x] agent 自己迭代 tool 和 skill（热插拔）
 - [x] skills 分段式 load in + memory layer 60 行自动截断 (3c12fce v1.3.10)
 - [x] web search tool（brave + tavily 多 provider）
@@ -125,11 +117,11 @@
 
 - [x] receptionist entity — 接待 agent (79e89bc v1.3.26)
 - [x] multi-agent runtime (1871749 v1.2.2 + 679e482 v1.2.4)
-- [x] agent-agent 通信协议 (809efc0 v1.1.9)
-- [x] 调用 sub-agent / spawn_session 能力 (1871749 v1.2.2)
+- [ ] agent-agent 通信协议
+- [ ] call sub-agent / spawn_session
 - [ ] subagent ACP to OpenClaw
 
-### Harness & Token
+### Runtime Feedback & Token
 
 - [x] 环境与反馈系统 (a26e603 v1.3.18)
 - [x] 约束系统 sandbox (272c76b v1.3.19)
@@ -147,15 +139,11 @@
 - [x] 看板 nutshell kanban (3902211 v1.3.25)
 - [x] Repo as a skill / deepwiki (ffcb72d v1.3.20)
 - [x] repo_dev agent (66cfbdf v1.3.21)
-- [ ] 虾游戏（shrimp game for agent）
 
-### Agent Personas & Usage
+### Auto Cache System
 
-- [x] yisebi — 懂王·行动派，社交媒体评论角色 (entity/yisebi v1.3.34)
-- [x] game_player — 游戏高玩，速通各类 agent 游戏 (entity/game_player v1.3.33)
-- [x] cli_os — Agent CLI-OS playground (entity/cli_os v1.3.35)
+- [ ] auto cache system
 
-### Model Selection
+### Auto Evaluate and Maintainance System
 
-- [x] auto_model — params.json 自动评估任务复杂度选模型 (v1.3.x)
-- [ ] system-level 快速 evaluate 系统（不依赖模型自判断）
+- [ ] Porters system
