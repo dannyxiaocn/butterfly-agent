@@ -29,7 +29,7 @@ class MockProvider:
 
     async def complete(self, messages, tools, system_prompt, model, *,
                        on_text_chunk=None, cache_system_prefix="",
-                       cache_last_human_turn=False, thinking: bool = False, thinking_budget: int = 8000):
+                       cache_last_human_turn=False, thinking: bool = False, thinking_budget: int = 8000, thinking_effort: str = "high"):
         r = next(self._responses)
         return (r[0], r[1], r[2] if len(r) > 2 else TokenUsage())
 

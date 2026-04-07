@@ -117,6 +117,8 @@ class Session:
         self._agent.model = params.get("model") or self._agent.model
         self._agent.thinking = bool(params.get("thinking", self._agent.thinking))
         self._agent.thinking_budget = int(params.get("thinking_budget", self._agent.thinking_budget))
+        if params.get("thinking_effort"):
+            self._agent.thinking_effort = str(params["thinking_effort"])
         if params.get("fallback_model"):
             self._agent.fallback_model = params["fallback_model"]
         if params.get("fallback_provider"):

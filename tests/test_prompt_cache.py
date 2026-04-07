@@ -407,7 +407,7 @@ async def test_agent_accumulates_usage_over_tool_loops():
     from nutshell.core.tool import tool
 
     class CountingProvider(Provider):
-        async def complete(self, messages, tools, system_prompt, model, *, on_text_chunk=None, cache_system_prefix="", cache_last_human_turn=False, thinking: bool = False, thinking_budget: int = 8000):
+        async def complete(self, messages, tools, system_prompt, model, *, on_text_chunk=None, cache_system_prefix="", cache_last_human_turn=False, thinking: bool = False, thinking_budget: int = 8000, thinking_effort: str = "high"):
             from nutshell.core.types import TokenUsage
             if len(messages) <= 2:  # first call: return tool_call
                 return ("", [ToolCall(id="1", name="noop", input={})], TokenUsage(input_tokens=10, output_tokens=5))

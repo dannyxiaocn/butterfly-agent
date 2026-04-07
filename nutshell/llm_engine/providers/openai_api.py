@@ -65,6 +65,7 @@ class OpenAIProvider(Provider):
         cache_last_human_turn: bool = False,
         thinking: bool = False,
         thinking_budget: int = 8000,
+        thinking_effort: str = "high",  # ignored — OpenAI Chat Completions has no reasoning toggle
     ) -> tuple[str, list[ToolCall], TokenUsage]:
         api_messages = _build_messages(system_prompt, messages, cache_system_prefix)
         api_tools = [_tool_to_openai(t) for t in tools] if tools else []

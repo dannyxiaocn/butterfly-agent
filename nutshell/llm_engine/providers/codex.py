@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     from nutshell.core.tool import Tool
 
 _AUTH_PATH = Path.home() / ".codex" / "auth.json"
+_VALID_EFFORTS = {"none", "minimal", "low", "medium", "high", "xhigh"}
 _CODEX_URL = "https://chatgpt.com/backend-api/codex/responses"
 _TOKEN_URL = "https://auth.openai.com/oauth/token"
 _CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
@@ -63,7 +64,8 @@ class CodexProvider(Provider):
         cache_system_prefix: str = "",
         cache_last_human_turn: bool = False,
         thinking: bool = False,
-        thinking_budget: int = 8000,
+        thinking_budget: int = 8000,  # ignored — Codex uses effort, not budget_tokens
+        thinking_effort: str = "high",
     ) -> tuple[str, list[ToolCall], TokenUsage]:
         access_token, account_id = self._get_auth()
         headers = _build_headers(access_token, account_id)
@@ -74,7 +76,9 @@ class CodexProvider(Provider):
         )
         # Fall back to DEFAULT_MODEL when no model is configured for this provider
         effective_model = model if model and model != "claude-sonnet-4-6" else self.DEFAULT_MODEL
-        body = _build_request_body(effective_model, full_system, messages, tools, thinking=thinking)
+        # Validate effort level — silently clamp to "high" if caller passes an invalid value
+        effort = thinking_effort if thinking_effort in _VALID_EFFORTS else "high"
+        body = _build_request_body(effective_model, full_system, messages, tools, thinking=thinking, thinking_effort=effort)
 
         import httpx
 
@@ -216,6 +220,7 @@ def _build_request_body(
     messages: list["Message"],
     tools: list["Tool"],
     thinking: bool = False,
+    thinking_effort: str = "high",
 ) -> dict[str, Any]:
     # Strip "openai-codex/" prefix if present — bare model id for the endpoint
     model_id = model.split("/")[-1] if "/" in model else model
@@ -234,7 +239,7 @@ def _build_request_body(
         # Codex Responses API uses reasoning.effort (not budget_tokens).
         # Values: "none" | "minimal" | "low" | "medium" | "high" | "xhigh"
         # Source: codex-rs/protocol/src/openai_models.rs ReasoningEffort enum
-        body["reasoning"] = {"effort": "high"}
+        body["reasoning"] = {"effort": thinking_effort}
     if tools:
         body["tools"] = [_tool_to_responses_api(t) for t in tools]
     return body

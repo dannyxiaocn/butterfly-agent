@@ -12,7 +12,8 @@ DEFAULT_PARAMS: dict = {
     "default_task": None,   # prompt used when persistent=True and tasks.md is empty
     "auto_model": False,    # True → auto-select model based on task complexity
     "thinking": False,      # True → enable extended thinking for this session
-    "thinking_budget": 8000,  # budget_tokens for extended thinking
+    "thinking_budget": 8000,  # budget_tokens for extended thinking (Anthropic/Kimi only)
+    "thinking_effort": "high",  # reasoning effort level (Codex only): none/minimal/low/medium/high/xhigh
     "blocked_domains": [],
     "sandbox_max_fetch_chars": 50000,
     "blocked_domains": [],

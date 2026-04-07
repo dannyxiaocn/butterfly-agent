@@ -25,6 +25,7 @@ class Provider(ABC):
         cache_last_human_turn: bool = False,
         thinking: bool = False,
         thinking_budget: int = 8000,
+        thinking_effort: str = "high",
     ) -> "tuple[str, list[ToolCall], TokenUsage]":
         """Send messages to the LLM and return (content, tool_calls, usage).
 

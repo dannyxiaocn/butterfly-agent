@@ -49,6 +49,7 @@ class AnthropicProvider(Provider):
         cache_last_human_turn: bool = False,
         thinking: bool = False,
         thinking_budget: int = 8000,
+        thinking_effort: str = "high",  # ignored — Anthropic uses budget_tokens, not effort
     ) -> tuple[str, list[ToolCall], TokenUsage]:
         cache_idx = _find_cache_breakpoint(messages) if (
             cache_last_human_turn and self._supports_cache_control

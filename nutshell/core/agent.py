@@ -65,6 +65,7 @@ class Agent:
         self.session_context: str = ""
         self.thinking: bool = False
         self.thinking_budget: int = 8000
+        self.thinking_effort: str = "high"
 
     @property
     def provider(self) -> Provider:
@@ -194,6 +195,7 @@ class Agent:
                     cache_last_human_turn=_cache_history,
                     thinking=self.thinking,
                     thinking_budget=self.thinking_budget,
+                    thinking_effort=self.thinking_effort,
                 )
             except Exception as primary_exc:
                 fb_provider = self._get_fallback_provider()
@@ -212,6 +214,7 @@ class Agent:
                     cache_last_human_turn=_cache_history,
                     thinking=self.thinking,
                     thinking_budget=self.thinking_budget,
+                    thinking_effort=self.thinking_effort,
                 )
             total_usage = total_usage + turn_usage
             on_text_chunk = None
