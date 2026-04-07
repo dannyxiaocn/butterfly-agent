@@ -22,15 +22,15 @@ Switch provider per-session via `sessions/<id>/core/params.json`:
 
 Enable via `params.json`:
 ```json
-{"thinking": true, "thinking_budget": 8000}
+{"thinking": true, "thinking_budget": 8000, "thinking_effort": "high"}
 ```
 
-| Provider | Supported | Mechanism |
-|----------|-----------|-----------|
-| `anthropic` | ✅ | `betas: ["interleaved-thinking-2025-05-14"]` + `thinking: {type: "enabled", budget_tokens: N}` |
-| `kimi-coding-plan` | ✅ | `extra_body: {"thinking": {"type": "enabled"}}` — no budget_tokens (use `reasoning_effort` via Kimi UI if needed) |
-| `openai` | ❌ | Ignored — standard GPT models have no explicit thinking toggle |
-| `codex-oauth` | ✅ (partial) | `response.reasoning_text.delta` SSE events forwarded to `on_text_chunk`; no request-level toggle |
+| Provider | Supported | Mechanism | `thinking_budget` | `thinking_effort` |
+|----------|-----------|-----------|-------------------|-------------------|
+| `anthropic` | ✅ | `betas: ["interleaved-thinking-2025-05-14"]` + `thinking: {type: "enabled", budget_tokens: N}` | ✅ used | ignored |
+| `kimi-coding-plan` | ✅ | `extra_body: {"thinking": {"type": "enabled"}}` — no budget_tokens | ignored | ignored |
+| `openai` | ❌ | Ignored — standard GPT models have no explicit thinking toggle | ignored | ignored |
+| `codex-oauth` | ✅ | `reasoning: {effort: "<level>"}` in request body | ignored | ✅ used: `none\|minimal\|low\|medium\|high\|xhigh` (default: `high`) |
 
 ---
 

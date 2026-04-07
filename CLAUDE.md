@@ -1,6 +1,6 @@
 # Nutshell — Claude Code Context
 
-> Current version: **v1.3.69** · Python package · `pip install -e .`
+> Current version: **v1.3.70** · Python package · `pip install -e .`
 
 Minimal Python agent runtime. Core value: **simplicity + persistence**.  
 Agents run as long-lived server-managed sessions with file-based IPC.
