@@ -120,7 +120,7 @@ def test_toolloader_bash_uses_default_workdir(tmp_path):
     assert tool.name == "bash"
     # BashExecutor stores workdir; verify it uses it when invoked
     import asyncio
-    result = asyncio.get_event_loop().run_until_complete(tool.execute(command="pwd"))
+    result = asyncio.run(tool.execute(command="pwd"))
     assert str(workdir) in result
 
 
@@ -147,5 +147,5 @@ def test_toolloader_shell_uses_default_workdir(tmp_path):
     loader = ToolLoader(default_workdir=str(session_dir))
     tool = loader.load(json_def)
     import asyncio
-    result = asyncio.get_event_loop().run_until_complete(tool.execute())
+    result = asyncio.run(tool.execute())
     assert str(session_dir) in result

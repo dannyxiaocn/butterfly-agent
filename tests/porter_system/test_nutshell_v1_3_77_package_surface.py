@@ -5,13 +5,10 @@ import unittest
 from pathlib import Path
 
 import nutshell
+from porter_test_support import repo_root_from
 
 
-REPO_ROOT = Path(__file__).resolve()
-for candidate in (REPO_ROOT.parent, *REPO_ROOT.parents):
-    if (candidate / "pyproject.toml").exists():
-        REPO_ROOT = candidate
-        break
+REPO_ROOT = repo_root_from(Path(__file__))
 
 
 class PackageSurfaceTest(unittest.TestCase):

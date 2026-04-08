@@ -3,8 +3,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from porter_test_support import repo_root_from
 
-REPO_ROOT = Path(__file__).parent.parent
+REPO_ROOT = repo_root_from(Path(__file__))
 ENTITY_DIR = REPO_ROOT / "entity"
 ACTIVE_ENTITIES = [
     "agent",

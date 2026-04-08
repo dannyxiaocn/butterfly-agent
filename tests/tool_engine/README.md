@@ -1,12 +1,15 @@
 # `tests/tool_engine`
 
-Reserved area for tool-engine-focused tests.
+Documentation marker for tool-engine porter coverage.
 
 ## Current Role
 
-The repo's tool-engine coverage currently lives mostly in root-level tests such as `tests/test_tools.py`, `tests/test_bash_tool.py`, `tests/test_reload_tool.py`, and `tests/test_skill_tool.py`.
+- tool-engine pytest modules now live in `tests/porter_system/`
+- file names use the `test_tool_engine_<version>_<topic>.py` convention
+- this directory remains only as a topical README location
 
-## How It Contributes To The Whole System
+## How To Use It
 
-Keeping this directory documented makes it clear where deeper tool-engine integration tests should live as that subsystem grows.
-
+```bash
+pytest tests/porter_system/test_tool_engine_v1_3_77_* -q
+```

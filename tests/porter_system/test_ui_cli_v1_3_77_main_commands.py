@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from porter_test_support import repo_root_from
 
 from ui.cli.main import (
     cmd_new,
@@ -132,7 +133,6 @@ def test_cmd_sessions_json(tmp_path, capsys):
 # ── cmd_new ───────────────────────────────────────────────────────────────────
 
 def test_cmd_new_creates_session(tmp_path, capsys):
-    entity_base = Path(__file__).parent.parent / "entity"
     # Patch _DEFAULT paths via args
     import argparse
     args = argparse.Namespace(
@@ -476,14 +476,11 @@ def test_write_inject_memory_overwrites(tmp_path):
 def test_cmd_new_inject_memory(tmp_path):
     """cmd_new with --inject-memory writes memory layers after session creation."""
     import argparse
-    from ui.cli.main import _DEFAULT_SYSTEM_BASE, _DEFAULT_SESSIONS_BASE
-    from nutshell.session_engine.session_init import init_session
 
     sessions = tmp_path / "sessions"
     system = tmp_path / "_sessions"
 
-    # Use real entity "agent"
-    entity_dir = Path(__file__).parent.parent / "entity" / "agent"
+    assert (repo_root_from(Path(__file__)) / "entity" / "agent").exists()
     args = argparse.Namespace(
         session_id="inject-test",
         entity="agent",

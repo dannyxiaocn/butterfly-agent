@@ -38,7 +38,7 @@ ui/
   web/             FastAPI + SSE monitoring UI
 
 entity/            built-in agent templates
-tests/             automated coverage for runtime, CLI, providers, tools
+tests/             automated coverage for runtime, CLI, providers, tools, porter suites
 ```
 
 Every active subsystem directory has its own `README.md`.
@@ -98,4 +98,3 @@ nutshell web
 - [entity/README.md](/Users/xiaobocheng/agent_core/nutshell/entity/README.md)
 - [ui/README.md](/Users/xiaobocheng/agent_core/nutshell/ui/README.md)
 - [tests/README.md](/Users/xiaobocheng/agent_core/nutshell/tests/README.md)
-

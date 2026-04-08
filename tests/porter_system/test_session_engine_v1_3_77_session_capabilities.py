@@ -434,7 +434,7 @@ def test_tool_provider_override_switches_impl(tmp_path, monkeypatch):
 
     ws = next(t for t in agent.tools if t.name == "web_search")
     import asyncio
-    result = asyncio.get_event_loop().run_until_complete(ws.execute(query="test"))
+    result = asyncio.run(ws.execute(query="test"))
     assert result == "tavily result"
     assert "brave" not in call_log
 
@@ -472,7 +472,7 @@ def test_tool_provider_unknown_keeps_original_impl(tmp_path, monkeypatch):
 
     ws = next(t for t in agent.tools if t.name == "custom_search")
     import asyncio
-    result = asyncio.get_event_loop().run_until_complete(ws.execute(query="test"))
+    result = asyncio.run(ws.execute(query="test"))
     assert "shell result" in result
 
 

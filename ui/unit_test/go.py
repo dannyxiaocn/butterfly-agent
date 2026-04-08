@@ -1,1 +1,0 @@
-from pathlib import Path; import sys; sys.path.insert(0, str(next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").exists()))); from unit_test_support import run_unittest_dir; raise SystemExit(run_unittest_dir(Path(__file__).resolve().parent))

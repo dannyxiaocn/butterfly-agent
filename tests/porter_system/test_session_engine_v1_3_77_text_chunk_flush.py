@@ -122,7 +122,7 @@ class TestChatFlush:
         provider = MockProvider([(short_text, [])])
         agent = Agent(provider=provider, model="test")
         session = make_session(tmp_path, agent)
-        asyncio.get_event_loop().run_until_complete(session.chat("hi"))
+        asyncio.run(session.chat("hi"))
         events = [e for e in read_events(session) if e["type"] == "partial_text"]
         # The text must appear (via flush), not be lost
         assert len(events) >= 1
@@ -140,7 +140,7 @@ class TestTickFlush:
         session = make_session(tmp_path, agent)
         # Write tasks so tick() actually runs
         session.tasks_path.write_text("- test task\n", encoding="utf-8")
-        asyncio.get_event_loop().run_until_complete(session.tick())
+        asyncio.run(session.tick())
         events = [e for e in read_events(session) if e["type"] == "partial_text"]
         assert len(events) >= 1
         total_text = "".join(e["content"] for e in events)

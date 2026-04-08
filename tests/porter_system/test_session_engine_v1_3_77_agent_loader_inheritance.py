@@ -12,6 +12,7 @@ import yaml
 from pathlib import Path
 
 from nutshell.session_engine.agent_loader import AgentLoader
+from porter_test_support import repo_root_from
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -329,7 +330,7 @@ def test_inherited_skill_tool_uses_child_skill_set(tmp_path):
     skill_tool = next(t for t in agent.tools if t.name == "skill")
 
     import asyncio
-    result = asyncio.get_event_loop().run_until_complete(skill_tool.execute(skill="beta_skill"))
+    result = asyncio.run(skill_tool.execute(skill="beta_skill"))
     assert "Loaded skill: beta_skill" in result
 
 
@@ -378,7 +379,7 @@ def test_c_model_wins_over_b_and_a(tmp_path):
 
 def test_real_nutshell_dev_entity_chain():
     """nutshell_dev → agent inheritance loads without errors."""
-    entity_root = Path(__file__).parent.parent / "entity"
+    entity_root = repo_root_from(Path(__file__)) / "entity"
     if not (entity_root / "nutshell_dev" / "agent.yaml").exists():
         pytest.skip("nutshell_dev entity not found")
 
@@ -395,7 +396,7 @@ def test_real_nutshell_dev_entity_chain():
 
 def test_agent_entity_loads_all_builtin_tools():
     """agent entity must include all built-in tools so sessions have full capability."""
-    entity_root = Path(__file__).parent.parent / "entity"
+    entity_root = repo_root_from(Path(__file__)) / "entity"
     agent = AgentLoader().load(entity_root / "agent")
     names = {t.name for t in agent.tools}
 
