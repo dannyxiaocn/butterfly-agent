@@ -191,37 +191,60 @@ def create_app(sessions_dir: Path, system_sessions_dir: Path | None = None) -> F
     async def stop_session(session_id: str):
         from nutshell.runtime.ipc import FileIPC
         system_dir = system_sessions_dir / session_id
+        if not system_dir.exists():
+            raise HTTPException(404, f"Session not found: {session_id}")
         write_session_status(system_dir, status="stopped", stopped_at=datetime.now().isoformat())
-        if system_dir.exists():
-            FileIPC(system_dir).append_event(
-                {"type": "status", "value": "heartbeat paused — use ▶ Start to resume"}
-            )
+        FileIPC(system_dir).append_event(
+            {"type": "status", "value": "heartbeat paused — use ▶ Start to resume"}
+        )
         return {"ok": True}
 
     @app.post("/api/sessions/{session_id}/start")
     async def start_session(session_id: str):
         from nutshell.runtime.ipc import FileIPC
         system_dir = system_sessions_dir / session_id
+        if not system_dir.exists():
+            raise HTTPException(404, f"Session not found: {session_id}")
         write_session_status(system_dir, status="active", stopped_at=None)
-        if system_dir.exists():
-            FileIPC(system_dir).append_event({"type": "status", "value": "heartbeat resumed"})
+        FileIPC(system_dir).append_event({"type": "status", "value": "heartbeat resumed"})
         return {"ok": True}
 
     @app.get("/api/sessions/{session_id}/tasks")
     async def get_tasks(session_id: str):
-        tasks_path = sessions_dir / session_id / "core" / "tasks.md"
-        if not tasks_path.exists():
-            return {"content": ""}
-        return {"content": tasks_path.read_text(encoding="utf-8")}
+        from nutshell.session_engine.task_cards import load_all_cards
+        tasks_dir = sessions_dir / session_id / "core" / "tasks"
+        cards = load_all_cards(tasks_dir)
+        return {"cards": [
+            {
+                "name": c.name,
+                "content": c.content,
+                "interval": c.interval,
+                "status": c.status,
+                "last_run_at": c.last_run_at,
+                "created_at": c.created_at,
+            }
+            for c in cards
+        ]}
 
     @app.put("/api/sessions/{session_id}/tasks")
     async def set_tasks(session_id: str, body: dict):
+        from nutshell.session_engine.task_cards import TaskCard, save_card
         session_dir = sessions_dir / session_id
         if not session_dir.exists():
             raise HTTPException(404, f"Session not found: {session_id}")
-        tasks_path = session_dir / "core" / "tasks.md"
-        tasks_path.parent.mkdir(parents=True, exist_ok=True)
-        tasks_path.write_text(body.get("content", ""), encoding="utf-8")
+        tasks_dir = session_dir / "core" / "tasks"
+        tasks_dir.mkdir(parents=True, exist_ok=True)
+        if "name" in body:
+            card = TaskCard(
+                name=body["name"],
+                content=body.get("content", ""),
+                interval=body.get("interval"),
+                status=body.get("status", "pending"),
+            )
+            save_card(tasks_dir, card)
+        elif "content" in body:
+            card = TaskCard(name="task", content=body["content"])
+            save_card(tasks_dir, card)
         return {"ok": True}
 
     @app.get("/api/sessions/{session_id}/config")

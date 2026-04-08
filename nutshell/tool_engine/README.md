@@ -45,7 +45,7 @@ Create a new session-scoped tool:
 ## Important Behavior
 
 - Resolution order is: explicit registry override -> `skill` executor -> `bash` executor -> sibling `.sh` script -> built-in registry -> stub.
-- `bash` runs from the session directory by default, so agents can use short relative paths like `core/tasks.md`.
+- `bash` runs from the session directory by default, so agents can use short relative paths like `core/tasks/`.
 - `bash` auto-activates the session `.venv` when `NUTSHELL_SESSION_ID` is set.
 - `web_search` can switch backend through `params.json` with `tool_providers.web_search`.
 

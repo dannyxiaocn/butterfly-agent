@@ -92,11 +92,23 @@ def _read_recent_context(context_path: Path, n: int = 3) -> list[dict[str, Any]]
 
 
 def _read_tasks(tasks_path: Path) -> str:
-    """Read tasks.md content, return stripped text or empty string."""
-    try:
+    """Read tasks from either legacy tasks.md or core/tasks/ card directory."""
+    from nutshell.session_engine.task_cards import load_all_cards
+
+    if tasks_path.is_file():
         return tasks_path.read_text(encoding="utf-8").strip()
-    except Exception:
+
+    cards = load_all_cards(tasks_path)
+    if not cards:
+        legacy_path = tasks_path.parent / "tasks.md"
+        if legacy_path.exists():
+            return legacy_path.read_text(encoding="utf-8").strip()
         return ""
+    lines = []
+    for card in cards:
+        interval_str = f"every {card.interval}s" if card.interval else "one-shot"
+        lines.append(f"[{card.status}] {card.name} ({interval_str}): {card.content[:80]}")
+    return "\n".join(lines)
 
 
 def _read_apps(apps_dir: Path) -> dict[str, str]:
@@ -137,7 +149,8 @@ def gather_room_data(
     # context
     recent = _read_recent_context(sys_dir / "context.jsonl")
     # tasks
-    tasks = _read_tasks(sess_dir / "core" / "tasks.md")
+    tasks_dir = sess_dir / "core" / "tasks"
+    tasks = _read_tasks(tasks_dir if tasks_dir.exists() else (sess_dir / "core" / "tasks.md"))
     # apps
     apps = _read_apps(sess_dir / "core" / "apps")
 

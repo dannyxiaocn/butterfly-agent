@@ -11,6 +11,11 @@ from nutshell.core.hook import OnLoopEnd, OnLoopStart, OnTextChunk, OnToolCall, 
 from nutshell.core.tool import Tool
 from nutshell.core.types import AgentResult
 from nutshell.session_engine.session_params import ensure_session_params, read_session_params
+from nutshell.session_engine.task_cards import (
+    _DEFAULT_HEARTBEAT_CONTENT,
+    TaskCard, clear_all_cards, ensure_heartbeat_card, has_pending_cards,
+    load_all_cards, load_due_cards, migrate_tasks_md, save_card,
+)
 from nutshell.llm_engine.registry import provider_name, resolve_provider
 from nutshell.session_engine.session_status import ensure_session_status, read_session_status, write_session_status
 from nutshell.tool_engine.executor.terminal.bash_terminal import BashExecutor
@@ -34,7 +39,7 @@ class Session:
             heartbeat.md            ← heartbeat prompt
             session.md              ← session paths + operational guide (template)
             memory.md               ← persistent memory (auto-injected each activation)
-            tasks.md                ← task board
+            tasks/*.md              ← task cards (YAML frontmatter + content)
             params.json             ← runtime config
             tools/                  ← tool definitions: .json + .sh
             skills/                 ← skill dirs
@@ -93,6 +98,9 @@ class Session:
         self.docs_dir.mkdir(exist_ok=True)
         self.playground_dir.mkdir(exist_ok=True)
         self.system_dir.mkdir(parents=True, exist_ok=True)
+        # Migrate legacy tasks.md → core/tasks/ directory
+        migrate_tasks_md(self.core_dir)
+        self.tasks_dir.mkdir(parents=True, exist_ok=True)
         if not self.tasks_path.exists():
             self.tasks_path.write_text("", encoding="utf-8")
         if not self.memory_path.exists():
@@ -183,7 +191,7 @@ class Session:
 
         # 4. tools from core/tools/ + tool_providers overrides
         # default_workdir: bash and shell tools run from the session directory so
-        # agents use short relative paths (core/tasks.md) instead of full session paths.
+        # agents use short relative paths (core/tasks/) instead of full session paths.
         try:
             tools = ToolLoader(
                 default_workdir=str(self.session_dir),
@@ -351,36 +359,41 @@ class Session:
         self._set_model_status("idle", "user")
         return result
 
-    _DEFAULT_PERSISTENT_PROMPT = (
-        "Check for incoming messages from other agents. "
-        "Review your current state. If nothing needs attention, rest."
-    )
+    async def tick(self, card: TaskCard | None = None) -> AgentResult | None:
+        """Execute a single task card (or the next due card).
 
-    async def tick(self) -> AgentResult | None:
-        """Single heartbeat: run agent if tasks are non-empty.
+        If no card is provided, picks the first due card from core/tasks/.
+        Returns None if no card is due.
 
-        Returns None if tasks are empty (unless session_type is "persistent").
-        Clears tasks and prunes history if agent responds SESSION_FINISHED.
-
-        session_type behavior:
-          "ephemeral"  — heartbeat fires normally; auto-stop after queue drains
-          "default"    — heartbeat fires only when tasks.md has content
-          "persistent" — always fires with default_task when tasks.md is empty
+        For persistent sessions, a recurring "heartbeat" card is auto-created
+        during session init and fires on its own interval.
         """
-        tasks_content = self.tasks_path.read_text(encoding="utf-8").strip()
-        params = read_session_params(self.session_dir)
-        session_type = self._resolve_session_type(params)
+        use_legacy_heartbeat = False
+        heartbeat_label = "heartbeat"
+        if card is None:
+            due = load_due_cards(self.tasks_dir)
+            if due:
+                card = due[0]
+            else:
+                params = read_session_params(self.session_dir)
+                legacy_tasks = self.tasks_path.read_text(encoding="utf-8").strip()
+                if legacy_tasks:
+                    tasks_content = legacy_tasks
+                    use_legacy_heartbeat = True
+                elif self._resolve_session_type(params) == "persistent":
+                    heartbeat_label = "heartbeat_default"
+                    tasks_content = params.get("default_task") or _DEFAULT_HEARTBEAT_CONTENT
+                    use_legacy_heartbeat = True
+                else:
+                    return None
 
-        # Determine triggered_by label for logging
-        triggered_by = "heartbeat"
-
-        if not tasks_content:
-            if session_type != "persistent":
-                return None
-            # Persistent mode — use default_task as the prompt
-            default_task = params.get("default_task") or self._DEFAULT_PERSISTENT_PROMPT
-            tasks_content = default_task
-            triggered_by = "heartbeat_default"
+        if card is not None:
+            triggered_by = f"task:{card.name}"
+            tasks_content = card.content
+            card_label = card.name
+        else:
+            triggered_by = heartbeat_label
+            card_label = "heartbeat"
 
         # Snapshot history so we can roll back if SESSION_FINISHED
         history_snapshot = list(self._agent._history)
@@ -389,15 +402,22 @@ class Session:
         heartbeat_instructions = self._agent.heartbeat_prompt
         if heartbeat_instructions and "{tasks}" in heartbeat_instructions:
             prompt = heartbeat_instructions.format(tasks=tasks_content)
-        else:
+        elif use_legacy_heartbeat:
             prompt = f"Heartbeat activation.\n\nCurrent tasks:\n{tasks_content}"
             if heartbeat_instructions:
                 prompt += f"\n\n{heartbeat_instructions}"
+        else:
+            prompt = f"Task activation: {card_label}\n\n{tasks_content}"
+            if heartbeat_instructions:
+                prompt += f"\n\n{heartbeat_instructions}"
 
-        # Write heartbeat_trigger event BEFORE starting so it appears in the UI
-        # before the thinking bubble (not after the agent turn is complete)
         trigger_ts = datetime.now().isoformat()
-        self._append_event({"type": "heartbeat_trigger", "ts": trigger_ts})
+        if card is not None:
+            self._append_event({"type": "task_trigger", "card": card.name, "ts": trigger_ts})
+            card.mark_running()
+            save_card(self.tasks_dir, card)
+        elif use_legacy_heartbeat:
+            self._append_event({"type": "heartbeat_trigger", "ts": trigger_ts})
         self._set_model_status("running", triggered_by)
         tool_call_cb, get_tool_call_count = self._make_tool_call_callback()
         on_chunk = self._make_text_chunk_callback()
@@ -413,36 +433,53 @@ class Session:
                     on_loop_end=self.on_loop_end,
                 )
         except BaseException:
+            # Revert card to pending on failure
+            if card is not None:
+                card.status = "pending"
+                save_card(self.tasks_dir, card)
             self._set_model_status("idle", triggered_by)
             raise
         finally:
             on_chunk.flush()
 
         if SESSION_FINISHED in result.content:
-            # Clear tasks, prune heartbeat history so it doesn't pollute context
-            self.tasks_path.write_text("", encoding="utf-8")
+            # Clear all task cards, prune history
+            clear_all_cards(self.tasks_dir)
+            if use_legacy_heartbeat:
+                self.tasks_path.write_text("", encoding="utf-8")
             self._agent._history = history_snapshot
-            self._append_event({"type": "heartbeat_finished"})
+            if card is not None:
+                self._append_event({"type": "task_finished", "card": card.name})
         else:
-            # Replace the verbose heartbeat prompt in history with a compact marker.
-            # This prevents heartbeat instructions from accumulating in context across
-            # many activations, which would rapidly increase token costs.
+            # Mark card done (recurring → pending with updated last_run_at; one-shot → completed)
+            if card is not None:
+                card.mark_done()
+                save_card(self.tasks_dir, card)
+            elif use_legacy_heartbeat:
+                self.tasks_path.write_text("", encoding="utf-8")
+
+            # Replace verbose task/heartbeat prompt in history with a compact marker
             new_msgs = self._agent._history[old_len:]
             if new_msgs and new_msgs[0].role == "user":
                 from nutshell.core.types import Message as _Msg
-                new_msgs = [_Msg(role="user", content=f"[Heartbeat {trigger_ts}]"), *new_msgs[1:]]
+                marker = (
+                    f"[Task:{card.name} {trigger_ts}]"
+                    if card is not None
+                    else f"[Heartbeat {trigger_ts}]"
+                )
+                new_msgs = [_Msg(role="user", content=marker), *new_msgs[1:]]
                 self._agent._history = history_snapshot + new_msgs
 
-            # Only log to context if session is still active — skip if user stopped
-            # the session while this heartbeat was in-flight (avoids ghost output in UI)
+            # Only log to context if session is still active
             if not self.is_stopped():
                 turn: dict = {
                     "type": "turn",
                     "triggered_by": triggered_by,
-                    "pre_triggered": True,  # heartbeat_trigger was pre-emitted
                     "trigger_ts": trigger_ts,
                     "messages": self._serialize_turn_messages(result.messages[old_len:]),
                 }
+                if card is not None or use_legacy_heartbeat:
+                    turn["pre_triggered"] = True
                 if get_tool_call_count() > 0:
                     turn["has_streaming_tools"] = True
                 if result.usage and result.usage.total_tokens > 0:
@@ -499,15 +536,13 @@ class Session:
         """Run as a server-managed session.
 
         Polls context.jsonl for user_input events every 0.5s.
-        Fires heartbeat ticks every heartbeat_interval seconds.
+        Checks task cards in core/tasks/ each cycle and runs any that are due.
 
-        Heartbeat is skipped when:
+        Task cards are skipped when:
           - session status == "stopped" (user issued /stop)
           - agent_lock is held (agent already running)
 
         A user message always wakes a stopped session (clears stopped status).
-        last_tick_time is updated AFTER the tick completes, so tick duration
-        never eats into the next interval.
         """
         self._ipc = ipc
         self._write_pid()
@@ -515,49 +550,29 @@ class Session:
         # Reset stale "running" state from a previous crash
         write_session_status(self.system_dir, model_state="idle", model_source="system")
 
-        # Skip existing context events — only process new user_input events.
-        # Starting at current file size prevents replay of prior session messages.
-        input_offset = ipc.context_size()
-        interrupt_offset = ipc.events_size()  # only look at NEW interrupt events
+        # Ensure persistent sessions have a heartbeat task card
+        params = read_session_params(self.session_dir)
+        if self._resolve_session_type(params) == "persistent":
+            ensure_heartbeat_card(
+                self.tasks_dir,
+                interval=float(params.get("heartbeat_interval") or self._heartbeat_interval),
+                content=params.get("default_task"),
+            )
 
-        # Initialise heartbeat timer.
-        # Use last_run_at from status.json so the interval is correctly preserved
-        # across server restarts: if the agent ran 3m ago and interval is 10m,
-        # the next heartbeat fires in 7m, not 10m from now.
-        # Cap elapsed time at current_interval so we never fire immediately on startup
-        # (this handles the case where the server was down longer than one interval).
-        _now_mono = asyncio.get_event_loop().time()
-        _st = read_session_status(self.system_dir)
-        _last_run_str = _st.get("last_run_at")
-        _init_interval = float(
-            read_session_params(self.session_dir).get("heartbeat_interval")
-            or self._heartbeat_interval
-        )
-        if _last_run_str:
-            try:
-                _elapsed = (datetime.now() - datetime.fromisoformat(_last_run_str)).total_seconds()
-                # Clamp: don't go further back than one full interval
-                last_tick_time = _now_mono - min(_elapsed, _init_interval)
-            except Exception:
-                last_tick_time = _now_mono
-        else:
-            last_tick_time = _now_mono
+        # Skip existing context events — only process new user_input events.
+        input_offset = ipc.context_size()
+        interrupt_offset = ipc.events_size()
 
         try:
             while True:
                 # Check for interrupt control events (soft interrupt).
-                # Drains pending inputs and skips the next heartbeat.
                 interrupted, interrupt_offset = ipc.poll_interrupt(interrupt_offset)
                 if interrupted:
-                    inputs, input_offset = ipc.poll_inputs(input_offset)  # drain queue
+                    inputs, input_offset = ipc.poll_inputs(input_offset)
                     if inputs:
-                        self._append_event({
-                            "type": "interrupted",
-                            "discarded": len(inputs),
-                        })
+                        self._append_event({"type": "interrupted", "discarded": len(inputs)})
                     else:
                         self._append_event({"type": "interrupted", "discarded": 0})
-                    last_tick_time = asyncio.get_event_loop().time()  # defer next heartbeat
                     await asyncio.sleep(0.5)
                     continue
 
@@ -567,33 +582,23 @@ class Session:
                     content = msg.get("content", "")
                     msg_id = msg.get("id")
                     caller_type = msg.get("caller", "human")
-                    # User message wakes a stopped session
                     if self.is_stopped():
                         self.set_status("active")
                         self._append_event({"type": "status", "value": "resumed"})
-                    # Context reshape: clean up any orphaned user message at history tail
-                    # (e.g., a heartbeat prompt interrupted mid-run)
                     content = self._reshape_history(content)
                     try:
                         await self.chat(content, user_input_id=msg_id, caller_type=caller_type)
                     except Exception as exc:
                         self._append_event({"type": "error", "content": str(exc)})
-                    finally:
-                        # Reset heartbeat timer after every agent run (user-triggered).
-                        # The timer is inherently blocked during the await above (single
-                        # event loop), but resetting here ensures the full interval elapses
-                        # from the moment output completes, not from when the message arrived.
-                        last_tick_time = asyncio.get_event_loop().time()
 
-                # Ephemeral auto-stop: after processing all inputs, if queue is
-                # empty and tasks.md is empty, auto-stop the session.
+                # Ephemeral auto-stop: after processing inputs, if no pending
+                # task cards and no new messages, auto-stop.
                 if inputs and not self.is_stopped():
                     session_type = self._resolve_session_type(read_session_params(self.session_dir))
                     if session_type == "ephemeral":
-                        tasks_content = self.tasks_path.read_text(encoding="utf-8").strip()
                         _, next_offset = ipc.poll_inputs(input_offset)
-                        no_pending = next_offset == input_offset  # nothing new arrived
-                        if not tasks_content and no_pending:
+                        no_pending = next_offset == input_offset
+                        if not has_pending_cards(self.tasks_dir) and no_pending:
                             self.set_status("stopped")
                             write_session_status(self.system_dir, stopped_at=datetime.now().isoformat())
                             self._append_event({"type": "status", "value": "ephemeral auto-stop"})
@@ -604,30 +609,26 @@ class Session:
                     stopped_at_str = st.get("stopped_at")
                     if stopped_at_str:
                         try:
-                            elapsed = (datetime.now() - datetime.fromisoformat(stopped_at_str)).total_seconds()
+                            stopped_at = datetime.fromisoformat(stopped_at_str)
+                            now = datetime.now(stopped_at.tzinfo) if stopped_at.tzinfo is not None else datetime.now()
+                            elapsed = (now - stopped_at).total_seconds()
                             if elapsed >= 5 * 3600:
-                                self.tasks_path.write_text("", encoding="utf-8")
+                                clear_all_cards(self.tasks_dir)
                                 write_session_status(self.system_dir, status="active", stopped_at=None)
                                 self._append_event({"type": "status", "value": "auto-expired after 5h stopped"})
                         except Exception:
                             pass
 
-                # Heartbeat timer — read interval fresh from params.json each cycle
-                # so edits to params.json take effect without restarting the daemon.
-                now = asyncio.get_event_loop().time()
-                current_interval = float(
-                    read_session_params(self.session_dir).get("heartbeat_interval")
-                    or self._heartbeat_interval
-                )
-                if now - last_tick_time >= current_interval:
-                    if not self.is_stopped() and not self._agent_lock.locked():
+                # Task card scheduling — check for due cards each cycle
+                if not self.is_stopped() and not self._agent_lock.locked():
+                    due_cards = load_due_cards(self.tasks_dir)
+                    for card in due_cards:
+                        if self._agent_lock.locked():
+                            break
                         try:
-                            await self.tick()
+                            await self.tick(card)
                         except Exception as exc:
                             self._append_event({"type": "error", "content": str(exc)})
-                    # Reset timer AFTER tick completes (not before),
-                    # so tick duration never cuts into the next interval.
-                    last_tick_time = asyncio.get_event_loop().time()
 
                 if stop_event is not None and stop_event.is_set():
                     break
@@ -668,6 +669,10 @@ class Session:
     @property
     def memory_path(self) -> Path:
         return self.core_dir / "memory.md"
+
+    @property
+    def tasks_dir(self) -> Path:
+        return self.core_dir / "tasks"
 
     @property
     def tasks_path(self) -> Path:
@@ -746,8 +751,13 @@ class Session:
         last = self._agent._history[-1]
         last_content = last.content if isinstance(last.content, str) else ""
         self._agent._history.pop()
-        if "Heartbeat activation" in last_content or last_content.startswith("[Heartbeat "):
-            # Orphaned heartbeat prompt/marker — drop it, use new message as-is
+        if (
+            "Task activation:" in last_content
+            or last_content.startswith("[Task:")
+            or "Heartbeat activation:" in last_content
+            or last_content.startswith("[Heartbeat ")
+        ):
+            # Orphaned task prompt/marker — drop it, use new message as-is
             return new_content
         # Orphaned real user message — merge with new input
         return f"{last_content}\n\n{new_content}"

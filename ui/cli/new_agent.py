@@ -162,7 +162,7 @@ def create_entity(name: str, base_dir: Path, parent: str | None) -> Path:
         session_context_md = _read_template("prompts/session.md", base_dir) or (
             "## Session Files\n\nYour session directory: `sessions/{session_id}/`\n\n"
             "- `core/params.json` — model, provider, heartbeat_interval\n"
-            "- `core/tasks.md` — task board\n"
+            "- `core/tasks/` — task cards (each .md file is a task with YAML frontmatter)\n"
             "- `core/memory.md` — persistent memory\n"
             "- `core/skills/` — session-level skills\n"
             "- `core/tools/` — session-level tools\n"

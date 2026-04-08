@@ -14,6 +14,7 @@ from pathlib import Path
 
 from nutshell.session_engine.session_params import ensure_session_params, write_session_params
 from nutshell.session_engine.session_status import ensure_session_status, write_session_status
+from nutshell.session_engine.task_cards import ensure_heartbeat_card
 from nutshell.session_engine.entity_state import (
     _meta_is_synced,
     check_meta_alignment,
@@ -191,7 +192,7 @@ def init_session(
         write_session_params(session_dir, heartbeat_interval=effective_heartbeat, **entity_params)
     # Seed mutable state from meta session, with entity memory as bootstrap fallback.
     meta_dir = ensure_meta_session(entity_name, s_base=s_base)
-    sync_from_entity(entity_name, ent_base)
+    sync_from_entity(entity_name, ent_base, s_base=s_base)
 
     meta_memory = meta_dir / "core" / "memory.md"
     entity_memory = (ent_base / entity_name / "memory.md") if entity_dir.exists() else None
@@ -226,7 +227,15 @@ def init_session(
             if not dst_path.exists():
                 shutil.copy2(src_path, dst_path)
 
-    _write_if_absent(core_dir / "tasks.md", "")
+    # Create task cards directory; seed heartbeat card for persistent sessions
+    tasks_dir = core_dir / "tasks"
+    tasks_dir.mkdir(parents=True, exist_ok=True)
+    if entity_params.get("session_type") == "persistent":
+        ensure_heartbeat_card(
+            tasks_dir,
+            interval=effective_heartbeat,
+            content=entity_params.get("default_task"),
+        )
 
     ensure_session_status(system_dir)
     write_session_status(system_dir, heartbeat_interval=effective_heartbeat)

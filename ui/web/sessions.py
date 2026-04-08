@@ -23,7 +23,8 @@ def _is_stale_stopped(info: dict) -> bool:
         stopped_at = datetime.fromisoformat(ts)
     except Exception:
         return False
-    return (datetime.now() - stopped_at).total_seconds() >= 12 * 3600
+    now = datetime.now(stopped_at.tzinfo) if stopped_at.tzinfo is not None else datetime.now()
+    return (now - stopped_at).total_seconds() >= 12 * 3600
 
 
 def _read_session_info(session_dir: Path, system_dir: Path) -> dict | None:
@@ -37,11 +38,14 @@ def _read_session_info(session_dir: Path, system_dir: Path) -> dict | None:
         manifest = {}
     status_payload = read_session_status(system_dir)
     params = read_session_params(session_dir) if session_dir.exists() else {}
-    tasks_path = session_dir / "core" / "tasks.md"
-    has_tasks = tasks_path.exists() and bool(tasks_path.read_text(encoding="utf-8").strip())
+    from nutshell.session_engine.task_cards import has_pending_cards, load_all_cards
+    tasks_dir = session_dir / "core" / "tasks"
+    has_tasks = has_pending_cards(tasks_dir)
+    # Use latest card mtime for UI freshness indicator
+    cards_mtimes = [f.stat().st_mtime for f in tasks_dir.glob("*.md")] if tasks_dir.is_dir() else []
     tasks_mtime = (
-        datetime.fromtimestamp(tasks_path.stat().st_mtime).isoformat()
-        if tasks_path.exists() else None
+        datetime.fromtimestamp(max(cards_mtimes)).isoformat()
+        if cards_mtimes else None
     )
     pid_alive = _pid_alive(status_payload.get("pid"))
     status = status_payload.get("status", "active")

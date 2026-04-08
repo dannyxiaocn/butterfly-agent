@@ -68,7 +68,8 @@
 - [ ] **`core/hook.py` 接入 session_engine**：chat() 和 tick() 统一为 hook 传递；接入 on_loop_start/end/tool_done。
 - [ ] **`runtime/`中session内容移至 `session_engine/`**：与 llm_engine/tool_engine/skill_engine 命名对齐；更新约 30 处 import。
 - [ ] **`loader.py` 移至 `session_engine/`**：`AgentConfig.from_path()` 属文件 IO，不属于 core 纯计算层。
-- [ ] **`session_type` 三态替换 `persistent` bool**：`session_type: "ephemeral" | "default" | "persistent"`；ephemeral session 在 queue 清空后自动 stop()；spawn_session 支持 session_type 参数。
+- [x] **`session_type` 三态替换 `persistent` bool**：`session_type: "ephemeral" | "default" | "persistent"`；ephemeral session 在 queue 清空后自动 stop()。
+- [x] **Task card 系统替换 tasks.md**：`core/tasks/` 目录下每个 `.md` 为独立 task card（YAML frontmatter: interval, status, last_run_at）；heartbeat 是 persistent session 的默认 card；daemon loop 按 card 独立调度。
 
 ---
 

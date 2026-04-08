@@ -117,12 +117,14 @@ class SessionWatcher:
                 auto_expired = False
                 if stopped_at_str:
                     try:
-                        elapsed = (datetime.now() - datetime.fromisoformat(stopped_at_str)).total_seconds()
+                        stopped_at = datetime.fromisoformat(stopped_at_str)
+                        now = datetime.now(stopped_at.tzinfo) if stopped_at.tzinfo is not None else datetime.now()
+                        elapsed = (now - stopped_at).total_seconds()
                         if elapsed >= _AUTO_EXPIRE_HOURS * 3600:
                             write_session_status(system_dir, status="active", stopped_at=None)
-                            tasks_path = self.sessions_dir / session_id / "core" / "tasks.md"
-                            if tasks_path.exists():
-                                tasks_path.write_text("", encoding="utf-8")
+                            from nutshell.session_engine.task_cards import clear_all_cards
+                            tasks_dir = self.sessions_dir / session_id / "core" / "tasks"
+                            clear_all_cards(tasks_dir)
                             print(f"[server] Auto-expired stopped session: {session_id}")
                             auto_expired = True
                     except Exception as e:
@@ -210,10 +212,10 @@ class SessionWatcher:
         if context_path.exists() and context_path.stat().st_size > 0:
             session.load_history()
 
-        # Only announce if tasks have pending work — empty/idle sessions are silent
-        tasks_path = session_dir / "core" / "tasks.md"
-        has_tasks = tasks_path.exists() and tasks_path.read_text(encoding="utf-8").strip()
-        if has_tasks:
+        # Only announce if task cards have pending work — empty/idle sessions are silent
+        from nutshell.session_engine.task_cards import has_pending_cards
+        tasks_dir = session_dir / "core" / "tasks"
+        if has_pending_cards(tasks_dir):
             print(f"[server] Resumed: {session_id} ({len(agent._history)} messages, tasks pending)")
 
         try:

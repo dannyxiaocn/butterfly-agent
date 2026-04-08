@@ -10,7 +10,8 @@ This subsystem materializes entities into runnable sessions and wraps `Agent` wi
 - `session_init.py`: creates `sessions/<id>/` and `_sessions/<id>/`, seeds memory, tools, skills, playground files, and `.venv`.
 - `session_params.py`: reads and writes `core/params.json`.
 - `session_status.py`: reads and writes `_sessions/<id>/status.json`.
-- `session.py`: the persistent session wrapper that reloads capabilities, handles chat and heartbeat ticks, and appends JSONL events.
+- `task_cards.py`: task card system — per-task `.md` files in `core/tasks/` with YAML frontmatter (interval, status, last_run_at).
+- `session.py`: the persistent session wrapper that reloads capabilities, handles chat and task card ticks, and appends JSONL events.
 
 ## How To Use It
 

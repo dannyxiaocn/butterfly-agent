@@ -77,8 +77,9 @@ def ensure_meta_session(entity_name: str, s_base: Path | None = None) -> Path:
     (core_dir / 'memory').mkdir(exist_ok=True)
     (session_dir / 'docs').mkdir(exist_ok=True)
     (session_dir / 'playground').mkdir(exist_ok=True)
-    for fname in ('system.md', 'heartbeat.md', 'session.md', 'memory.md', 'tasks.md'):
+    for fname in ('system.md', 'heartbeat.md', 'session.md', 'memory.md'):
         (core_dir / fname).touch(exist_ok=True)
+    (core_dir / 'tasks').mkdir(exist_ok=True)
     _create_meta_venv(session_dir)
     return session_dir
 
@@ -407,11 +408,10 @@ def sync_from_entity(entity_name: str, entity_base: Path | None = None, s_base: 
     meta_dir = ensure_meta_session(entity_name, s_base=s_base)
     core_dir = meta_dir / 'core'
     meta_memory = core_dir / 'memory.md'
-    if meta_memory.exists() and meta_memory.read_text(encoding='utf-8').strip():
-        return
 
     entity_memory = entity_dir / 'memory.md'
-    if entity_memory.exists() and not meta_memory.read_text(encoding='utf-8'):
+    meta_memory_text = meta_memory.read_text(encoding='utf-8') if meta_memory.exists() else ''
+    if entity_memory.exists() and not meta_memory_text:
         meta_memory.write_text(entity_memory.read_text(encoding='utf-8'), encoding='utf-8')
 
     entity_memory_dir = entity_dir / 'memory'

@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from nutshell.session_engine.task_cards import load_all_cards
 from ui.cli.friends import classify_status
 
 
@@ -14,18 +15,25 @@ def build_kanban(
     sessions: list[dict[str, Any]],
     sessions_base: Path,
 ) -> list[dict[str, Any]]:
-    """Build a kanban entry for every session: id, entity, status, tasks_content."""
+    """Build a kanban entry for every session: id, entity, status, task cards summary."""
     entries: list[dict[str, Any]] = []
     for s in sessions:
         sid = s.get("id", "?")
         entity = s.get("entity", "?")
         status = classify_status(s)
 
-        tasks_path = sessions_base / sid / "core" / "tasks.md"
-        if tasks_path.exists():
-            content = tasks_path.read_text(encoding="utf-8").strip()
-        else:
-            content = ""
+        tasks_dir = sessions_base / sid / "core" / "tasks"
+        cards = load_all_cards(tasks_dir)
+        # Build summary: one line per card
+        lines = []
+        for card in cards:
+            interval_str = f"every {card.interval}s" if card.interval else "one-shot"
+            lines.append(f"[{card.status}] {card.name} ({interval_str}): {card.content[:60]}")
+        content = "\n".join(lines)
+        if not content:
+            legacy_tasks = tasks_dir.parent / "tasks.md"
+            if legacy_tasks.exists():
+                content = legacy_tasks.read_text(encoding="utf-8").strip()
 
         entries.append({
             "id": sid,

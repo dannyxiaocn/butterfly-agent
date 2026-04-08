@@ -9,7 +9,7 @@ DEFAULT_PARAMS: dict = {
     "fallback_provider": None,  # Optional fallback provider if primary fails
     "tool_providers": {"web_search": "brave"},  # web_search: "brave" | "tavily"
     "session_type": "default",  # "ephemeral" | "default" | "persistent"
-    "default_task": None,   # prompt used when persistent and tasks.md is empty
+    "default_task": None,   # content for the heartbeat task card in persistent sessions
     "thinking": False,      # True → enable extended thinking for this session
     "thinking_budget": 8000,  # budget_tokens for extended thinking (Anthropic/Kimi only)
     "thinking_effort": "high",  # reasoning effort level (Codex only): none/minimal/low/medium/high/xhigh
@@ -24,10 +24,20 @@ def read_session_params(session_dir: Path) -> dict:
     p = params_path(session_dir)
     if not p.exists():
         return dict(DEFAULT_PARAMS)
-    params = {**DEFAULT_PARAMS, **json.loads(p.read_text(encoding="utf-8"))}
+    try:
+        raw = json.loads(p.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return dict(DEFAULT_PARAMS)
+    if not isinstance(raw, dict):
+        return dict(DEFAULT_PARAMS)
+    params = {**DEFAULT_PARAMS, **raw}
     # Guard against zero/negative heartbeat_interval which would cause the timer to fire constantly
     interval = params.get("heartbeat_interval")
-    if interval is not None and float(interval) < 1.0:
+    try:
+        interval_value = float(interval) if interval is not None else None
+    except (TypeError, ValueError):
+        interval_value = None
+    if interval is not None and (interval_value is None or interval_value < 1.0):
         params["heartbeat_interval"] = DEFAULT_PARAMS["heartbeat_interval"]
     return params
 

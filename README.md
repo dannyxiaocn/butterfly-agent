@@ -1,4 +1,4 @@
-# Nutshell `v1.3.76`
+# Nutshell `v1.3.77`
 
 Nutshell is a file-backed Python agent runtime. Sessions, prompts, tools, skills, state, and UI traffic all live on disk, so the server, CLI, Web UI, and agents share the same source of truth.
 
@@ -62,7 +62,7 @@ sessions/<id>/                  agent-visible
     memory.md
     memory/*.md
     apps/*.md
-    tasks.md
+    tasks/*.md
     params.json
     tools/*.json + *.sh
     skills/<name>/SKILL.md

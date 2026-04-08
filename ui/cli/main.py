@@ -743,9 +743,9 @@ def cmd_token_report(args) -> int:
 def _add_tasks_parser(subparsers) -> None:
     p = subparsers.add_parser(
         "tasks",
-        help="Show a session's task board (core/tasks.md).",
+        help="Show a session's task cards (core/tasks/).",
         description=(
-            "Display the task board for a session.\n\n"
+            "Display task cards for a session.\n\n"
             "Examples:\n"
             "  nutshell tasks                       Show latest session's tasks\n"
             "  nutshell tasks 2026-03-25_10-00-00   Show specific session\n"
@@ -762,9 +762,9 @@ def _add_tasks_parser(subparsers) -> None:
 
 
 def cmd_tasks(args) -> int:
-    session_id = args.session_id
+    from nutshell.session_engine.task_cards import load_all_cards
 
-    # Resolve session_id: if not given, use the most recently active session
+    session_id = args.session_id
     if not session_id:
         sessions = _read_all_sessions(args.sessions_base, args.system_base)
         if not sessions:
@@ -772,22 +772,31 @@ def cmd_tasks(args) -> int:
             return 1
         session_id = sessions[0]["id"]
 
-    tasks_path = args.sessions_base / session_id / "core" / "tasks.md"
-    if not tasks_path.exists():
-        # Check if the session exists at all
-        if not (args.system_base / session_id / "manifest.json").exists():
-            print(f"Error: session '{session_id}' not found", file=sys.stderr)
-            return 1
-        print(f"[{session_id}] tasks.md is empty.")
-        return 0
+    tasks_dir = args.sessions_base / session_id / "core" / "tasks"
+    if not (args.system_base / session_id / "manifest.json").exists():
+        print(f"Error: session '{session_id}' not found", file=sys.stderr)
+        return 1
 
-    content = tasks_path.read_text().strip()
-    print(f"[{session_id}] tasks.md")
+    cards = load_all_cards(tasks_dir)
+    print(f"[{session_id}] task cards ({len(cards)})")
     print("─" * 60)
-    if content:
-        print(content)
+    if not cards:
+        legacy_tasks = tasks_dir.parent / "tasks.md"
+        legacy_text = legacy_tasks.read_text(encoding="utf-8").strip() if legacy_tasks.exists() else ""
+        if legacy_text:
+            print(legacy_text)
+        else:
+            print("(empty)")
     else:
-        print("(empty)")
+        for card in cards:
+            interval_str = f"every {card.interval}s" if card.interval else "one-shot"
+            print(f"  [{card.status}] {card.name}  ({interval_str})")
+            if card.last_run_at:
+                print(f"          last run: {card.last_run_at}")
+            for line in card.content.splitlines()[:3]:
+                print(f"          {line}")
+            if len(card.content.splitlines()) > 3:
+                print(f"          ...")
     return 0
 
 
@@ -1028,7 +1037,7 @@ def _exec_entrypoint(name: str) -> int:
 def _add_kanban_parser(subparsers) -> None:
     p = subparsers.add_parser(
         "kanban",
-        help="Unified task board — show tasks.md for all sessions.",
+        help="Unified task board — show task cards for all sessions.",
         description=(
             "Display every session's task board in one view.\n\n"
             "Examples:\n"

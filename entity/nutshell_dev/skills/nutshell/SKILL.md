@@ -37,7 +37,7 @@ Important package boundaries:
 - `nutshell/llm_engine`: provider registry and adapters
 - `nutshell/tool_engine`: tool loading, built-ins, executors, hot reload
 - `nutshell/skill_engine`: `SKILL.md` loading and rendering
-- `nutshell/session_engine`: entity loading, session initialization, meta-session state, runtime session logic
+- `nutshell/session_engine`: entity loading, session initialization, meta-session state, task cards, runtime session logic
 - `nutshell/runtime`: watcher, IPC, bridge, coordination, `.env` loading
 - `ui/cli`: the `nutshell` command
 - `ui/web`: FastAPI app and browser UI
@@ -53,7 +53,7 @@ Nutshell is filesystem-first:
 
 Key runtime files:
 
-- `sessions/<id>/core/tasks.md`: heartbeat queue
+- `sessions/<id>/core/tasks/*.md`: task cards (YAML frontmatter + content; heartbeat is a card)
 - `sessions/<id>/core/params.json`: provider, model, heartbeat, tool-provider overrides, session type
 - `_sessions/<id>/context.jsonl`: `user_input` and `turn` records
 - `_sessions/<id>/events.jsonl`: live runtime events for UI streaming
