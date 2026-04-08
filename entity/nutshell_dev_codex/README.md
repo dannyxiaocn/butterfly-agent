@@ -1,11 +1,19 @@
-# nutshell_dev_codex
+# `entity/nutshell_dev_codex`
 
-Codex-flavoured development agent for nutshell.
+The Codex-oriented variant of `nutshell_dev`. It keeps the same project role but ships Codex-specific defaults and memory.
 
-## Purpose
-- same project-development role as `nutshell_dev`, but optimized for Codex/OpenAI runtime
-- carries dedicated memory templates so Codex sessions seed correctly
+## How To Use It
 
-## Notes
-- extends `nutshell_dev`
-- maintained because the repo actively uses it for autonomous implementation work
+```bash
+nutshell new --entity nutshell_dev_codex
+nutshell chat --entity nutshell_dev_codex "review this subsystem"
+```
+
+## How It Contributes To The Whole System
+
+It is the repo's provider-specific developer template for the Codex workflow, so project memory and behavior stay coherent even when the runtime backend changes.
+
+## Directory Map
+
+- [memory/README.md](/Users/xiaobocheng/agent_core/nutshell/entity/nutshell_dev_codex/memory/README.md)
+

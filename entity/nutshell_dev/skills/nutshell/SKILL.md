@@ -1,214 +1,143 @@
 ---
 name: nutshell
-description: "Full development context for the nutshell project. Use this skill for any task involving nutshell: writing code, adding features, fixing bugs, running tests, bumping versions, updating docs, or understanding architecture. Load whenever working on this repo."
+description: >
+  Development context for the Nutshell repository. Use this skill for tasks that
+  change Nutshell itself: runtime work, provider work, session lifecycle changes,
+  CLI or web changes, entity updates, documentation updates, tests, or repo-level
+  maintenance. Load it whenever the task is about this repository rather than an
+  arbitrary external project.
 ---
 
-# Nutshell — Developer Skill
+# Nutshell Developer Skill
 
-Complete workbench for developing nutshell.
+This skill gives the operational context for working on the Nutshell codebase.
 
-Current version: **v1.3.4** | Tests: `pytest tests/ -q` (184 passing)
+## Working Rules
 
----
+- Prefer reading the code and tests before assuming the docs are correct.
+- Keep changes local to the current repo checkout unless the task explicitly says otherwise.
+- When you change behavior, update the nearby docs and tests in the same pass.
+- Use the unified `nutshell` CLI names that exist today. Do not rely on legacy command names.
 
-## Role
+## Repo Shape
 
-**You are nutshell_dev.** Claude Code dispatches tasks to you; you execute them.
-- Claude Code selects tasks from `track.md`, sends you instructions, reviews your output
-- You implement, test, commit, push — then report the commit ID back
-- If you find bugs or missing features mid-task, fix them and add new `[ ]` items to `track.md`
+```text
+nutshell/          runtime implementation
+ui/                CLI and FastAPI/SSE frontend
+entity/            agent templates
+tests/             automated coverage
+README.md          repo-level overview
+pyproject.toml     package metadata and CLI entrypoint
+track.md           project task board
+```
 
-## Workspace
+Important package boundaries:
 
-**Always work in your playground, never modify the origin repo directly.**
+- `nutshell/core`: `Agent`, `Tool`, `Skill`, `Provider`, shared types
+- `nutshell/llm_engine`: provider registry and adapters
+- `nutshell/tool_engine`: tool loading, built-ins, executors, hot reload
+- `nutshell/skill_engine`: `SKILL.md` loading and rendering
+- `nutshell/session_engine`: entity loading, session initialization, meta-session state, runtime session logic
+- `nutshell/runtime`: watcher, IPC, bridge, coordination, `.env` loading
+- `ui/cli`: the `nutshell` command
+- `ui/web`: FastAPI app and browser UI
+
+## Current Session Model
+
+Nutshell is filesystem-first:
+
+- `entity/<name>/` is the reusable template
+- `sessions/<id>/` is the agent-visible runtime copy
+- `_sessions/<id>/` is the system-visible runtime state
+- `sessions/<entity>_meta/` is the mutable shared seed for future sessions of that entity
+
+Key runtime files:
+
+- `sessions/<id>/core/tasks.md`: heartbeat queue
+- `sessions/<id>/core/params.json`: provider, model, heartbeat, tool-provider overrides, session type
+- `_sessions/<id>/context.jsonl`: `user_input` and `turn` records
+- `_sessions/<id>/events.jsonl`: live runtime events for UI streaming
+
+## Commands You Should Expect
 
 ```bash
-# Session workdir is sessions/<id>/  — do this first:
-ls playground/nutshell 2>/dev/null || git clone /Users/xiaobocheng/agent_core/nutshell playground/nutshell
-cd playground/nutshell
-git pull origin main
+nutshell chat "message"
+nutshell chat --entity nutshell_dev "message"
+nutshell sessions
+nutshell new [ID] [--entity NAME]
+nutshell stop <id>
+nutshell start <id>
+nutshell log <id>
+nutshell tasks <id>
+nutshell visit <id>
+nutshell friends
+nutshell kanban
+nutshell prompt-stats <id>
+nutshell token-report <id>
+nutshell repo-skill <path>
+nutshell dream <entity>
+nutshell meta [entity]
+nutshell entity new -n <name>
+nutshell server
+nutshell web
 ```
 
-After completing work: `git push origin main`
+## When Editing The Runtime
 
----
+### Adding or changing a built-in tool
 
-## SOPs
+1. Implement the runtime behavior under `nutshell/tool_engine/`
+2. Register or update it in `nutshell/tool_engine/registry.py` if it is a built-in
+3. Update entity-exposed schemas in `entity/agent/tools/` if the base entity should expose it
+4. Update docs and tests
 
-### 1. After Any Code Change
-```bash
-# Run from playground/nutshell/
-pytest tests/ -q          # must pass before anything else
-```
-Then:
-1. Update `README.md` — relevant section + new Changelog entry
-2. Bump version in **both** `pyproject.toml` AND `README.md` heading
-3. Commit using the repo's current required format
-4. `git push origin main`
-5. Report commit ID back to Claude Code
+### Adding or changing a provider
 
-**Versioning:** Patch (Z): bug fix · Minor (Y): new feature · Major (X): breaking
+1. Update or add a file under `nutshell/llm_engine/providers/`
+2. Register the provider key in `nutshell/llm_engine/registry.py`
+3. Keep the provider contract aligned with `nutshell/core/provider.py`
+4. Verify message conversion, tool calls, streaming, and token usage
 
-### 2. track.md Workflow
+### Adding or changing session behavior
 
-`track.md` is the project task board. Keep it up to date:
-- Mark completed items `[x]` with the commit ID as `<!-- COMMIT_ID vX.Y.Z -->`
-- Add new `[ ]` sub-items when you discover tasks can be further broken down
-- Add new `[ ]` todos when you hit missing features or related improvements
+Start by checking all of:
 
-```bash
-cat track.md              # read current tasks
-# edit track.md to mark done or add todos
-git add track.md && git commit -m "track: ..."
-```
+- `nutshell/session_engine/session.py`
+- `nutshell/session_engine/session_init.py`
+- `nutshell/session_engine/entity_state.py`
+- `nutshell/runtime/watcher.py`
+- the relevant tests in `tests/` and `tests/runtime/`
 
-### 3. Adding a Built-in Tool
+Session bugs often cross these boundaries.
 
-1. Add a real implementation that the current runtime can resolve
-2. Register it in `nutshell/tool_engine/registry.py` if it is a built-in tool
-3. Add `entity/agent/tools/<name>.json` only after the implementation exists
-4. Add it to `entity/agent/agent.yaml` only if sessions should expose it by default
-5. Write or update tests
-6. Run full SOP
+## Testing
 
-### 4. Adding a New LLM Provider
-
-1. `nutshell/llm_engine/providers/<name>.py` extending `Provider`
-2. Register in `nutshell/llm_engine/registry.py`
-3. `complete()` returns `(str, list[ToolCall], TokenUsage)` — 3-tuple
-4. `complete()` accepts `on_text_chunk=None`, `cache_system_prefix=""`, `cache_last_human_turn=False`
-
----
-
-## Package Layout
-
-```
-nutshell/
-├── core/                  — ABCs + Agent, Tool, Skill, Provider, types
-│   ├── agent.py           — Agent: run(), _history, _build_system_parts(), memory + memory_layers
-│   ├── tool.py, skill.py, provider.py, types.py
-│   └── loader.py          — AgentLoader (inheritance chain resolution)
-├── llm_engine/
-│   ├── providers/
-│   │   ├── anthropic.py   — AnthropicProvider
-│   │   ├── codex.py       — CodexProvider
-│   │   ├── kimi.py        — KimiForCodingProvider
-│   │   └── openai_api.py  — OpenAIProvider
-│   ├── registry.py        — resolve_provider(name), provider_name(provider)
-│   └── loader.py
-├── tool_engine/
-│   ├── executor/
-│   │   ├── terminal/      — bash / shell executors
-│   │   └── web_search/    — brave / tavily providers
-│   ├── registry.py        — _BUILTIN_FACTORIES + get_builtin(name)
-│   ├── loader.py          — ToolLoader: .json + built-in registry + .sh shell tools
-│   ├── reload.py          — create_reload_tool(): hot-reload core/ capabilities
-│   └── sandbox.py
-├── skill_engine/
-│   ├── loader.py          — SkillLoader: SKILL.md + flat .md
-│   └── renderer.py        — build_skills_block()
-├── session_engine/
-│   ├── session.py         — Session: chat(), tick(), run_daemon_loop()
-│   ├── session_init.py    — init_session(): copies entity → core/ (skills, tools, memory)
-│   ├── session_status.py  — status.json r/w, pid_alive
-│   ├── session_params.py  — params.json: DEFAULT_PARAMS, read/write/ensure_session_params
-│   ├── entity_config.py   — AgentConfig: agent.yaml parsing + inheritance
-│   ├── entity_state.py    — meta session management, entity sync/alignment
-│   └── agent_loader.py    — AgentLoader: entity → Agent construction
-└── runtime/
-    ├── server.py          — nutshell-server entry point
-    ├── watcher.py         — SessionWatcher: polls _sessions/, starts session tasks
-    ├── ipc.py             — FileIPC: context.jsonl + events.jsonl; display converters
-    └── bridge.py          — BridgeSession: client-side session handle for frontends
-
-ui/                        (NOT inside nutshell/ package)
-├── cli/
-│   ├── main.py            — nutshell: unified CLI entry point
-│   └── chat.py            — nutshell-chat legacy entry point
-└── web/                   — FastAPI + SSE monitoring UI
-```
-
----
-
-## CLI (v1.3.4)
+Run the smallest meaningful scope first, then widen if needed.
 
 ```bash
-# Session management (no server required)
-nutshell sessions                     # list all sessions
-nutshell sessions --json              # JSON output
-nutshell new [ID] [--entity NAME]     # create session
-nutshell stop SESSION_ID              # pause heartbeat
-nutshell start SESSION_ID             # resume heartbeat
-nutshell tasks [SESSION_ID]           # show session's tasks.md
-nutshell log [SESSION_ID] [-n N]      # show last N conversation turns
-
-# Messaging
-nutshell chat "message"               # new session + send
-nutshell chat --session ID "message"  # continue session
-nutshell chat --session ID --no-wait "message"  # fire-and-forget
-
-# Entity management
-nutshell entity new -n NAME           # scaffold new entity
-nutshell review                       # review agent entity-update requests
+pytest tests/test_<module>.py -q
+pytest tests/runtime/ -q
+pytest tests/ -q
 ```
 
----
+Common high-signal modules:
 
-## Entity Inheritance
+- `tests/test_tools.py`
+- `tests/test_skill_tool.py`
+- `tests/test_session_capabilities.py`
+- `tests/test_persistent_mode.py`
+- `tests/test_cli_main.py`
+- `tests/runtime/test_meta_session.py`
+- `tests/runtime/test_session_factory.py`
 
-```
-entity/agent/              — base runtime entity
-  ↑ entity/nutshell_dev/      — adds: nutshell skill, memory.md pre-seeded
-    ↑ entity/nutshell_dev_codex/ — codex-tuned development variant
-```
+## Documentation Expectations
 
-**Built-in tools** (always available):
-`bash`, `web_search`, `reload_capabilities`
+- Keep `README.md` files concise and implementation-faithful.
+- Prefer explaining what a directory is, how to use it, and how it contributes to the system.
+- Remove stale version counts, command names, or file references instead of preserving them for history.
 
----
+## Practical Heuristics
 
-## Session Disk Layout
-
-```
-sessions/<id>/core/
-  system.md        ← system prompt
-  memory.md        ← persistent memory (seeded from entity on first creation)
-  memory/          ← layered memory: *.md → "## Memory: {stem}" blocks
-  tasks.md         ← task board (non-empty triggers heartbeat)
-  params.json      ← runtime config (SOURCE OF TRUTH)
-  tools/           ← .json + .sh agent-created tools
-  skills/          ← <name>/SKILL.md session skills
-
-_sessions/<id>/
-  context.jsonl    ← user_input + turn events
-  status.json      ← DYNAMIC: model_state, status, pid
-```
-
----
-
-## Key API Notes
-
-- **`status.py` / `ipc.py`** take `system_dir` (`_sessions/<id>/`)
-- **`params.py`** takes `session_dir` (`sessions/<id>/`)
-- **Prompt caching**: static (system.md + session.md) cached; dynamic (memory + skills) not cached
-- **`session_factory.init_session()`** — copies entity memory.md + memory/*.md → core/ on first creation
-- **Working directory**: always `playground/nutshell/` — never modify origin repo path directly
-
----
-
-## Running Tests
-
-```bash
-pytest tests/ -q                     # all (184 tests)
-pytest tests/test_<name>.py -v       # specific module
-pytest tests/ -q -k "keyword"        # filter
-```
-
----
-
-## Known Technical Debt
-
-| File | Issue | Priority |
-|------|-------|----------|
-| `tool_engine/providers/web_search/brave.py` + `tavily.py` | `_SCHEMA` dict identical | LOW |
-| `runtime/watcher.py` | Polls every second; no inotify | LOW |
+- If a README and the code disagree, trust the code and fix the README.
+- If a directory is an operational subsystem, it should have a short README.
+- If a file path is part of a contract, mention the path exactly as the code uses it.

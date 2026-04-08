@@ -1,37 +1,44 @@
-# nutshell/session_engine
+# `nutshell/session_engine`
 
-Session 生命周期管理 + entity 资产的 session 化。
+This subsystem materializes entities into runnable sessions and wraps `Agent` with persistent, file-backed session behavior.
 
-Entity 是 agent 的模板配置（只读），session_engine 负责把 entity 实例化为可运行的 session，并管理 session 的整个生命周期。
+## What This Part Is
 
-## 文件列表
+- `entity_config.py`: reads `agent.yaml`.
+- `agent_loader.py`: builds an `Agent` from an entity directory.
+- `entity_state.py`: manages meta sessions, entity/meta alignment, and optional `gene` initialization.
+- `session_init.py`: creates `sessions/<id>/` and `_sessions/<id>/`, seeds memory, tools, skills, playground files, and `.venv`.
+- `session_params.py`: reads and writes `core/params.json`.
+- `session_status.py`: reads and writes `_sessions/<id>/status.json`.
+- `session.py`: the persistent session wrapper that reloads capabilities, handles chat and heartbeat ticks, and appends JSONL events.
 
-### Session 生命周期
-- `session.py`：`Session` 主体；chat()、tick()、run_daemon_loop()，从 core/ 热加载 prompts/tools/skills。
-- `session_init.py`：`init_session()` — 从 entity 创建 session 目录结构，复制 prompts/tools/skills/memory。
-- `session_status.py`：`status.json` 读写、pid 存活检测。
-- `session_params.py`：`params.json` 读写；DEFAULT_PARAMS 定义（model、provider、session_type 等）。
+## How To Use It
 
-### Entity 资产管理
-- `entity_config.py`：`AgentConfig` — 解析 agent.yaml，处理 entity 继承链（extends）。
-- `entity_state.py`：Meta session 管理 — entity→meta 同步、对齐检查、gene 命令执行、meta agent 启动。
-- `agent_loader.py`：`AgentLoader` — 从 entity 目录构建完整 Agent（协调 ToolLoader + SkillLoader + LLM provider）。
+Programmatically:
 
-## Entity → Session 链路
+```python
+from nutshell.session_engine.session_init import init_session
 
-```
-entity/<name>/          只读配置模板
-    ↓ populate_meta_from_entity()
-sessions/<name>_meta/   entity 级可变状态（共享 memory、playground）
-    ↓ init_session()
-sessions/<id>/          具体 session 实例
-    ↓ Session(agent)
-运行中的 agent          热加载 core/ 内容，heartbeat 驱动
+init_session(session_id="demo", entity_name="agent")
 ```
 
-## 与其他模块的依赖关系
-- 依赖 `core`：Agent、Tool、Skill、Provider ABC、Hook 类型。
-- 依赖 `llm_engine`：resolve_provider 构建 provider 实例。
-- 依赖 `tool_engine` / `skill_engine`：AgentLoader 和 Session 从 core/ 加载 tools/skills。
-- 被 `runtime` 调用：watcher 创建 Session 并驱动 run_daemon_loop。
-- 被 `ui/` 调用：CLI/Web 通过 session_init、session_status、session_params 操纵 session。
+Most users enter through the CLI:
+
+```bash
+nutshell new --entity agent
+nutshell chat --entity nutshell_dev "review this repo"
+```
+
+## How It Contributes To The Whole System
+
+- It is the bridge between static entity definitions and live runtime sessions.
+- It owns the entity -> meta session -> child session lifecycle.
+- It keeps session behavior editable from disk: prompts, tools, skills, memory, and params are all re-read before each activation.
+
+## Important Behavior
+
+- Every new session gets its own `.venv` under `sessions/<id>/.venv`.
+- Meta sessions are real persistent sessions stored as `sessions/<entity>_meta/` and `_sessions/<entity>_meta/`.
+- If entity config diverges from a synced meta session, child sessions can be blocked with `alignment_blocked` until resolved.
+- `reload_capabilities` is injected at runtime and cannot be overridden from disk.
+
