@@ -234,14 +234,18 @@ export function createChat(): HTMLElement {
 
   // Message batching: queue messages and flush after 300ms debounce,
   // joining with \n so rapid sends (or Enter-key multi-line) become one request.
+  // Session ID is captured at enqueue time so switching sessions mid-debounce
+  // cannot redirect a pending message to the wrong session (Problem 4).
   let pendingMessages: string[] = [];
+  let pendingSessionId: string | null = null;
   let sendTimer: ReturnType<typeof setTimeout> | null = null;
 
   async function flushPendingMessages() {
     if (pendingMessages.length === 0) return;
     const combined = pendingMessages.join('\n');
+    const sessId = pendingSessionId;
     pendingMessages = [];
-    const sessId = store.currentSessionId;
+    pendingSessionId = null;
     if (!sessId) return;
     try {
       await api.sendMessage(sessId, combined);
@@ -255,9 +259,17 @@ export function createChat(): HTMLElement {
     if (!content || !store.currentSessionId) return;
     const sess = store.currentSession;
     if (sess?.id.endsWith('_meta') || sess?.params?.is_meta_session) return;
+    const sessId = store.currentSessionId; // capture NOW, not at flush time
     inputEl.value = '';
     inputEl.style.height = 'auto';
+    // If session changed mid-batch, flush previous batch to its original session first
+    if (sendTimer && pendingSessionId && pendingSessionId !== sessId) {
+      clearTimeout(sendTimer);
+      sendTimer = null;
+      void flushPendingMessages();
+    }
     pendingMessages.push(content);
+    pendingSessionId = sessId;
     if (sendTimer) clearTimeout(sendTimer);
     sendTimer = setTimeout(flushPendingMessages, 300);
   }

@@ -90,6 +90,7 @@ def _context_event_to_display(event: dict, *, for_history: bool = False) -> list
 
         # Thinking content: emit before the final agent text so it appears above it.
         # Always emit for history; for SSE emit so thinking is visible on re-attach.
+        thinking_idx = 0
         for msg in event.get("messages", []):
             if msg["role"] == "assistant":
                 content = msg.get("content", [])
@@ -100,7 +101,10 @@ def _context_event_to_display(event: dict, *, for_history: bool = False) -> list
                             if thinking_text:
                                 thinking_ev: dict = {"type": "thinking", "content": thinking_text, "ts": ts}
                                 if not for_history:
-                                    thinking_ev["id"] = f"thinking:{ts}"
+                                    # Use per-block index so multiple thinking blocks
+                                    # in one turn get distinct IDs and survive dedup.
+                                    thinking_ev["id"] = f"thinking:{ts}:{thinking_idx}"
+                                thinking_idx += 1
                                 result.append(thinking_ev)
 
         # Final assistant text (last assistant message)

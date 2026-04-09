@@ -28,8 +28,8 @@ export const api = {
   sendMessage: (id: string, content: string): Promise<{ id: string }> =>
     request('POST', `/api/sessions/${encodeURIComponent(id)}/messages`, { content }),
 
-  getHistory: (id: string): Promise<{ events: DisplayEvent[]; context_offset: number; events_offset: number }> =>
-    request('GET', `/api/sessions/${encodeURIComponent(id)}/history`),
+  getHistory: (id: string, contextSince = 0): Promise<{ events: DisplayEvent[]; context_offset: number; events_offset: number }> =>
+    request('GET', `/api/sessions/${encodeURIComponent(id)}/history?context_since=${contextSince}`),
 
   getTasks: (id: string): Promise<{ cards: TaskCard[] }> =>
     request('GET', `/api/sessions/${encodeURIComponent(id)}/tasks`),

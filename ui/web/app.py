@@ -27,7 +27,7 @@ from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from nutshell.session_engine.session_params import read_session_params, write_session_params
-from nutshell.session_engine.session_status import write_session_status
+from nutshell.session_engine.session_status import read_session_status, write_session_status
 from .sessions import _init_session, _is_meta_session_id, _read_session_info, _sort_sessions
 
 SESSIONS_DIR = Path(__file__).parent.parent.parent / "sessions"
@@ -37,17 +37,16 @@ _DEFAULT_PORT = 8080
 _DIST_DIR = Path(__file__).parent / "frontend" / "dist"
 
 
-def _sse_format(event: dict, seq: int | None = None) -> str:
+def _sse_format(event: dict, seq: int | None = None, ctx: int = 0, evt: int = 0) -> str:
     """Format a server-sent event.
 
-    Includes an 'id:' line when seq is provided, enabling browsers to
-    send Last-Event-ID on reconnect. The seq number is a monotonic integer
-    over the combined (context + events) stream — not a file byte offset.
-    Clients pass it back as ?events_seq=N so the server can skip already-seen
-    events rather than relying on fragile byte offsets.
+    Embeds _ctx/_evt byte offsets into the payload so the client can advance
+    its resume offsets on every delivered event, preventing stale-offset
+    replay on reconnect (Problem 11).
     """
     etype = event.get("type", "message")
-    data = json.dumps(event, ensure_ascii=False)
+    payload = {**event, "_ctx": ctx, "_evt": evt}
+    data = json.dumps(payload, ensure_ascii=False)
     if seq is not None:
         return f"id: {seq}\nevent: {etype}\ndata: {data}\n\n"
     return f"event: {etype}\ndata: {data}\n\n"
@@ -214,7 +213,7 @@ def create_app(sessions_dir: Path, system_sessions_dir: Path | None = None) -> F
                 events_offset=events_since,
                 poll_interval=0.3,
             ):
-                yield _sse_format(event, seq=seq)
+                yield _sse_format(event, seq=seq, ctx=_ctx, evt=_evt)
                 seq += 1
 
         return StreamingResponse(
@@ -224,13 +223,15 @@ def create_app(sessions_dir: Path, system_sessions_dir: Path | None = None) -> F
         )
 
     @app.get("/api/sessions/{session_id}/history")
-    async def get_history(session_id: str):
+    async def get_history(session_id: str, context_since: int = 0):
         from nutshell.runtime.ipc import FileIPC
         system_dir = system_sessions_dir / session_id
+        if not system_dir.exists():
+            raise HTTPException(404, f"Session not found: {session_id}")
         ipc = FileIPC(system_dir)
         events: list[dict] = []
-        context_offset = 0
-        for event, off in ipc.tail_history(0):
+        context_offset = context_since
+        for event, off in ipc.tail_history(context_since):
             events.append(event)
             context_offset = off
 
@@ -327,6 +328,8 @@ def create_app(sessions_dir: Path, system_sessions_dir: Path | None = None) -> F
                 created_at=body.get("created_at", existing.created_at if existing else datetime.now().isoformat()),
             )
             if previous_name != name:
+                if load_card(tasks_dir, name) is not None:
+                    raise HTTPException(409, f"Task '{name}' already exists; choose a different name")
                 delete_card(tasks_dir, previous_name)
             save_card(tasks_dir, card)
             if name == "heartbeat" and card.interval is not None:

@@ -38,9 +38,10 @@ export class SSEConnection {
     }
   }
 
-  /** Re-connect immediately with fresh offsets (e.g. after tab regains focus). */
-  reconnectWithOffsets(contextSince: number, eventsSince: number): void {
-    if (this.closed || !this.sessionId) return;
+  /** Re-connect immediately with fresh offsets (e.g. after tab regains focus).
+   * sessionId must match the currently attached session; otherwise no-op. */
+  reconnectWithOffsets(sessionId: string, contextSince: number, eventsSince: number): void {
+    if (this.closed || !this.sessionId || this.sessionId !== sessionId) return;
     this.contextSince = contextSince;
     this.eventsSince = eventsSince;
     if (this.reconnectTimer) {
@@ -70,6 +71,17 @@ export class SSEConnection {
         const me = e as MessageEvent;
         try {
           const data: DisplayEvent = JSON.parse(me.data);
+
+          // Advance resume offsets from server-embedded _ctx/_evt fields.
+          // This ensures reconnects start from where we left off rather than
+          // replaying the full backlog (Problem 11).
+          if (typeof (data as any)._ctx === 'number') {
+            this.contextSince = Math.max(this.contextSince, (data as any)._ctx);
+          }
+          if (typeof (data as any)._evt === 'number') {
+            this.eventsSince = Math.max(this.eventsSince, (data as any)._evt);
+          }
+
           // Dedup by event data 'id' field (only permanent events carry an id).
           // Ephemeral events (partial_text, model_status, tool) have no id and
           // always pass through — their handlers are idempotent.
@@ -94,9 +106,8 @@ export class SSEConnection {
       if (this.closed) return;
       this.es?.close();
       this.es = null;
-      // reconnect after 3s using same offsets — server-side BridgeSession is fresh
-      // each connection, so events.jsonl+context.jsonl are re-read from these offsets.
-      // seenIds prevents already-seen permanent events from duplicating.
+      // reconnect after 3s using latest advanced offsets — seenIds prevents
+      // already-seen permanent events from duplicating on reconnect.
       this.reconnectTimer = setTimeout(() => {
         if (!this.closed) this._connect();
       }, 3000);

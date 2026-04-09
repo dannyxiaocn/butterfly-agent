@@ -39,13 +39,26 @@ function getChatEl(): ChatEl {
 }
 
 // ====== Session attach (exported for sidebar) ======
+
+// Monotonic attach token: each attachSession() increments this.
+// Every async step checks the token is still current before applying results,
+// preventing race conditions when the user switches sessions quickly (Problem 3).
+let attachVersion = 0;
+
+// Track the latest rendered context offset so visibilitychange can fetch
+// only new events rather than the full history (Problem 2).
+let lastRenderedContextOffset = 0;
+
 export async function attachSession(id: string): Promise<void> {
+  const version = ++attachVersion;
+
   // Update active session immediately so sidebar re-renders
   store.currentSessionId = id;
   store.emit('currentSession');
 
   // Clear chat
   getChatEl().clearMessages();
+  lastRenderedContextOffset = 0;
 
   // Load history first, then open SSE from returned offsets
   let contextOffset = 0;
@@ -53,27 +66,33 @@ export async function attachSession(id: string): Promise<void> {
 
   try {
     const history = await api.getHistory(id);
+    if (attachVersion !== version) return; // stale — user switched again
     for (const event of history.events) {
       getChatEl().appendEvent(event);
     }
     contextOffset = history.context_offset;
     eventsOffset = history.events_offset;
+    lastRenderedContextOffset = contextOffset;
   } catch (e) {
+    if (attachVersion !== version) return;
     console.error('Failed to load history:', e);
   }
 
   // Load tasks
   try {
     const tasks = await api.getTasks(id);
+    if (attachVersion !== version) return;
     store.taskCards = tasks.cards;
     store.emit('tasks');
   } catch (e) {
+    if (attachVersion !== version) return;
     console.error('Failed to load tasks:', e);
   }
 
   // Load config / params
   try {
     const cfg = await api.getConfig(id);
+    if (attachVersion !== version) return;
     store.currentParams = cfg.params;
     store.emit('config');
     // Also update the session's params in store.sessions for meta detection
@@ -84,8 +103,12 @@ export async function attachSession(id: string): Promise<void> {
       store.emit('currentSession');
     }
   } catch (e) {
+    if (attachVersion !== version) return;
     console.error('Failed to load config:', e);
   }
+
+  // Final freshness check before opening SSE (must be last side effect)
+  if (attachVersion !== version) return;
 
   // Refresh HUD on attach
   getChatEl().refreshHud(id).catch(() => {});
@@ -143,9 +166,11 @@ async function init(): Promise<void> {
 
   // Refresh task cards every 15s when a session is active
   setInterval(async () => {
-    if (!store.currentSessionId) return;
+    const id = store.currentSessionId;
+    if (!id) return;
     try {
-      const tasks = await api.getTasks(store.currentSessionId);
+      const tasks = await api.getTasks(id);
+      if (store.currentSessionId !== id) return; // stale
       store.taskCards = tasks.cards;
       store.emit('tasks');
     } catch {
@@ -159,17 +184,23 @@ async function init(): Promise<void> {
     getChatEl().refreshHud(store.currentSessionId).catch(() => {});
   }, 10000);
 
-  // Re-sync SSE when tab regains focus (browser throttles/drops SSE in background)
+  // Re-sync SSE when tab regains focus (browser throttles/drops SSE in background).
+  // Also renders any events that completed while the tab was hidden (Problem 2).
   document.addEventListener('visibilitychange', async () => {
     if (document.visibilityState !== 'visible') return;
     const id = store.currentSessionId;
     if (!id) return;
     try {
-      const history = await api.getHistory(id);
-      // Don't re-render messages — just reconnect SSE from latest file offsets
-      sseConn.reconnectWithOffsets(history.context_offset, history.events_offset);
+      // Fetch only history AFTER last rendered offset — render new completed events
+      const history = await api.getHistory(id, lastRenderedContextOffset);
+      if (store.currentSessionId !== id) return; // session changed during await (Problem 5)
+      for (const event of history.events) {
+        getChatEl().appendEvent(event);
+      }
+      lastRenderedContextOffset = history.context_offset;
+      sseConn.reconnectWithOffsets(id, history.context_offset, history.events_offset);
     } catch {
-      // ignore
+      // ignore — SSE reconnect is best-effort
     }
   });
 
