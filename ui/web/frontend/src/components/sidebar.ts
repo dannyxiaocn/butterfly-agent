@@ -11,6 +11,7 @@ export function createSidebar(): HTMLElement {
     const sessions = store.sessions;
     const current = store.currentSessionId;
 
+    const weixinSession = store.weixinStatus.status === 'running' ? (store.weixinStatus.session ?? null) : null;
     const listHtml = sessions.map(s => {
       const tone = sessionTone(s);
       const color = toneColor(tone);
@@ -20,11 +21,12 @@ export function createSidebar(): HTMLElement {
       const dotPulse = tone === 'running' ? ' pulse' : '';
       // Derive a short entity label
       const entityLabel = s.entity.replace(/^entity\//, '');
+      const weixinBadge = s.id === weixinSession ? ' <span class="weixin-badge" title="WeChat linked">💬</span>' : '';
       return `
         <div class="session-item${active}${pulseClass}" data-id="${escHtml(s.id)}" title="${escHtml(s.id)} · ${escHtml(s.entity)}">
           <span class="session-dot${dotPulse}" style="background:${color}"></span>
           <span class="session-item-info">
-            <span class="session-item-name">${escHtml(s.id)}</span>
+            <span class="session-item-name">${escHtml(s.id)}${weixinBadge}</span>
             <span class="session-item-entity">${escHtml(entityLabel)}</span>
           </span>
         </div>
@@ -133,6 +135,7 @@ export function createSidebar(): HTMLElement {
 
   store.on('sessions', render);
   store.on('currentSession', render);
+  store.on('weixin', render);
   render();
   return el;
 }

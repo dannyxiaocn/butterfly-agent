@@ -3,6 +3,24 @@ import { api } from '../api';
 import type { DisplayEvent } from '../types';
 import { renderMarkdown, escapeHtml, formatTs } from '../markdown';
 
+const _MODEL_MAX_TOKENS: [string, number][] = [
+  ['claude', 200000],
+  ['gpt-5.4', 200000],
+  ['gpt-5', 200000],
+  ['gpt-4o', 128000],
+  ['gpt-4', 128000],
+  ['kimi', 128000],
+];
+
+function getModelMaxTokens(model: string | null): number {
+  if (!model) return 200000;
+  const m = model.toLowerCase();
+  for (const [key, val] of _MODEL_MAX_TOKENS) {
+    if (m.includes(key)) return val;
+  }
+  return 200000;
+}
+
 export function createChat(): HTMLElement {
   const el = document.createElement('main');
   el.id = 'chat';
@@ -150,9 +168,11 @@ export function createChat(): HTMLElement {
       cwdEl.textContent = displayCwd;
       cwdEl.title = data.cwd;
 
-      // Context bytes → KB/MB
-      const kb = data.context_bytes / 1024;
-      const ctxStr = kb < 1 ? `${data.context_bytes}B` : kb < 1024 ? `${kb.toFixed(1)}KB` : `${(kb / 1024).toFixed(2)}MB`;
+      // Context: estimate tokens from bytes, show as % of model max
+      const estimatedTokens = Math.round(data.context_bytes / 4);
+      const maxTokens = getModelMaxTokens(data.model ?? null);
+      const pct = Math.min(100, Math.round(estimatedTokens / maxTokens * 100));
+      const ctxStr = `${pct}% (${(estimatedTokens / 1000).toFixed(0)}k/${(maxTokens / 1000).toFixed(0)}k)`;
       (hudBar.querySelector('.hud-ctx-text') as HTMLElement).textContent = `ctx: ${ctxStr}`;
 
       // Git stat

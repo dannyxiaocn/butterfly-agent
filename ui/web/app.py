@@ -436,6 +436,10 @@ def create_app(sessions_dir: Path, system_sessions_dir: Path | None = None) -> F
             except Exception:
                 pass
 
+        # Model name from session params
+        params = read_session_params(session_dir) if session_dir.exists() else {}
+        model_name: str | None = params.get("model") or None
+
         # Context size in bytes
         from nutshell.runtime.ipc import FileIPC
         ipc = FileIPC(system_dir)
@@ -460,6 +464,7 @@ def create_app(sessions_dir: Path, system_sessions_dir: Path | None = None) -> F
         return {
             "cwd": git_root or str(project_root),
             "context_bytes": context_bytes,
+            "model": model_name,
             "git": {"files": git_files, "added": git_added, "deleted": git_deleted},
             "usage": latest_usage,
         }

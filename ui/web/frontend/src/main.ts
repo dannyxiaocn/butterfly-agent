@@ -159,6 +159,20 @@ async function init(): Promise<void> {
     getChatEl().refreshHud(store.currentSessionId).catch(() => {});
   }, 10000);
 
+  // Re-sync SSE when tab regains focus (browser throttles/drops SSE in background)
+  document.addEventListener('visibilitychange', async () => {
+    if (document.visibilityState !== 'visible') return;
+    const id = store.currentSessionId;
+    if (!id) return;
+    try {
+      const history = await api.getHistory(id);
+      // Don't re-render messages — just reconnect SSE from latest file offsets
+      sseConn.reconnectWithOffsets(history.context_offset, history.events_offset);
+    } catch {
+      // ignore
+    }
+  });
+
   // Keyboard shortcut: Cmd+K / Ctrl+K to focus chat input
   document.addEventListener('keydown', (e) => {
     if ((e.metaKey || e.ctrlKey) && e.key === 'k') {

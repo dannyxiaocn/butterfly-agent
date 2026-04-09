@@ -35,8 +35,24 @@ export class SSEConnection {
     }
   }
 
+  /** Re-connect immediately with fresh offsets (e.g. after tab regains focus). */
+  reconnectWithOffsets(contextSince: number, eventsSince: number): void {
+    if (this.closed || !this.sessionId) return;
+    this.contextSince = contextSince;
+    this.eventsSince = eventsSince;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.es?.close();
+    this.es = null;
+    this._connect();
+  }
+
   private _connect(): void {
     if (this.closed || !this.sessionId) return;
+    // Clear seenIds on each new connection — server seq restarts from 0 each time.
+    this.seenIds.clear();
     const url = `/api/sessions/${encodeURIComponent(this.sessionId)}/events`
       + `?context_since=${this.contextSince}&events_since=${this.eventsSince}`;
     this.es = new EventSource(url);
