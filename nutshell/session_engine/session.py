@@ -330,9 +330,9 @@ class Session:
                     message,
                     on_text_chunk=on_chunk,
                     on_tool_call=tool_call_cb,
-                    on_tool_done=self.on_tool_done,
-                    on_loop_start=self.on_loop_start,
-                    on_loop_end=self.on_loop_end,
+                    on_tool_done=self._make_tool_done_callback(),
+                    on_loop_start=self._make_loop_start_callback(),
+                    on_loop_end=self._make_loop_end_callback(),
                     caller_type=caller_type,
                 )
         except BaseException:
@@ -415,9 +415,9 @@ class Session:
                     prompt,
                     on_text_chunk=on_chunk,
                     on_tool_call=tool_call_cb,
-                    on_tool_done=self.on_tool_done,
-                    on_loop_start=self.on_loop_start,
-                    on_loop_end=self.on_loop_end,
+                    on_tool_done=self._make_tool_done_callback(),
+                    on_loop_start=self._make_loop_start_callback(),
+                    on_loop_end=self._make_loop_end_callback(),
                 )
         except BaseException:
             # Revert card to pending on failure
@@ -719,6 +719,56 @@ class Session:
             return count[0]
 
         return on_tool_call, get_count
+
+    def _make_tool_done_callback(self):
+        """Return a composed on_tool_done callback.
+
+        Emits a ``tool_done`` event to events.jsonl after each tool execution,
+        giving the UI visibility into tool results. Composes with the external
+        on_tool_done hook if set.
+        """
+        ext = self.on_tool_done
+
+        def on_tool_done(name: str, input: dict, result: str) -> None:
+            self._append_event({"type": "tool_done", "name": name, "result_len": len(result)})
+            if ext:
+                ext(name, input, result)
+
+        return on_tool_done
+
+    def _make_loop_start_callback(self):
+        """Return a composed on_loop_start callback.
+
+        Emits a ``loop_start`` event to events.jsonl when the agent loop begins.
+        Composes with the external on_loop_start hook if set.
+        """
+        ext = self.on_loop_start
+
+        def on_loop_start(input: str) -> None:
+            self._append_event({"type": "loop_start"})
+            if ext:
+                ext(input)
+
+        return on_loop_start
+
+    def _make_loop_end_callback(self):
+        """Return a composed on_loop_end callback.
+
+        Emits a ``loop_end`` event to events.jsonl when the agent loop finishes,
+        including iteration count and token usage summary. Composes with the
+        external on_loop_end hook if set.
+        """
+        ext = self.on_loop_end
+
+        def on_loop_end(result: "AgentResult") -> None:
+            payload: dict = {"type": "loop_end"}
+            if result.usage and result.usage.total_tokens > 0:
+                payload["usage"] = result.usage.as_dict()
+            self._append_event(payload)
+            if ext:
+                ext(result)
+
+        return on_loop_end
 
     def _reshape_history(self, new_content: str) -> str:
         """Clean up orphaned trailing user message before processing new user input.
