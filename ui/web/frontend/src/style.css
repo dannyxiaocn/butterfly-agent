@@ -527,6 +527,60 @@ button:disabled {
   border-left: 3px solid var(--accent);
 }
 
+/* ── Thinking block ── */
+.msg-thinking {
+  background: transparent;
+  border: none;
+  padding: 0 0 2px 0;
+}
+
+.thinking-details {
+  border: 1px solid var(--border);
+  border-left: 3px solid #7c6fcd;
+  border-radius: 6px;
+  background: rgba(124, 111, 205, 0.05);
+  overflow: hidden;
+}
+
+.thinking-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  font-size: 12px;
+  color: var(--dimmed);
+  font-family: var(--mono);
+}
+
+.thinking-summary::-webkit-details-marker { display: none; }
+
+.thinking-summary::after {
+  content: '▸';
+  margin-left: auto;
+  transition: transform 0.15s;
+  font-size: 10px;
+}
+
+.thinking-details[open] .thinking-summary::after {
+  transform: rotate(90deg);
+}
+
+.thinking-icon { font-size: 13px; }
+
+.thinking-label { color: #9d8fe0; font-weight: 600; }
+
+.thinking-body {
+  padding: 10px 14px 10px 14px;
+  font-size: 12px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  max-height: 400px;
+  overflow-y: auto;
+}
+
 .msg-user {
   background: var(--bg3);
   border: 1px solid var(--border);
@@ -892,12 +946,25 @@ button:disabled {
   margin: 0 2px;
 }
 
-.hud-cwd-text {
-  max-width: 280px;
+.hud-item.hud-cwd {
+  max-width: 260px;
   overflow: hidden;
-  text-overflow: ellipsis;
-  direction: rtl;
-  text-align: left;
+  position: relative;
+}
+
+.hud-cwd-text {
+  display: inline-block;
+  white-space: nowrap;
+  transition: none;
+}
+
+.hud-cwd-text.scrolling {
+  animation: hud-cwd-scroll 12s ease-in-out infinite;
+}
+
+@keyframes hud-cwd-scroll {
+  0%, 20%  { transform: translateX(0); }
+  80%, 100% { transform: translateX(var(--scroll-px, 0)); }
 }
 
 .hud-git-added {

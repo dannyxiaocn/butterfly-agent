@@ -61,7 +61,7 @@ export class SSEConnection {
     this.es = new EventSource(url);
 
     const eventTypes = [
-      'agent', 'user', 'tool', 'model_status', 'partial_text',
+      'agent', 'user', 'tool', 'thinking', 'model_status', 'partial_text',
       'heartbeat_trigger', 'heartbeat_finished', 'status', 'error', 'message'
     ];
 

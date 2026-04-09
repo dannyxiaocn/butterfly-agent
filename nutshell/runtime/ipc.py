@@ -88,6 +88,21 @@ def _context_event_to_display(event: dict, *, for_history: bool = False) -> list
                                     "ts": block_ts,
                                 })
 
+        # Thinking content: emit before the final agent text so it appears above it.
+        # Always emit for history; for SSE emit so thinking is visible on re-attach.
+        for msg in event.get("messages", []):
+            if msg["role"] == "assistant":
+                content = msg.get("content", [])
+                if isinstance(content, list):
+                    for block in content:
+                        if isinstance(block, dict) and block.get("type") == "thinking":
+                            thinking_text = block.get("thinking", "")
+                            if thinking_text:
+                                thinking_ev: dict = {"type": "thinking", "content": thinking_text, "ts": ts}
+                                if not for_history:
+                                    thinking_ev["id"] = f"thinking:{ts}"
+                                result.append(thinking_ev)
+
         # Final assistant text (last assistant message)
         for msg in reversed(event.get("messages", [])):
             if msg["role"] == "assistant":
@@ -293,3 +308,33 @@ class FileIPC:
         if not self.events_path.exists():
             return 0
         return self.events_path.stat().st_size
+
+    def last_running_event_offset(self) -> int:
+        """Byte offset of the last model_status:running line in events.jsonl.
+
+        Used by the history endpoint when the session is actively running:
+        returning this offset as events_since lets the SSE stream replay the
+        in-progress turn (model_status:running + partial_text chunks) so a
+        re-attaching client immediately sees the streaming state.
+
+        Returns events_size() if no running event is found (safe default).
+        """
+        if not self.events_path.exists():
+            return 0
+        last_offset = -1
+        with self.events_path.open("r", encoding="utf-8") as f:
+            while True:
+                line_start = f.tell()
+                line = f.readline()
+                if not line:
+                    break
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                try:
+                    ev = json.loads(stripped)
+                    if ev.get("type") == "model_status" and ev.get("state") == "running":
+                        last_offset = line_start
+                except Exception:
+                    pass
+        return last_offset if last_offset >= 0 else self.events_size()

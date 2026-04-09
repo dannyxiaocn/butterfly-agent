@@ -226,16 +226,28 @@ def create_app(sessions_dir: Path, system_sessions_dir: Path | None = None) -> F
     @app.get("/api/sessions/{session_id}/history")
     async def get_history(session_id: str):
         from nutshell.runtime.ipc import FileIPC
-        ipc = FileIPC(system_sessions_dir / session_id)
+        system_dir = system_sessions_dir / session_id
+        ipc = FileIPC(system_dir)
         events: list[dict] = []
         context_offset = 0
         for event, off in ipc.tail_history(0):
             events.append(event)
             context_offset = off
+
+        # Default: open SSE from the current end of events.jsonl.
+        # If the agent is actively running, replay from the last model_status:running
+        # event so a re-attaching client immediately sees the in-progress streaming state
+        # (model_status:running + partial_text chunks already emitted).
+        events_offset = ipc.events_size()
+        status_payload = read_session_status(system_dir)
+        if status_payload.get("model_state") == "running":
+            resume = ipc.last_running_event_offset()
+            events_offset = resume  # safe: last_running_event_offset() falls back to events_size()
+
         return {
             "events": events,
             "context_offset": context_offset,
-            "events_offset": ipc.events_size(),
+            "events_offset": events_offset,
         }
 
     @app.post("/api/sessions/{session_id}/stop")

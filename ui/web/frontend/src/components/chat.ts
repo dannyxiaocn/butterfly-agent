@@ -144,6 +144,11 @@ export function createChat(): HTMLElement {
         }
         break;
 
+      case 'thinking':
+        // Thinking block from completed turn — append permanently above agent text
+        appendEvent(event);
+        break;
+
       case 'agent':
         // Final response: remove streaming bubble, append real message
         removeStreamingBubble();
@@ -161,12 +166,21 @@ export function createChat(): HTMLElement {
       const hudBar = el.querySelector('#hud-bar') as HTMLElement;
       hudBar.classList.remove('hidden');
 
-      // CWD: show just the last 2 path components
-      const pathParts = data.cwd.replace(/\\/g, '/').split('/').filter(Boolean);
-      const displayCwd = pathParts.length > 2 ? '…/' + pathParts.slice(-2).join('/') : data.cwd;
+      // CWD: show full path, auto-scroll if it overflows the container
       const cwdEl = hudBar.querySelector('.hud-cwd-text') as HTMLElement;
-      cwdEl.textContent = displayCwd;
+      cwdEl.textContent = data.cwd;
       cwdEl.title = data.cwd;
+      cwdEl.classList.remove('scrolling');
+      cwdEl.style.removeProperty('--scroll-px');
+      // Measure after paint to check overflow
+      requestAnimationFrame(() => {
+        const parent = cwdEl.parentElement;
+        if (parent && cwdEl.scrollWidth > parent.clientWidth + 2) {
+          const px = cwdEl.scrollWidth - parent.clientWidth + 8;
+          cwdEl.style.setProperty('--scroll-px', `-${px}px`);
+          cwdEl.classList.add('scrolling');
+        }
+      });
 
       // Context: estimate tokens from bytes, show as % of model max
       const estimatedTokens = Math.round(data.context_bytes / 4);
@@ -213,24 +227,46 @@ export function createChat(): HTMLElement {
   (el as HTMLElement & ChatMethods).handleEvent = handleEvent;
   (el as HTMLElement & ChatMethods).refreshHud = refreshHud;
 
-  async function sendMessage() {
-    const content = inputEl.value.trim();
-    if (!content || !store.currentSessionId) return;
+  // Message batching: queue messages and flush after 300ms debounce,
+  // joining with \n so rapid sends (or Enter-key multi-line) become one request.
+  let pendingMessages: string[] = [];
+  let sendTimer: ReturnType<typeof setTimeout> | null = null;
+
+  async function flushPendingMessages() {
+    if (pendingMessages.length === 0) return;
+    const combined = pendingMessages.join('\n');
+    pendingMessages = [];
     const sessId = store.currentSessionId;
-    const sess = store.currentSession;
-    if (sess?.id.endsWith('_meta') || sess?.params?.is_meta_session) return;
-    inputEl.value = '';
-    inputEl.style.height = 'auto';
+    if (!sessId) return;
     try {
-      await api.sendMessage(sessId, content);
+      await api.sendMessage(sessId, combined);
     } catch (e) {
       appendEvent({ type: 'error', content: `Failed to send: ${e}` });
     }
   }
 
+  async function sendMessage() {
+    const content = inputEl.value.trim();
+    if (!content || !store.currentSessionId) return;
+    const sess = store.currentSession;
+    if (sess?.id.endsWith('_meta') || sess?.params?.is_meta_session) return;
+    inputEl.value = '';
+    inputEl.style.height = 'auto';
+    pendingMessages.push(content);
+    if (sendTimer) clearTimeout(sendTimer);
+    sendTimer = setTimeout(flushPendingMessages, 300);
+  }
+
   sendBtn.addEventListener('click', sendMessage);
+
+  // Chinese IME: track composition state so Enter that confirms a candidate
+  // does not also trigger message send.
+  let isComposing = false;
+  inputEl.addEventListener('compositionstart', () => { isComposing = true; });
+  inputEl.addEventListener('compositionend', () => { isComposing = false; });
+
   inputEl.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === 'Enter' && !e.shiftKey && !isComposing) {
       e.preventDefault();
       sendMessage();
     }
@@ -261,6 +297,22 @@ function renderEvent(event: DisplayEvent): HTMLElement | null {
   const div = document.createElement('div');
 
   switch (event.type) {
+    case 'thinking': {
+      if (!event.content) return null;
+      div.className = 'msg msg-thinking';
+      div.innerHTML = `
+        <details class="thinking-details">
+          <summary class="thinking-summary">
+            <span class="thinking-icon">💭</span>
+            <span class="thinking-label">Thinking</span>
+            <span class="thinking-toggle-hint"></span>
+          </summary>
+          <div class="thinking-body markdown-body">${renderMarkdown(event.content)}</div>
+        </details>
+      `;
+      break;
+    }
+
     case 'agent': {
       if (!event.content) return null;
       const isHb = event.triggered_by === 'heartbeat';
