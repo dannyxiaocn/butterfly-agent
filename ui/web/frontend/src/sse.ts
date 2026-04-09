@@ -6,6 +6,9 @@ export class SSEConnection {
   private es: EventSource | null = null;
   private sessionId: string | null = null;
   private handler: SSEHandler | null = null;
+  // Dedup by event data 'id' field (not SSE seq number which resets each connection).
+  // seenIds is only cleared on attach() (new session), NOT on reconnect — so events
+  // already delivered are never shown twice, even after a drop+reconnect.
   private seenIds = new Set<string>();
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private contextSince = 0;
@@ -19,7 +22,7 @@ export class SSEConnection {
     this.contextSince = contextSince;
     this.eventsSince = eventsSince;
     this.handler = handler;
-    this.seenIds.clear();
+    this.seenIds.clear(); // clear only when switching sessions
     this._connect();
   }
 
@@ -51,8 +54,8 @@ export class SSEConnection {
 
   private _connect(): void {
     if (this.closed || !this.sessionId) return;
-    // Clear seenIds on each new connection — server seq restarts from 0 each time.
-    this.seenIds.clear();
+    // seenIds is NOT cleared here — it persists across reconnects so already-seen
+    // events (user messages, agent responses) are not duplicated after a drop+reconnect.
     const url = `/api/sessions/${encodeURIComponent(this.sessionId)}/events`
       + `?context_since=${this.contextSince}&events_since=${this.eventsSince}`;
     this.es = new EventSource(url);
@@ -65,16 +68,21 @@ export class SSEConnection {
     for (const type of eventTypes) {
       this.es.addEventListener(type, (e: Event) => {
         const me = e as MessageEvent;
-        // dedup by SSE id
-        if (me.lastEventId && this.seenIds.has(me.lastEventId)) return;
-        if (me.lastEventId) this.seenIds.add(me.lastEventId);
-        // trim ring buffer
-        if (this.seenIds.size > 2000) {
-          const arr = Array.from(this.seenIds);
-          this.seenIds = new Set(arr.slice(arr.length - 1000));
-        }
         try {
           const data: DisplayEvent = JSON.parse(me.data);
+          // Dedup by event data 'id' field (only permanent events carry an id).
+          // Ephemeral events (partial_text, model_status, tool) have no id and
+          // always pass through — their handlers are idempotent.
+          const eventId = data.id;
+          if (eventId) {
+            if (this.seenIds.has(eventId)) return;
+            this.seenIds.add(eventId);
+            // Trim ring buffer
+            if (this.seenIds.size > 2000) {
+              const arr = Array.from(this.seenIds);
+              this.seenIds = new Set(arr.slice(arr.length - 1000));
+            }
+          }
           this.handler?.(data);
         } catch {
           // ignore parse errors
@@ -86,7 +94,9 @@ export class SSEConnection {
       if (this.closed) return;
       this.es?.close();
       this.es = null;
-      // reconnect after 3s
+      // reconnect after 3s using same offsets — server-side BridgeSession is fresh
+      // each connection, so events.jsonl+context.jsonl are re-read from these offsets.
+      // seenIds prevents already-seen permanent events from duplicating.
       this.reconnectTimer = setTimeout(() => {
         if (!this.closed) this._connect();
       }, 3000);

@@ -248,6 +248,17 @@ html, body {
   animation: dot-pulse 2s ease-in-out infinite;
 }
 
+.session-dot.weixin-dot {
+  width: auto;
+  height: auto;
+  border-radius: 0;
+  background: transparent !important;
+  color: #22c55e;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+}
+
 @keyframes dot-pulse {
   0%, 100% { opacity: 1; transform: scale(1); }
   50% { opacity: 0.6; transform: scale(0.85); }

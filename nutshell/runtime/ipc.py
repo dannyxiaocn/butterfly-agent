@@ -97,8 +97,11 @@ def _context_event_to_display(event: dict, *, for_history: bool = False) -> list
                 )
                 if text:
                     ev: dict = {"type": "agent", "content": text, "ts": ts}
-                    if not for_history and event.get("user_input_id"):
-                        ev["id"] = event["user_input_id"]
+                    if not for_history:
+                        # Use ts-based id (NOT user_input_id) so server-side BoundedIDSet
+                        # does not dedup the agent event after seeing the user event with
+                        # the same user_input_id.
+                        ev["id"] = f"turn:{ts}"
                     if triggered_by == "heartbeat":
                         ev["triggered_by"] = "heartbeat"
                     if event.get("usage"):

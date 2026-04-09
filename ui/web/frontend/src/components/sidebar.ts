@@ -21,12 +21,16 @@ export function createSidebar(): HTMLElement {
       const dotPulse = tone === 'running' ? ' pulse' : '';
       // Derive a short entity label
       const entityLabel = s.entity.replace(/^entity\//, '');
-      const weixinBadge = s.id === weixinSession ? ' <span class="weixin-badge" title="WeChat linked">💬</span>' : '';
+      const isWeixinLinked = s.id === weixinSession;
+      // Weixin-linked session: replace breathing dot with solid green ⇄ symbol
+      const dotHtml = isWeixinLinked
+        ? `<span class="session-dot weixin-dot" title="WeChat linked">⇄</span>`
+        : `<span class="session-dot${dotPulse}" style="background:${color}"></span>`;
       return `
         <div class="session-item${active}${pulseClass}" data-id="${escHtml(s.id)}" title="${escHtml(s.id)} · ${escHtml(s.entity)}">
-          <span class="session-dot${dotPulse}" style="background:${color}"></span>
+          ${dotHtml}
           <span class="session-item-info">
-            <span class="session-item-name">${escHtml(s.id)}${weixinBadge}</span>
+            <span class="session-item-name">${escHtml(s.id)}</span>
             <span class="session-item-entity">${escHtml(entityLabel)}</span>
           </span>
         </div>
