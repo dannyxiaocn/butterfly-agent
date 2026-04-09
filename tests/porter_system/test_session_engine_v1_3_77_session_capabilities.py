@@ -15,6 +15,7 @@ from nutshell.core.skill import Skill
 from nutshell.core.tool import tool
 from nutshell.session_engine.session_params import write_session_params
 from nutshell.session_engine.session import Session
+from nutshell.session_engine.task_cards import TaskCard, save_card
 
 
 class MockProvider(Provider):
@@ -489,8 +490,8 @@ async def test_heartbeat_replaces_prompt_with_compact_marker(tmp_path):
     agent = Agent(system_prompt="sys", provider=provider)
     session = make_session(tmp_path, agent)
 
-    # Write a task so heartbeat fires
-    (session.core_dir / "tasks.md").write_text("- [ ] Do something", encoding="utf-8")
+    # Write the recurring heartbeat card so a real heartbeat activation fires.
+    save_card(session.tasks_dir, TaskCard(name="heartbeat", content="- [ ] Do something", interval=600))
     (session.core_dir / "heartbeat.md").write_text(
         "Heartbeat activation.\n\nCurrent tasks:\n{tasks}", encoding="utf-8"
     )

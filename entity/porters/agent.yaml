@@ -1,0 +1,22 @@
+name: porters
+description: Persistent porter for validating ready branches, fixing issues on wip branches, and consolidating porter-system coverage before merge.
+version: 1.0.0
+extends: nutshell_dev_codex
+max_iterations: 20
+
+prompts:
+  heartbeat: prompts/heartbeat.md
+
+params:
+  session_type: persistent
+  heartbeat_interval: 10800
+  default_task: >-
+    Review the current ready- branch handoff, validate it with pytest tests -q
+    plus focused coverage under tests/porter_system/, make any repair work on a
+    matching wip- branch, and only promote back to ready- when the branch is
+    clean for merge.
+
+meta_session: >-
+  This entity instantiates child sessions via sessions/<entity>_meta/, which
+  holds the flattened inherited config plus mutable shared memory/playground
+  state for future sessions.

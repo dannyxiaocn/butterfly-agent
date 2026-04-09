@@ -56,7 +56,7 @@ def _create_session_venv(session_dir: Path) -> Path:
 def _load_entity_params(entity_dir: Path) -> dict:
     """Read the ``params`` mapping from an entity's agent.yaml (if any).
 
-    Returns a dict of param overrides (e.g. session_type, default_task,
+    Returns a dict of param overrides (e.g. session_type, heartbeat_task,
     heartbeat_interval) that should be written into the session's params.json.
     Converts legacy ``persistent: true`` to ``session_type: "persistent"``.
     """
@@ -75,6 +75,8 @@ def _load_entity_params(entity_dir: Path) -> dict:
             params["session_type"] = "persistent"
         else:
             params.pop("persistent")
+    if "default_task" in params and "heartbeat_task" not in params:
+        params["heartbeat_task"] = params["default_task"]
     return params
 
 def init_session(
@@ -136,9 +138,11 @@ def init_session(
 
     entity_dir = ent_base / entity_name
 
-    # Load entity-level param overrides (persistent, default_task, etc.)
+    # Load entity-level param overrides (persistent, heartbeat task seed, etc.)
     entity_params = _load_entity_params(entity_dir)
     effective_heartbeat = entity_params.pop("heartbeat_interval", None) or heartbeat
+    heartbeat_task_content = entity_params.pop("heartbeat_task", None)
+    entity_params.pop("default_task", None)
 
     # Config always comes from meta session; meta is initially populated from entity.
     meta_dir = ensure_meta_session(entity_name, s_base=s_base)
@@ -234,7 +238,7 @@ def init_session(
         ensure_heartbeat_card(
             tasks_dir,
             interval=effective_heartbeat,
-            content=entity_params.get("default_task"),
+            content=heartbeat_task_content,
         )
 
     ensure_session_status(system_dir)

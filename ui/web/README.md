@@ -22,10 +22,13 @@ Key endpoints:
 - `POST /api/sessions/{id}/messages`
 - `GET /api/sessions/{id}/events`
 - `GET /api/sessions/{id}/history`
-- `GET /api/sessions/{id}/tasks`: returns task cards from `core/tasks/` as `{"cards": [...]}` and migrates legacy `core/tasks.md` on first read
-- `PUT /api/sessions/{id}/tasks`: creates or updates a named task card; when updating an existing card, schedule metadata is preserved unless explicitly overridden
+- `GET /api/sessions/{id}/tasks`: returns task cards from `core/tasks/` as `{"cards": [...]}` and migrates legacy `core/tasks.md` or `default_task` data into task cards on read
+- `PUT /api/sessions/{id}/tasks`: creates or updates a named task card, including `interval`, `starts_at`, `ends_at`, and status metadata
+- `DELETE /api/sessions/{id}/tasks/{name}`: removes one task card
 - `GET /api/sessions/{id}/config`
 - `PUT /api/sessions/{id}/config`
+
+The right panel exposes only `Tasks` and `Config`. Heartbeat is no longer a separate "default task" view; it is the `heartbeat` task card in the shared task-card list.
 
 ## How It Contributes To The Whole System
 

@@ -593,6 +593,7 @@ def start_meta_agent(
     from datetime import datetime
     from nutshell.session_engine.session_status import ensure_session_status
     from nutshell.session_engine.session_params import read_session_params, write_session_params
+    from nutshell.session_engine.task_cards import ensure_heartbeat_card, migrate_legacy_default_task
 
     sessions_base = s_base or _SESSIONS_DIR
     system_base = sys_base or (_REPO_ROOT / '_sessions')
@@ -648,5 +649,12 @@ def start_meta_agent(
             updates[key] = default_val
     if updates:
         write_session_params(meta_dir, **updates)
+    params_after = read_session_params(meta_dir)
+    ensure_heartbeat_card(
+        core_dir / "tasks",
+        interval=float(params_after.get("heartbeat_interval") or _META_AGENT_DEFAULTS["heartbeat_interval"]),
+        content=params_after.get("default_task"),
+    )
+    migrate_legacy_default_task(meta_dir)
 
     return system_dir

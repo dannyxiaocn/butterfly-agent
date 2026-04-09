@@ -36,6 +36,9 @@ def _read_session_info(session_dir: Path, system_dir: Path) -> dict | None:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except Exception:
         manifest = {}
+    if session_dir.exists():
+        from nutshell.session_engine.task_cards import migrate_legacy_task_sources
+        migrate_legacy_task_sources(session_dir)
     status_payload = read_session_status(system_dir)
     params = read_session_params(session_dir) if session_dir.exists() else {}
     from nutshell.session_engine.task_cards import has_pending_cards, load_all_cards
@@ -64,7 +67,6 @@ def _read_session_info(session_dir: Path, system_dir: Path) -> dict | None:
         "stopped_at": status_payload.get("stopped_at"),
         "tasks_updated_at": tasks_mtime,
         "heartbeat_interval": status_payload.get("heartbeat_interval", 600.0),
-        "default_task": params.get("default_task"),
         "session_type": params.get("session_type", "default"),
         "params": params,
         "alive": pid_alive and status != "stopped",

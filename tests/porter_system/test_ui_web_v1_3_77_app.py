@@ -7,6 +7,7 @@ from tempfile import TemporaryDirectory
 
 from fastapi.testclient import TestClient
 
+from nutshell.session_engine.session_params import read_session_params, write_session_params
 from nutshell.session_engine.task_cards import TaskCard, save_card
 from ui.web.app import create_app
 from ui.web.sessions import _is_stale_stopped
@@ -73,6 +74,25 @@ class WebUnitTests(unittest.TestCase):
             self.assertEqual(len(cards), 1)
             self.assertEqual(cards[0]["content"], "legacy task content")
 
+    def test_get_tasks_migrates_legacy_default_task_into_heartbeat_card(self) -> None:
+        with TemporaryDirectory() as td:
+            root = _make_session(Path(td))
+            write_session_params(
+                root / "sessions" / "test-session",
+                session_type="persistent",
+                default_task="check inbox",
+                heartbeat_interval=300,
+            )
+            app = create_app(root / "sessions", root / "_sessions")
+            with TestClient(app) as client:
+                resp = client.get("/api/sessions/test-session/tasks")
+            self.assertEqual(resp.status_code, 200)
+            cards = resp.json()["cards"]
+            heartbeat = next(c for c in cards if c["name"] == "heartbeat")
+            self.assertEqual(heartbeat["content"], "check inbox")
+            self.assertEqual(heartbeat["interval"], 300)
+            self.assertIsNone(read_session_params(root / "sessions" / "test-session")["default_task"])
+
     def test_put_tasks_by_name_creates_named_card(self) -> None:
         """PUT /tasks with {name, content} should create/update the named card."""
         with TemporaryDirectory() as td:
@@ -136,3 +156,90 @@ class WebUnitTests(unittest.TestCase):
             self.assertEqual(card["status"], "paused")
             self.assertEqual(card["last_run_at"], "2026-04-09T10:00:00")
             self.assertEqual(card["created_at"], "2026-04-08T09:00:00")
+
+    def test_put_tasks_by_name_updates_schedule_fields_and_syncs_heartbeat_interval(self) -> None:
+        with TemporaryDirectory() as td:
+            root = _make_session(Path(td))
+            app = create_app(root / "sessions", root / "_sessions")
+            with TestClient(app) as client:
+                resp = client.put(
+                    "/api/sessions/test-session/tasks",
+                    json={
+                        "name": "heartbeat",
+                        "content": "check messages",
+                        "interval": 900,
+                        "starts_at": "2026-04-10T09:00:00",
+                        "ends_at": "2026-04-10T18:00:00",
+                    },
+                )
+                self.assertEqual(resp.status_code, 200)
+                cards = client.get("/api/sessions/test-session/tasks").json()["cards"]
+            heartbeat = next(c for c in cards if c["name"] == "heartbeat")
+            self.assertEqual(heartbeat["interval"], 900)
+            self.assertEqual(heartbeat["starts_at"], "2026-04-10T09:00:00")
+            self.assertEqual(heartbeat["ends_at"], "2026-04-10T18:00:00")
+            self.assertEqual(read_session_params(root / "sessions" / "test-session")["heartbeat_interval"], 900)
+
+    def test_put_tasks_can_rename_card(self) -> None:
+        with TemporaryDirectory() as td:
+            root = _make_session(Path(td))
+            app = create_app(root / "sessions", root / "_sessions")
+            with TestClient(app) as client:
+                client.put("/api/sessions/test-session/tasks", json={"name": "followup", "content": "v1"})
+                resp = client.put(
+                    "/api/sessions/test-session/tasks",
+                    json={"previous_name": "followup", "name": "followup-next", "content": "v2"},
+                )
+                self.assertEqual(resp.status_code, 200)
+                cards = client.get("/api/sessions/test-session/tasks").json()["cards"]
+            self.assertEqual({c["name"] for c in cards}, {"followup-next"})
+
+    def test_put_tasks_rejects_invalid_renamed_card_name_without_deleting_original(self) -> None:
+        with TemporaryDirectory() as td:
+            root = _make_session(Path(td))
+            app = create_app(root / "sessions", root / "_sessions")
+            with TestClient(app) as client:
+                client.put("/api/sessions/test-session/tasks", json={"name": "followup", "content": "v1"})
+                resp = client.put(
+                    "/api/sessions/test-session/tasks",
+                    json={"previous_name": "followup", "name": "bad/name", "content": "v2"},
+                )
+                self.assertEqual(resp.status_code, 400)
+                cards = client.get("/api/sessions/test-session/tasks").json()["cards"]
+            self.assertEqual({c["name"] for c in cards}, {"followup"})
+            self.assertEqual(cards[0]["content"], "v1")
+
+    def test_put_tasks_rejects_invalid_schedule_window(self) -> None:
+        with TemporaryDirectory() as td:
+            root = _make_session(Path(td))
+            app = create_app(root / "sessions", root / "_sessions")
+            with TestClient(app) as client:
+                resp = client.put(
+                    "/api/sessions/test-session/tasks",
+                    json={
+                        "name": "followup",
+                        "content": "v1",
+                        "starts_at": "2026-04-10T18:00:00",
+                        "ends_at": "2026-04-10T09:00:00",
+                    },
+                )
+            self.assertEqual(resp.status_code, 400)
+
+    def test_delete_task_removes_card(self) -> None:
+        with TemporaryDirectory() as td:
+            root = _make_session(Path(td))
+            app = create_app(root / "sessions", root / "_sessions")
+            with TestClient(app) as client:
+                client.put("/api/sessions/test-session/tasks", json={"name": "cleanup", "content": "do it"})
+                delete_resp = client.delete("/api/sessions/test-session/tasks/cleanup")
+                self.assertEqual(delete_resp.status_code, 200)
+                cards = client.get("/api/sessions/test-session/tasks").json()["cards"]
+            self.assertEqual(cards, [])
+
+    def test_delete_task_rejects_invalid_name(self) -> None:
+        with TemporaryDirectory() as td:
+            root = _make_session(Path(td))
+            app = create_app(root / "sessions", root / "_sessions")
+            with TestClient(app) as client:
+                resp = client.delete("/api/sessions/test-session/tasks/bad%5Cname")
+            self.assertEqual(resp.status_code, 400)

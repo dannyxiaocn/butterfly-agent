@@ -5,7 +5,7 @@ Your session: `sessions/{session_id}/`
 
 | Path | Purpose |
 |------|---------|
-| `core/tasks.md` | Task board — non-empty triggers heartbeat. Clear when done. |
+| `core/tasks/` | Task cards (`<name>.md`) with YAML frontmatter + instructions. `heartbeat.md` is the recurring heartbeat task card. |
 | `core/memory.md` | Persistent memory — injected every activation. Keep concise. |
 | `core/apps/` | App notifications (`<app>.md` files, injected into system prompt each activation) |
 | `core/skills/` | Session skills (`<name>/SKILL.md`, reload on activation) |
@@ -17,9 +17,9 @@ Your session: `sessions/{session_id}/`
 | `playground/` | Your workspace: `tmp/` scratch, `projects/` long-term, `output/` artifacts |
 | `_sessions/{session_id}/` | System internals — do not edit |
 
-**bash default directory**: `sessions/{session_id}/` — use short relative paths: `cat core/tasks.md`, `ls playground/`. Use `workdir=...` to override per call.
+**bash default directory**: `sessions/{session_id}/` — use short relative paths: `ls core/tasks`, `cat core/tasks/heartbeat.md`, `ls playground/`. Use `workdir=...` to override per call.
 
-**Task board**: Write progress notes your future self can resume from. Remove completed items. Empty board = no outstanding work.
+**Task cards**: Each task lives in `core/tasks/<name>.md`. Update the relevant card with progress notes your future self can resume from. Mark completed work by updating that card's status or content instead of maintaining a separate flat board file.
 
 **Memory**: One fact per line. Avoid injecting large documents — memory is prepended to every activation.
 

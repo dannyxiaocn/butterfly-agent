@@ -9,7 +9,7 @@ DEFAULT_PARAMS: dict = {
     "fallback_provider": None,  # Optional fallback provider if primary fails
     "tool_providers": {"web_search": "brave"},  # web_search: "brave" | "tavily"
     "session_type": "default",  # "ephemeral" | "default" | "persistent"
-    "default_task": None,   # content for the heartbeat task card in persistent sessions
+    "default_task": None,   # legacy alias; migrated into core/tasks/heartbeat.md
     "thinking": False,      # True → enable extended thinking for this session
     "thinking_budget": 8000,  # budget_tokens for extended thinking (Anthropic/Kimi only)
     "thinking_effort": "high",  # reasoning effort level (Codex only): none/minimal/low/medium/high/xhigh

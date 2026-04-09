@@ -64,6 +64,7 @@
 
   /* Sidebar */
   .panel-header { padding: 10px 12px; font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; font-family: var(--ui-font); }
+  .panel-header-actions { display: flex; align-items: center; gap: 8px; }
   #session-list { flex: 1; overflow-y: auto; }
   .session-item { padding: 8px 12px; cursor: pointer; border-bottom: 1px solid var(--border); transition: background 0.1s; }
   .session-item:hover { background: var(--bg3); }
@@ -172,6 +173,8 @@
   .panel-actions button:first-child { background: var(--green); color: #000; border-color: rgba(63, 185, 80, 0.5); }
   #tasks-save { padding: 4px 10px; background: var(--green); color: #000; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; }
   #tasks-cancel { padding: 4px 10px; background: var(--bg3); color: var(--muted); border: 1px solid var(--border); border-radius: 4px; cursor: pointer; font-size: 12px; }
+  #tasks-new-btn, #tasks-edit-btn { cursor: pointer; font-size: 11px; color: var(--muted); border: none; background: none; }
+  #tasks-new-btn:hover, #tasks-edit-btn:hover { color: var(--accent); }
   #tasks-edit-btn { cursor: pointer; font-size: 11px; color: var(--muted); border: none; background: none; }
   #tasks-edit-btn:hover { color: var(--accent); }
   #tasks-footer { padding: 5px 12px; border-top: 1px solid var(--border); text-align: right; font-size: 10px; color: var(--muted); }
@@ -179,14 +182,30 @@
   .config-key { color: var(--muted); font-family: var(--ui-font); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; padding-top: 2px; }
   .config-value { word-break: break-word; }
   .config-empty { color: var(--muted); font-style: italic; }
-  .task-card { border: 1px solid var(--border); border-radius: 4px; margin-bottom: 8px; padding: 8px 10px; }
-  .task-card-header { font-size: 11px; color: var(--muted); margin-bottom: 4px; display: flex; align-items: center; gap: 6px; }
+  .task-card { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px; padding: 10px; cursor: pointer; background: rgba(255,255,255,0.01); }
+  .task-card:hover { border-color: var(--muted); }
+  .task-card.selected { border-color: var(--accent); background: rgba(88,166,255,0.08); }
+  .task-card-header { font-size: 11px; color: var(--muted); margin-bottom: 6px; display: flex; align-items: center; gap: 6px; justify-content: space-between; }
+  .task-card-title { display: flex; align-items: center; gap: 6px; min-width: 0; }
+  .task-card-name { color: var(--text); font-size: 12px; }
+  .task-card-actions { display: flex; gap: 6px; }
+  .task-card-actions button { padding: 2px 6px; background: transparent; border: 1px solid var(--border); border-radius: 999px; color: var(--muted); font-size: 10px; cursor: pointer; }
+  .task-card-actions button:hover { color: var(--text); border-color: var(--muted); }
+  .task-card-meta { font-size: 10px; color: var(--muted); margin-bottom: 6px; line-height: 1.5; }
   .task-card-body { font-size: 12px; white-space: pre-wrap; word-break: break-word; }
   .task-status { font-size: 10px; padding: 1px 5px; border-radius: 3px; background: var(--border); color: var(--muted); }
   .task-status.pending { background: rgba(88,166,255,0.15); color: #58a6ff; }
   .task-status.running { background: rgba(63,185,80,0.15); color: #3fb950; }
   .task-status.completed { background: rgba(139,148,158,0.15); color: var(--muted); }
   .task-status.paused { background: rgba(210,153,34,0.15); color: #d9a92a; }
+  .task-heartbeat-badge { font-size: 10px; padding: 1px 5px; border-radius: 999px; background: rgba(88,166,255,0.12); color: var(--accent); }
+  .task-empty { color: var(--muted); font-style: italic; }
+  .task-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .task-form-grid .full { grid-column: 1 / -1; }
+  .task-field { display: flex; flex-direction: column; gap: 4px; }
+  .task-field label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+  .task-input, .task-select { background: var(--bg3); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; font-family: var(--ui-font); font-size: 12px; outline: none; }
+  .task-input:focus, .task-select:focus, .panel-textarea:focus { border-color: var(--accent); }
   .danger-btn { color: #ffb7b1; border-color: rgba(248, 81, 73, 0.45); }
   .danger-btn:hover { color: var(--red); border-color: var(--red); }
 </style>
@@ -241,31 +260,54 @@
   <!-- Tasks -->
   <div id="tasks-panel">
     <div class="panel-header">
-      Session Panel
-      <button id="tasks-edit-btn" onclick="toggleTasksEdit()">edit</button>
+      <span>Session Panel</span>
+      <div class="panel-header-actions">
+        <button id="tasks-new-btn" onclick="startNewTask()">+ task</button>
+        <button id="tasks-edit-btn" onclick="toggleTasksEdit()">edit</button>
+      </div>
     </div>
     <div id="panel-tabs">
       <button class="panel-tab active" data-page="task" onclick="setPanelPage('task')">tasks</button>
-      <button class="panel-tab" data-page="default" onclick="setPanelPage('default')">default task</button>
       <button class="panel-tab" data-page="config" onclick="setPanelPage('config')">config</button>
     </div>
     <div id="panel-page-task" class="panel-page active">
       <div id="tasks-content" class="panel-view">(no session selected)</div>
       <div id="tasks-edit" class="panel-edit">
-        <textarea id="tasks-textarea" class="panel-textarea" placeholder="Add tasks here..."></textarea>
+        <div class="task-form-grid">
+          <div class="task-field">
+            <label for="task-name-input">Task name</label>
+            <input id="task-name-input" class="task-input" placeholder="heartbeat">
+          </div>
+          <div class="task-field">
+            <label for="task-status-select">Status</label>
+            <select id="task-status-select" class="task-select">
+              <option value="pending">pending</option>
+              <option value="paused">paused</option>
+              <option value="completed">completed</option>
+              <option value="running">running</option>
+            </select>
+          </div>
+          <div class="task-field">
+            <label for="task-interval-input">Interval seconds</label>
+            <input id="task-interval-input" class="task-input" type="number" min="1" step="1" placeholder="blank = one-shot">
+          </div>
+          <div class="task-field">
+            <label for="task-starts-at-input">Starts at</label>
+            <input id="task-starts-at-input" class="task-input" type="datetime-local">
+          </div>
+          <div class="task-field full">
+            <label for="task-ends-at-input">Ends at</label>
+            <input id="task-ends-at-input" class="task-input" type="datetime-local">
+          </div>
+          <div class="task-field full">
+            <label for="tasks-textarea">Content</label>
+            <textarea id="tasks-textarea" class="panel-textarea" placeholder="Task instructions..."></textarea>
+          </div>
+        </div>
         <div class="panel-actions">
           <button id="tasks-save" onclick="saveTasks()">Save</button>
+          <button id="tasks-delete" class="danger-btn" onclick="deleteTask()">Delete</button>
           <button id="tasks-cancel" onclick="toggleTasksEdit()">Cancel</button>
-        </div>
-      </div>
-    </div>
-    <div id="panel-page-default" class="panel-page">
-      <div id="default-task-content" class="panel-view">(no session selected)</div>
-      <div id="default-task-edit" class="panel-edit">
-        <textarea id="default-task-textarea" class="panel-textarea" placeholder="Default task for persistent heartbeat..."></textarea>
-        <div class="panel-actions">
-          <button id="default-task-save" onclick="saveDefaultTask()">Save</button>
-          <button onclick="toggleTasksEdit()">Cancel</button>
         </div>
       </div>
     </div>
@@ -291,7 +333,9 @@
   let thinkingEl = null;
   let panelPage = 'task';
   let weixinStatus = { status: 'idle', session: null };
-  let editingCardName = null;  // name of the card whose content is in the tasks textarea
+  let taskCards = [];
+  let selectedTaskName = null;
+  let editingOriginalTaskName = null;
 
   if (typeof marked !== 'undefined') {
     marked.setOptions({ breaks: true, gfm: true });
@@ -514,8 +558,8 @@
 
     if (etype === 'agent') {
       hideThinking();
-      label = event.triggered_by === 'heartbeat' || event.triggered_by === 'heartbeat_default' ? '⏱ agent' : 'agent';
-      div.className += event.triggered_by === 'heartbeat' || event.triggered_by === 'heartbeat_default' ? ' heartbeat-agent' : '';
+      label = event.triggered_by === 'heartbeat' ? '⏱ agent' : 'agent';
+      div.className += event.triggered_by === 'heartbeat' ? ' heartbeat-agent' : '';
       html = renderMarkdown(event.content || '');
     } else if (etype === 'user') {
       label = 'you';
@@ -682,19 +726,27 @@
   }
 
   function updateEditButton() {
-    const btn = document.getElementById('tasks-edit-btn');
-    btn.textContent = panelPage === 'config' ? 'edit json' : 'edit';
+    const editBtn = document.getElementById('tasks-edit-btn');
+    const newBtn = document.getElementById('tasks-new-btn');
+    editBtn.textContent = panelPage === 'config' ? 'edit json' : 'edit task';
+    newBtn.style.display = panelPage === 'task' ? 'inline-block' : 'none';
   }
 
   function toggleTasksEdit(force) {
     const pageMap = {
       task: ['tasks-content', 'tasks-edit', 'block'],
-      default: ['default-task-content', 'default-task-edit', 'block'],
       config: ['config-content', 'config-edit', 'block'],
     };
     const [viewId, editId, viewDisplay] = pageMap[panelPage];
     const view = document.getElementById(viewId);
     const edit = document.getElementById(editId);
+    if (panelPage === 'task' && typeof force !== 'boolean') {
+      if (edit.style.display !== 'flex') {
+        const selected = taskCards.find(card => card.name === selectedTaskName) || taskCards[0] || null;
+        openTaskEditor(selected);
+        return;
+      }
+    }
     const shouldEdit = typeof force === 'boolean' ? force : edit.style.display !== 'flex';
     view.style.display = shouldEdit ? 'none' : viewDisplay;
     edit.style.display = shouldEdit ? 'flex' : 'none';
@@ -703,11 +755,17 @@
   async function refreshPanelData() {
     if (!currentSession) {
       document.getElementById('tasks-content').textContent = '(no session selected)';
-      document.getElementById('default-task-content').textContent = '(no session selected)';
       document.getElementById('config-content').textContent = '(no session selected)';
       document.getElementById('tasks-textarea').value = '';
-      document.getElementById('default-task-textarea').value = '';
+      document.getElementById('task-name-input').value = '';
+      document.getElementById('task-status-select').value = 'pending';
+      document.getElementById('task-interval-input').value = '';
+      document.getElementById('task-starts-at-input').value = '';
+      document.getElementById('task-ends-at-input').value = '';
       document.getElementById('config-textarea').value = '';
+      taskCards = [];
+      selectedTaskName = null;
+      editingOriginalTaskName = null;
       toggleTasksEdit(false);
       document.getElementById('tasks-footer').textContent = '';
       updateChatAvailability();
@@ -722,9 +780,8 @@
       const sessionData = await sessionRes.json();
       mergeSessionMeta(sessionData);
       renderTaskPage(taskData.cards || []);
-      renderDefaultTaskPage(sessionData.default_task || '');
       renderConfigPage(sessionData.params || {});
-      renderFooter(sessionData);
+      renderFooter(sessionData, taskData.cards || []);
       renderServerIndicator();
       renderSessionIndicator();
       renderSessionList();
@@ -738,14 +795,88 @@
     else sessions.push(data);
   }
 
+  function taskDisplayName(name) {
+    return name === 'heartbeat' ? 'HEARTBEAT' : name;
+  }
+
+  function toTaskInputDate(ts) {
+    if (!ts) return '';
+    const d = new Date(ts);
+    if (!Number.isFinite(d.valueOf())) return '';
+    const pad = value => String(value).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+
+  function fromTaskInputDate(value) {
+    return value ? value : null;
+  }
+
+  function formatTaskInterval(interval) {
+    if (!interval) return 'one-shot';
+    if (interval % 3600 === 0) return `every ${interval / 3600}h`;
+    if (interval % 60 === 0) return `every ${interval / 60}m`;
+    return `every ${interval}s`;
+  }
+
+  function formatTaskWindow(card) {
+    const parts = [];
+    if (card.starts_at) parts.push(`starts ${fmtDate(card.starts_at)} ${fmtTime(card.starts_at)}`);
+    if (card.ends_at) parts.push(`ends ${fmtDate(card.ends_at)} ${fmtTime(card.ends_at)}`);
+    return parts.join(' · ');
+  }
+
+  function selectTaskByName(name) {
+    selectedTaskName = name;
+    renderTaskPage(taskCards);
+  }
+
+  function openTaskEditor(card) {
+    const task = card || {
+      name: '',
+      content: '',
+      interval: null,
+      starts_at: null,
+      ends_at: null,
+      status: 'pending',
+      last_run_at: null,
+      created_at: null,
+    };
+    editingOriginalTaskName = card?.name || null;
+    document.getElementById('task-name-input').value = task.name || '';
+    document.getElementById('tasks-textarea').value = task.content || '';
+    document.getElementById('task-status-select').value = task.status || 'pending';
+    document.getElementById('task-interval-input').value = task.interval ?? '';
+    document.getElementById('task-starts-at-input').value = toTaskInputDate(task.starts_at);
+    document.getElementById('task-ends-at-input').value = toTaskInputDate(task.ends_at);
+    document.getElementById('tasks-delete').style.display = card ? 'inline-block' : 'none';
+    toggleTasksEdit(true);
+  }
+
+  function startNewTask() {
+    panelPage = 'task';
+    document.querySelectorAll('.panel-tab').forEach(el => {
+      el.classList.toggle('active', el.dataset.page === 'task');
+    });
+    document.querySelectorAll('.panel-page').forEach(el => {
+      el.classList.toggle('active', el.id === 'panel-page-task');
+    });
+    updateEditButton();
+    openTaskEditor(null);
+  }
+
   function renderTaskPage(cards) {
-    // cards: array of {name, content, interval, status, last_run_at, created_at}
+    // cards: array of {name, content, interval, starts_at, ends_at, status, last_run_at, created_at}
     const view = document.getElementById('tasks-content');
-    const textarea = document.getElementById('tasks-textarea');
     const meta = currentSessionMeta();
+    taskCards = cards;
+    if (selectedTaskName && !cards.some(c => c.name === selectedTaskName)) {
+      selectedTaskName = null;
+    }
+    if (!selectedTaskName && cards.length) {
+      selectedTaskName = cards[0].name;
+    }
     if (!cards || !cards.length) {
-      view.textContent = '(no task cards)';
-      textarea.value = '';
+      view.innerHTML = '<div class="task-empty">(no task cards)</div>';
       if (meta) meta.has_tasks = false;
       return;
     }
@@ -753,23 +884,32 @@
     if (meta) meta.has_tasks = activeCards.length > 0;
     view.innerHTML = cards.map(c => {
       const badge = `<span class="task-status ${escHtml(c.status)}">${escHtml(c.status)}</span>`;
-      const interval = c.interval ? ` · every ${c.interval >= 60 ? Math.round(c.interval/60) + 'm' : c.interval + 's'}` : ' · one-shot';
-      return `<div class="task-card"><div class="task-card-header">${escHtml(c.name)}${badge}${interval}</div><div class="task-card-body">${escHtml(c.content || '')}</div></div>`;
+      const heartbeat = c.name === 'heartbeat' ? '<span class="task-heartbeat-badge">heartbeat</span>' : '';
+      const metaLine = [formatTaskInterval(c.interval), formatTaskWindow(c), c.last_run_at ? `last run ${fmtDate(c.last_run_at)} ${fmtTime(c.last_run_at)}` : 'never run']
+        .filter(Boolean)
+        .join(' · ');
+      const encodedName = encodeURIComponent(c.name);
+      const selectedClass = c.name === selectedTaskName ? ' selected' : '';
+      return `<div class="task-card${selectedClass}" onclick="selectTaskByName(decodeURIComponent('${encodedName}'))">
+        <div class="task-card-header">
+          <div class="task-card-title">
+            <span class="task-card-name">${escHtml(taskDisplayName(c.name))}</span>${heartbeat}${badge}
+          </div>
+          <div class="task-card-actions">
+            <button onclick="event.stopPropagation(); openTaskEditor(taskCards.find(card => card.name === decodeURIComponent('${encodedName}')) || null)">edit</button>
+          </div>
+        </div>
+        <div class="task-card-meta">${escHtml(metaLine)}</div>
+        <div class="task-card-body">${escHtml(c.content || '')}</div>
+      </div>`;
     }).join('');
-    // textarea shows first pending card content for quick editing; track its name for save
-    const editable = cards.find(c => c.status === 'pending') || cards[0];
-    editingCardName = editable ? editable.name : null;
-    textarea.value = editable ? editable.content || '' : '';
-  }
-
-  function renderDefaultTaskPage(content) {
-    document.getElementById('default-task-content').textContent = content.trim() || '(empty)';
-    document.getElementById('default-task-textarea').value = content;
   }
 
   function renderConfigPage(params) {
-    document.getElementById('config-textarea').value = JSON.stringify(params, null, 2);
-    const entries = Object.entries(params || {});
+    const cleanParams = { ...(params || {}) };
+    delete cleanParams.default_task;
+    document.getElementById('config-textarea').value = JSON.stringify(cleanParams, null, 2);
+    const entries = Object.entries(cleanParams || {});
     const view = document.getElementById('config-content');
     if (!entries.length) {
       view.innerHTML = '<div class="config-empty">(empty)</div>';
@@ -780,41 +920,69 @@
     ).join('') + '</div>';
   }
 
-  function renderFooter(meta) {
+  function renderFooter(meta, cards) {
     const footer = document.getElementById('tasks-footer');
     const updatedAt = meta?.tasks_updated_at;
-    const interval = meta?.heartbeat_interval ?? meta?.params?.heartbeat_interval;
-    const intervalStr = interval ? (interval >= 60 ? `every ${Math.round(interval / 60)}m` : `every ${interval}s`) : '';
+    const heartbeatCard = (cards || []).find(card => card.name === 'heartbeat');
+    const intervalStr = heartbeatCard?.interval ? `heartbeat ${formatTaskInterval(heartbeatCard.interval)}` : '';
     const updatedStr = updatedAt ? `task updated ${fmtDate(updatedAt)}` : '';
-    footer.textContent = [updatedStr, intervalStr].filter(Boolean).join(' · ');
+    const countStr = cards?.length ? `${cards.length} card${cards.length === 1 ? '' : 's'}` : '';
+    footer.textContent = [countStr, updatedStr, intervalStr].filter(Boolean).join(' · ');
   }
 
   async function saveTasks() {
     if (!currentSession) return;
+    const name = document.getElementById('task-name-input').value.trim();
     const content = document.getElementById('tasks-textarea').value;
-    // Send name so backend updates the specific card rather than creating a new generic one
-    const body = editingCardName ? { name: editingCardName, content } : { content };
-    await fetch(`/api/sessions/${currentSession}/tasks`, {
+    const status = document.getElementById('task-status-select').value;
+    const intervalRaw = document.getElementById('task-interval-input').value.trim();
+    const startsAt = fromTaskInputDate(document.getElementById('task-starts-at-input').value);
+    const endsAt = fromTaskInputDate(document.getElementById('task-ends-at-input').value);
+    if (!name) {
+      alert('Task name is required.');
+      return;
+    }
+    const body = {
+      previous_name: editingOriginalTaskName,
+      name,
+      content,
+      status,
+      interval: intervalRaw ? Number(intervalRaw) : null,
+      starts_at: startsAt,
+      ends_at: endsAt,
+    };
+    const resp = await fetch(`/api/sessions/${currentSession}/tasks`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
+    if (!resp.ok) {
+      alert(await resp.text());
+      return;
+    }
+    selectedTaskName = name;
     toggleTasksEdit(false);
-    refreshPanelData();
+    await refreshPanelData();
+    await refreshSessions();
   }
 
-  async function saveDefaultTask() {
-    if (!currentSession) return;
-    const params = currentSessionMeta()?.params || {};
-    params.default_task = document.getElementById('default-task-textarea').value;
-    await fetch(`/api/sessions/${currentSession}/config`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ params }),
+  async function deleteTask() {
+    if (!currentSession || !editingOriginalTaskName) return;
+    if (!confirm(`Delete task ${editingOriginalTaskName}?`)) return;
+    const resp = await fetch(`/api/sessions/${currentSession}/tasks/${encodeURIComponent(editingOriginalTaskName)}`, {
+      method: 'DELETE',
     });
+    if (!resp.ok) {
+      alert(await resp.text());
+      return;
+    }
+    if (selectedTaskName === editingOriginalTaskName) {
+      selectedTaskName = null;
+    }
+    editingOriginalTaskName = null;
     toggleTasksEdit(false);
-    refreshPanelData();
-    refreshSessions();
+    await refreshPanelData();
+    await refreshSessions();
   }
 
   async function saveConfig() {
@@ -826,14 +994,18 @@
       alert('Config must be valid JSON.');
       return;
     }
-    await fetch(`/api/sessions/${currentSession}/config`, {
+    const resp = await fetch(`/api/sessions/${currentSession}/config`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ params }),
     });
+    if (!resp.ok) {
+      alert(await resp.text());
+      return;
+    }
     toggleTasksEdit(false);
-    refreshPanelData();
-    refreshSessions();
+    await refreshPanelData();
+    await refreshSessions();
   }
 
   async function stopSession() {

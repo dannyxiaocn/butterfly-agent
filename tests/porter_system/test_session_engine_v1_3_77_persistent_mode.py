@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock
 from nutshell.core.agent import Agent
 from nutshell.core.types import AgentResult, TokenUsage, ToolCall
 from nutshell.session_engine.session_params import DEFAULT_PARAMS, read_session_params, write_session_params
+from nutshell.session_engine.task_cards import TaskCard, load_card, save_card
 
 
 # ── Helpers ────────────────────────────────────────────────────────
@@ -99,16 +100,16 @@ async def test_tick_skips_when_default_and_empty_tasks(tmp_path):
         base_dir=tmp_path / "sessions",
         system_base=tmp_path / "_sessions",
     )
-    # tasks.md is empty by default
-    assert session.tasks_path.read_text().strip() == ""
+    assert not session.tasks_path.exists()
+    assert list(session.tasks_dir.glob("*.md")) == []
 
-    result = await session.tick()
+    result = await session.tick(load_card(session.tasks_dir, "real"))
     assert result is None
 
 
 @pytest.mark.asyncio
-async def test_tick_fires_with_default_task_when_persistent(tmp_path):
-    """tick() triggers LLM with default_task when session_type='persistent' and tasks empty."""
+async def test_tick_migrates_default_task_into_heartbeat_card_when_persistent(tmp_path):
+    """Legacy default_task is migrated into the heartbeat card and runs from there."""
     from nutshell.session_engine.session import Session
 
     provider = MockProvider([("All clear, nothing to do.", [])])
@@ -120,19 +121,20 @@ async def test_tick_fires_with_default_task_when_persistent(tmp_path):
         base_dir=tmp_path / "sessions",
         system_base=tmp_path / "_sessions",
     )
-    # tasks.md is empty
-    assert session.tasks_path.read_text().strip() == ""
+    assert not session.tasks_path.exists()
 
-    # Enable persistent mode with a custom default_task
     write_session_params(
         session.session_dir,
         session_type="persistent",
         default_task="Check incoming messages.",
     )
 
-    result = await session.tick()
+    result = await session.tick(load_card(session.tasks_dir, "real"))
     assert result is not None
     assert result.content == "All clear, nothing to do."
+    heartbeat = load_card(session.tasks_dir, "heartbeat")
+    assert heartbeat is not None
+    assert heartbeat.content == "Check incoming messages."
 
 
 @pytest.mark.asyncio
@@ -170,8 +172,8 @@ async def test_tick_persistent_uses_builtin_fallback_when_no_default_task(tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_tick_persistent_triggered_by_heartbeat_default(tmp_path):
-    """tick() writes triggered_by='heartbeat_default' into persisted turn context."""
+async def test_tick_persistent_triggered_by_heartbeat(tmp_path):
+    """tick() writes triggered_by='heartbeat' for the heartbeat task card."""
     from nutshell.session_engine.session import Session
 
     provider = MockProvider([("ok", [])])
@@ -195,7 +197,7 @@ async def test_tick_persistent_triggered_by_heartbeat_default(tmp_path):
         if line.strip()
     ]
     assert turns[-1]["type"] == "turn"
-    assert turns[-1]["triggered_by"] == "heartbeat_default"
+    assert turns[-1]["triggered_by"] == "heartbeat"
 
 
 @pytest.mark.asyncio
@@ -213,10 +215,10 @@ async def test_tick_with_real_tasks_ignores_session_type(tmp_path):
         system_base=tmp_path / "_sessions",
     )
 
-    session.tasks_path.write_text("- do something real", encoding="utf-8")
+    save_card(session.tasks_dir, TaskCard(name="real", content="- do something real", interval=None))
     write_session_params(session.session_dir, session_type="persistent", default_task="Check state")
 
-    result = await session.tick()
+    result = await session.tick(load_card(session.tasks_dir, "real"))
     assert result is not None
 
     turns = [
@@ -225,7 +227,7 @@ async def test_tick_with_real_tasks_ignores_session_type(tmp_path):
         if line.strip()
     ]
     assert turns[-1]["type"] == "turn"
-    assert turns[-1]["triggered_by"] == "heartbeat"
+    assert turns[-1]["triggered_by"] == "task:real"
 
 
 # ── session_factory — entity params propagation ───────────────────
@@ -266,8 +268,12 @@ def test_session_factory_propagates_entity_params(tmp_path):
     params = read_session_params(sessions_base / "s1")
     # Legacy persistent: true should be converted to session_type: persistent
     assert params["session_type"] == "persistent"
-    assert params["default_task"] == "Hello world"
+    assert params["default_task"] is None
     assert params["heartbeat_interval"] == 43200
+    heartbeat = load_card(sessions_base / "s1" / "core" / "tasks", "heartbeat")
+    assert heartbeat is not None
+    assert heartbeat.content == "Hello world"
+    assert heartbeat.interval == 43200
 
 
 def test_session_factory_no_params_key_defaults(tmp_path):

@@ -14,7 +14,7 @@ from nutshell.session_engine.session_params import ensure_session_params, read_s
 from nutshell.session_engine.task_cards import (
     _DEFAULT_HEARTBEAT_CONTENT,
     TaskCard, clear_all_cards, ensure_heartbeat_card, has_pending_cards,
-    load_all_cards, load_due_cards, migrate_tasks_md, save_card,
+    load_all_cards, load_due_cards, migrate_legacy_task_sources, save_card,
 )
 from nutshell.llm_engine.registry import provider_name, resolve_provider
 from nutshell.session_engine.session_status import ensure_session_status, read_session_status, write_session_status
@@ -98,11 +98,9 @@ class Session:
         self.docs_dir.mkdir(exist_ok=True)
         self.playground_dir.mkdir(exist_ok=True)
         self.system_dir.mkdir(parents=True, exist_ok=True)
-        # Migrate legacy tasks.md → core/tasks/ directory
-        migrate_tasks_md(self.core_dir)
+        # Migrate legacy task sources into core/tasks/
+        migrate_legacy_task_sources(self.session_dir)
         self.tasks_dir.mkdir(parents=True, exist_ok=True)
-        if not self.tasks_path.exists():
-            self.tasks_path.write_text("", encoding="utf-8")
         if not self.memory_path.exists():
             self.memory_path.write_text("", encoding="utf-8")
         if not self._context_path.exists():
@@ -368,32 +366,23 @@ class Session:
         For persistent sessions, a recurring "heartbeat" card is auto-created
         during session init and fires on its own interval.
         """
-        use_legacy_heartbeat = False
-        heartbeat_label = "heartbeat"
+        params = read_session_params(self.session_dir)
+        migrate_legacy_task_sources(self.session_dir)
+        if self._resolve_session_type(params) == "persistent":
+            ensure_heartbeat_card(
+                self.tasks_dir,
+                interval=float(params.get("heartbeat_interval") or self._heartbeat_interval),
+            )
         if card is None:
             due = load_due_cards(self.tasks_dir)
             if due:
                 card = due[0]
             else:
-                params = read_session_params(self.session_dir)
-                legacy_tasks = self.tasks_path.read_text(encoding="utf-8").strip()
-                if legacy_tasks:
-                    tasks_content = legacy_tasks
-                    use_legacy_heartbeat = True
-                elif self._resolve_session_type(params) == "persistent":
-                    heartbeat_label = "heartbeat_default"
-                    tasks_content = params.get("default_task") or _DEFAULT_HEARTBEAT_CONTENT
-                    use_legacy_heartbeat = True
-                else:
-                    return None
+                return None
 
-        if card is not None:
-            triggered_by = f"task:{card.name}"
-            tasks_content = card.content
-            card_label = card.name
-        else:
-            triggered_by = heartbeat_label
-            card_label = "heartbeat"
+        triggered_by = "heartbeat" if card.name == "heartbeat" else f"task:{card.name}"
+        tasks_content = card.content or (_DEFAULT_HEARTBEAT_CONTENT if card.name == "heartbeat" else "")
+        card_label = card.name
 
         # Snapshot history so we can roll back if SESSION_FINISHED
         history_snapshot = list(self._agent._history)
@@ -402,22 +391,19 @@ class Session:
         heartbeat_instructions = self._agent.heartbeat_prompt
         if heartbeat_instructions and "{tasks}" in heartbeat_instructions:
             prompt = heartbeat_instructions.format(tasks=tasks_content)
-        elif use_legacy_heartbeat:
-            prompt = f"Heartbeat activation.\n\nCurrent tasks:\n{tasks_content}"
-            if heartbeat_instructions:
-                prompt += f"\n\n{heartbeat_instructions}"
         else:
-            prompt = f"Task activation: {card_label}\n\n{tasks_content}"
+            prompt_prefix = "Heartbeat activation." if card.name == "heartbeat" else f"Task activation: {card_label}"
+            prompt = f"{prompt_prefix}\n\n{tasks_content}"
             if heartbeat_instructions:
                 prompt += f"\n\n{heartbeat_instructions}"
 
         trigger_ts = datetime.now().isoformat()
-        if card is not None:
-            self._append_event({"type": "task_trigger", "card": card.name, "ts": trigger_ts})
-            card.mark_running()
-            save_card(self.tasks_dir, card)
-        elif use_legacy_heartbeat:
+        if card.name == "heartbeat":
             self._append_event({"type": "heartbeat_trigger", "ts": trigger_ts})
+        else:
+            self._append_event({"type": "task_trigger", "card": card.name, "ts": trigger_ts})
+        card.mark_running()
+        save_card(self.tasks_dir, card)
         self._set_model_status("running", triggered_by)
         tool_call_cb, get_tool_call_count = self._make_tool_call_callback()
         on_chunk = self._make_text_chunk_callback()
@@ -434,9 +420,8 @@ class Session:
                 )
         except BaseException:
             # Revert card to pending on failure
-            if card is not None:
-                card.status = "pending"
-                save_card(self.tasks_dir, card)
+            card.status = "pending"
+            save_card(self.tasks_dir, card)
             self._set_model_status("idle", triggered_by)
             raise
         finally:
@@ -445,27 +430,24 @@ class Session:
         if SESSION_FINISHED in result.content:
             # Clear all task cards, prune history
             clear_all_cards(self.tasks_dir)
-            if use_legacy_heartbeat:
-                self.tasks_path.write_text("", encoding="utf-8")
             self._agent._history = history_snapshot
-            if card is not None:
+            if card.name == "heartbeat":
+                self._append_event({"type": "heartbeat_finished", "ts": trigger_ts})
+            else:
                 self._append_event({"type": "task_finished", "card": card.name})
         else:
             # Mark card done (recurring → pending with updated last_run_at; one-shot → completed)
-            if card is not None:
-                card.mark_done()
-                save_card(self.tasks_dir, card)
-            elif use_legacy_heartbeat:
-                self.tasks_path.write_text("", encoding="utf-8")
+            card.mark_done()
+            save_card(self.tasks_dir, card)
 
             # Replace verbose task/heartbeat prompt in history with a compact marker
             new_msgs = self._agent._history[old_len:]
             if new_msgs and new_msgs[0].role == "user":
                 from nutshell.core.types import Message as _Msg
                 marker = (
-                    f"[Task:{card.name} {trigger_ts}]"
-                    if card is not None
-                    else f"[Heartbeat {trigger_ts}]"
+                    f"[Heartbeat {trigger_ts}]"
+                    if card.name == "heartbeat"
+                    else f"[Task:{card.name} {trigger_ts}]"
                 )
                 new_msgs = [_Msg(role="user", content=marker), *new_msgs[1:]]
                 self._agent._history = history_snapshot + new_msgs
@@ -478,8 +460,7 @@ class Session:
                     "trigger_ts": trigger_ts,
                     "messages": self._serialize_turn_messages(result.messages[old_len:]),
                 }
-                if card is not None or use_legacy_heartbeat:
-                    turn["pre_triggered"] = True
+                turn["pre_triggered"] = True
                 if get_tool_call_count() > 0:
                     turn["has_streaming_tools"] = True
                 if result.usage and result.usage.total_tokens > 0:
@@ -552,11 +533,11 @@ class Session:
 
         # Ensure persistent sessions have a heartbeat task card
         params = read_session_params(self.session_dir)
+        migrate_legacy_task_sources(self.session_dir)
         if self._resolve_session_type(params) == "persistent":
             ensure_heartbeat_card(
                 self.tasks_dir,
                 interval=float(params.get("heartbeat_interval") or self._heartbeat_interval),
-                content=params.get("default_task"),
             )
 
         # Skip existing context events — only process new user_input events.

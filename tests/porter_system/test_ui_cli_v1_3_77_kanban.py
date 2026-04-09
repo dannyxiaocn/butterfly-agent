@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from nutshell.session_engine.task_cards import TaskCard, save_card
 from ui.cli.main import cmd_kanban
 from ui.cli.kanban import build_kanban, format_kanban_table, format_kanban_json
 
@@ -81,6 +82,17 @@ def test_build_kanban_no_tasks_file(tmp_path):
     fake_sessions = [{"id": "s3", "entity": "agent", "status": "active", "model_state": "idle"}]
     entries = build_kanban(fake_sessions, sessions_base)
     assert entries[0]["tasks_content"] == ""
+
+
+def test_build_kanban_preserves_legacy_text_for_migrated_task_card(tmp_path):
+    sessions_base, _ = _seed_session(tmp_path, "s3-migrated")
+    save_card(
+        sessions_base / "s3-migrated" / "core" / "tasks",
+        TaskCard(name="migrated_task", content="- [ ] task A", interval=None),
+    )
+    fake_sessions = [{"id": "s3-migrated", "entity": "agent", "status": "active", "model_state": "idle"}]
+    entries = build_kanban(fake_sessions, sessions_base)
+    assert entries[0]["tasks_content"] == "- [ ] task A"
 
 
 def test_build_kanban_status_classification(tmp_path):

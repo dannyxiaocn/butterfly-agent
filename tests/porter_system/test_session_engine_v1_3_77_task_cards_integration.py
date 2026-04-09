@@ -10,13 +10,17 @@ from nutshell.session_engine.task_cards import (
     _parse_card_file,
     _serialize_card,
     clear_all_cards,
+    migrate_legacy_default_task,
+    migrate_legacy_task_sources,
     ensure_heartbeat_card,
     has_pending_cards,
     load_all_cards,
     load_due_cards,
+    load_card,
     migrate_tasks_md,
     save_card,
 )
+from nutshell.session_engine.session_params import write_session_params
 
 
 # ── TaskCard.is_due() ────────────────────────────────────────────────────────
@@ -52,6 +56,18 @@ def test_card_due_when_interval_elapsed_with_timezone_aware_timestamp():
 def test_card_not_due_when_interval_not_elapsed():
     recent = (datetime.now() - timedelta(seconds=100)).isoformat()
     card = TaskCard(name="test", content="do it", interval=600, last_run_at=recent)
+    assert not card.is_due()
+
+
+def test_card_not_due_before_starts_at():
+    future = (datetime.now() + timedelta(hours=1)).isoformat()
+    card = TaskCard(name="test", content="do it", interval=600, starts_at=future)
+    assert not card.is_due()
+
+
+def test_card_not_due_after_ends_at():
+    past_end = (datetime.now() - timedelta(minutes=1)).isoformat()
+    card = TaskCard(name="test", content="do it", interval=600, ends_at=past_end)
     assert not card.is_due()
 
 
@@ -114,8 +130,24 @@ def test_serialize_and_parse_roundtrip(tmp_path):
     assert loaded.name == "my_task"
     assert loaded.content == "Do something important"
     assert loaded.interval == 3600
+    assert loaded.starts_at is None
+    assert loaded.ends_at is None
     assert loaded.status == "pending"
     assert loaded.created_at == "2026-04-08T12:00:00"
+
+
+def test_serialize_and_parse_with_schedule_window(tmp_path):
+    card = TaskCard(
+        name="windowed",
+        content="Do something later",
+        interval=1800,
+        starts_at="2026-04-10T09:00:00",
+        ends_at="2026-04-10T18:00:00",
+        status="pending",
+    )
+    loaded = _parse_card_file(save_card(tmp_path, card))
+    assert loaded.starts_at == "2026-04-10T09:00:00"
+    assert loaded.ends_at == "2026-04-10T18:00:00"
 
 
 def test_parse_card_without_frontmatter(tmp_path):
@@ -238,6 +270,34 @@ def test_migrate_skips_when_cards_exist(tmp_path):
     assert "existing" in names
     # Should NOT have created migrated_task since cards already existed
     assert "migrated_task" not in names
+
+
+def test_migrate_legacy_default_task_creates_heartbeat_card(tmp_path):
+    session_dir = tmp_path / "session"
+    (session_dir / "core").mkdir(parents=True)
+    write_session_params(session_dir, session_type="persistent", default_task="Check mail", heartbeat_interval=300)
+
+    migrate_legacy_default_task(session_dir)
+
+    params = (session_dir / "core" / "params.json").read_text(encoding="utf-8")
+    assert '"default_task": null' in params
+    heartbeat = load_card(session_dir / "core" / "tasks", "heartbeat")
+    assert heartbeat is not None
+    assert heartbeat.content == "Check mail"
+    assert heartbeat.interval == 300
+
+
+def test_migrate_legacy_task_sources_combines_tasks_md_and_default_task(tmp_path):
+    session_dir = tmp_path / "session"
+    core_dir = session_dir / "core"
+    core_dir.mkdir(parents=True)
+    (core_dir / "tasks.md").write_text("legacy board", encoding="utf-8")
+    write_session_params(session_dir, session_type="persistent", default_task="Check mail", heartbeat_interval=600)
+
+    migrate_legacy_task_sources(session_dir)
+
+    cards = load_all_cards(core_dir / "tasks")
+    assert {card.name for card in cards} == {"heartbeat", "migrated_task"}
 
 
 # ── Heartbeat card ────────────────────────────────────────────────────────────

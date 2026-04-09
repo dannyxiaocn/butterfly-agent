@@ -5,7 +5,7 @@ Current task board:
 
 ---
 
-## Case A — Task board is EMPTY → pick next task from track.md
+## Case A — Heartbeat task body is EMPTY → pick next task from track.md
 
 ```bash
 cat /Users/xiaobocheng/agent_core/nutshell/track.md
@@ -17,14 +17,22 @@ Find the **first** `- [ ]` item that is:
 
 If a suitable task exists:
 ```bash
-echo "Task: <exact text of the chosen [ ] line>" > core/tasks.md
+python - <<'PY'
+from pathlib import Path
+path = Path("core/tasks/heartbeat.md")
+text = path.read_text(encoding="utf-8")
+head, _, body = text.partition("\n---\n\n")
+if text.startswith("---\n") and "\n---\n\n" in text:
+    frontmatter, _, _rest = text.partition("\n---\n\n")
+    path.write_text(frontmatter + "\n---\n\nTask: <exact text of the chosen [ ] line>\n", encoding="utf-8")
+else:
+    path.write_text("Task: <exact text of the chosen [ ] line>\n", encoding="utf-8")
+PY
 ```
 Then begin immediately — follow the full SOP in `Memory: track_sop`.
 
 If **no** actionable `[ ]` items remain:
-```bash
-echo -n > core/tasks.md
-```
+Clear the body of `core/tasks/heartbeat.md` while preserving its YAML frontmatter.
 Return exactly: SESSION_FINISHED
 
 ---
@@ -48,9 +56,9 @@ Check for more work:
 grep -c '^\- \[ \]' /Users/xiaobocheng/agent_core/nutshell/track.md
 ```
 
-- If more `[ ]` items → write the next task to `core/tasks.md` (and continue on the next heartbeat)
-- If no more items → `echo -n > core/tasks.md` → return SESSION_FINISHED
+- If more `[ ]` items → write the next task into the body of `core/tasks/heartbeat.md` (and continue on the next heartbeat)
+- If no more items → clear the body of `core/tasks/heartbeat.md` and return SESSION_FINISHED
 
 ---
 
-**Important**: Never mark a task done until tests pass and the `ready-` branch is pushed. If blocked, write the blocker to `core/tasks.md` so you can resume next heartbeat.
+**Important**: Never mark a task done until tests pass and the `ready-` branch is pushed. If blocked, write the blocker into the body of `core/tasks/heartbeat.md` so you can resume next heartbeat.

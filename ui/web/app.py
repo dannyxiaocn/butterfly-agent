@@ -50,6 +50,51 @@ def _sse_format(event: dict, seq: int | None = None) -> str:
     return f"event: {etype}\ndata: {data}\n\n"
 
 
+def _parse_task_interval(value) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        interval = float(value)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "Task interval must be a number of seconds")
+    if interval < 1:
+        raise HTTPException(400, "Task interval must be at least 1 second")
+    return interval
+
+
+def _parse_task_timestamp(value, field_name: str) -> str | None:
+    if value in (None, ""):
+        return None
+    if not isinstance(value, str):
+        raise HTTPException(400, f"{field_name} must be an ISO timestamp string")
+    try:
+        datetime.fromisoformat(value)
+    except ValueError:
+        raise HTTPException(400, f"{field_name} must be a valid ISO timestamp")
+    return value
+
+
+def _validate_task_schedule(starts_at: str | None, ends_at: str | None) -> None:
+    if starts_at and ends_at and datetime.fromisoformat(ends_at) < datetime.fromisoformat(starts_at):
+        raise HTTPException(400, "ends_at must be after starts_at")
+
+
+def _normalize_task_name(value, field_name: str = "Task name") -> str:
+    name = str(value or "").strip()
+    if not name:
+        raise HTTPException(400, f"{field_name} is required")
+    if name in {".", ".."} or "/" in name or "\\" in name:
+        raise HTTPException(400, f"{field_name} contains invalid characters")
+    return name
+
+
+def _parse_task_status(value) -> str:
+    status = str(value or "").strip() or "pending"
+    if status not in {"pending", "running", "completed", "paused"}:
+        raise HTTPException(400, "Task status must be one of pending, running, completed, paused")
+    return status
+
+
 def create_app(sessions_dir: Path, system_sessions_dir: Path | None = None) -> FastAPI:
     if system_sessions_dir is None:
         system_sessions_dir = sessions_dir.parent / "_sessions"
@@ -97,7 +142,6 @@ def create_app(sessions_dir: Path, system_sessions_dir: Path | None = None) -> F
         params_view = {**params, "is_meta_session": _is_meta_session_id(session_id)}
         return {
             **info,
-            "default_task": params.get("default_task"),
             "params": params_view,
         }
 
@@ -211,18 +255,22 @@ def create_app(sessions_dir: Path, system_sessions_dir: Path | None = None) -> F
 
     @app.get("/api/sessions/{session_id}/tasks")
     async def get_tasks(session_id: str):
-        from nutshell.session_engine.task_cards import load_all_cards, migrate_tasks_md
-        core_dir = sessions_dir / session_id / "core"
-        # Migrate legacy tasks.md → core/tasks/*.md if still present
-        if core_dir.exists():
-            migrate_tasks_md(core_dir)
-        tasks_dir = core_dir / "tasks"
-        cards = load_all_cards(tasks_dir)
+        from nutshell.session_engine.task_cards import load_all_cards, migrate_legacy_task_sources
+        session_dir = sessions_dir / session_id
+        if session_dir.exists():
+            migrate_legacy_task_sources(session_dir)
+        tasks_dir = session_dir / "core" / "tasks"
+        cards = sorted(
+            load_all_cards(tasks_dir),
+            key=lambda c: (c.name != "heartbeat", c.name.lower()),
+        )
         return {"cards": [
             {
                 "name": c.name,
                 "content": c.content,
                 "interval": c.interval,
+                "starts_at": c.starts_at,
+                "ends_at": c.ends_at,
                 "status": c.status,
                 "last_run_at": c.last_run_at,
                 "created_at": c.created_at,
@@ -232,26 +280,53 @@ def create_app(sessions_dir: Path, system_sessions_dir: Path | None = None) -> F
 
     @app.put("/api/sessions/{session_id}/tasks")
     async def set_tasks(session_id: str, body: dict):
-        from nutshell.session_engine.task_cards import TaskCard, load_card, save_card
+        from nutshell.session_engine.task_cards import TaskCard, delete_card, load_card, migrate_legacy_task_sources, save_card
         session_dir = sessions_dir / session_id
         if not session_dir.exists():
             raise HTTPException(404, f"Session not found: {session_id}")
+        migrate_legacy_task_sources(session_dir)
         tasks_dir = session_dir / "core" / "tasks"
         tasks_dir.mkdir(parents=True, exist_ok=True)
         if "name" in body:
-            existing = load_card(tasks_dir, body["name"])
+            name = _normalize_task_name(body["name"])
+            previous_name = _normalize_task_name(body.get("previous_name") or name, "Previous task name")
+            existing = load_card(tasks_dir, previous_name)
+            interval = _parse_task_interval(body.get("interval", existing.interval if existing else None))
+            starts_at = _parse_task_timestamp(body.get("starts_at", existing.starts_at if existing else None), "starts_at")
+            ends_at = _parse_task_timestamp(body.get("ends_at", existing.ends_at if existing else None), "ends_at")
+            _validate_task_schedule(starts_at, ends_at)
+            if name == "heartbeat" and interval is None:
+                interval = float(read_session_params(session_dir).get("heartbeat_interval") or 600.0)
             card = TaskCard(
-                name=body["name"],
+                name=name,
                 content=body.get("content", existing.content if existing else ""),
-                interval=body.get("interval", existing.interval if existing else None),
-                status=body.get("status", existing.status if existing else "pending"),
+                interval=interval,
+                starts_at=starts_at,
+                ends_at=ends_at,
+                status=_parse_task_status(body.get("status", existing.status if existing else "pending")),
                 last_run_at=body.get("last_run_at", existing.last_run_at if existing else None),
                 created_at=body.get("created_at", existing.created_at if existing else datetime.now().isoformat()),
             )
+            if previous_name != name:
+                delete_card(tasks_dir, previous_name)
             save_card(tasks_dir, card)
+            if name == "heartbeat" and card.interval is not None:
+                write_session_params(session_dir, heartbeat_interval=card.interval, default_task=None)
         elif "content" in body:
             card = TaskCard(name="task", content=body["content"])
             save_card(tasks_dir, card)
+        return {"ok": True}
+
+    @app.delete("/api/sessions/{session_id}/tasks/{task_name}")
+    async def remove_task(session_id: str, task_name: str):
+        from nutshell.session_engine.task_cards import delete_card, migrate_legacy_task_sources
+        session_dir = sessions_dir / session_id
+        if not session_dir.exists():
+            raise HTTPException(404, f"Session not found: {session_id}")
+        migrate_legacy_task_sources(session_dir)
+        deleted = delete_card(session_dir / "core" / "tasks", _normalize_task_name(task_name, "Task name"))
+        if not deleted:
+            raise HTTPException(404, f"Task not found: {task_name}")
         return {"ok": True}
 
     @app.get("/api/sessions/{session_id}/config")
@@ -265,6 +340,7 @@ def create_app(sessions_dir: Path, system_sessions_dir: Path | None = None) -> F
 
     @app.put("/api/sessions/{session_id}/config")
     async def set_config(session_id: str, body: dict):
+        from nutshell.session_engine.task_cards import ensure_heartbeat_card, load_card, migrate_legacy_task_sources, save_card
         session_dir = sessions_dir / session_id
         system_dir = system_sessions_dir / session_id
         if not system_dir.exists() or not session_dir.exists():
@@ -274,6 +350,29 @@ def create_app(sessions_dir: Path, system_sessions_dir: Path | None = None) -> F
             raise HTTPException(400, "Body must include a JSON object in 'params'")
         params = dict(params)
         params.pop("is_meta_session", None)
+        migrate_legacy_task_sources(session_dir)
+        if "default_task" in params:
+            heartbeat_content = params.pop("default_task")
+            if heartbeat_content not in (None, ""):
+                existing_heartbeat = load_card(session_dir / "core" / "tasks", "heartbeat")
+                if existing_heartbeat is None:
+                    ensure_heartbeat_card(
+                        session_dir / "core" / "tasks",
+                        interval=float(params.get("heartbeat_interval") or read_session_params(session_dir).get("heartbeat_interval") or 600.0),
+                        content=str(heartbeat_content),
+                    )
+                else:
+                    existing_heartbeat.content = str(heartbeat_content)
+                    save_card(session_dir / "core" / "tasks", existing_heartbeat)
+        if "heartbeat_interval" in params:
+            interval = _parse_task_interval(params["heartbeat_interval"])
+            if interval is not None:
+                heartbeat = load_card(session_dir / "core" / "tasks", "heartbeat")
+                if heartbeat is not None:
+                    heartbeat.interval = interval
+                    save_card(session_dir / "core" / "tasks", heartbeat)
+                elif params.get("session_type") == "persistent":
+                    ensure_heartbeat_card(session_dir / "core" / "tasks", interval=interval)
         write_session_params(session_dir, **params)
         saved = read_session_params(session_dir)
         return {"ok": True, "params": {**saved, "is_meta_session": _is_meta_session_id(session_id)}}

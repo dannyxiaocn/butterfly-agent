@@ -151,23 +151,25 @@ rm -rf sessions/YOUR_ID/core/skills/my-skill
 
 ## Task board
 
-`core/tasks.md` drives your heartbeat. Non-empty = next wakeup fires.
+`core/tasks/` drives task execution. Each `.md` file is a task card with YAML frontmatter; `core/tasks/heartbeat.md` is the recurring heartbeat card.
 
 ```bash
 # Read tasks
-cat sessions/YOUR_ID/core/tasks.md
+ls sessions/YOUR_ID/core/tasks
+cat sessions/YOUR_ID/core/tasks/heartbeat.md
 
-# Update tasks
-cat > sessions/YOUR_ID/core/tasks.md << 'EOF'
-- [ ] Task 1 — in progress: completed step A, next is step B
-- [ ] Task 2 — blocked on X
-EOF
-
-# Clear when all done (required completion signal)
-echo -n > sessions/YOUR_ID/core/tasks.md
+# Update an existing task card body while keeping frontmatter valid
+python - <<'PY'
+from pathlib import Path
+path = Path("sessions/YOUR_ID/core/tasks/heartbeat.md")
+text = path.read_text(encoding="utf-8")
+frontmatter, sep, _body = text.partition("\n---\n\n")
+if text.startswith("---\n") and sep:
+    path.write_text(frontmatter + "\n---\n\nTask 1 — in progress: completed step A, next is step B\n", encoding="utf-8")
+PY
 ```
 
-**Write progress notes your future self can resume from cold.** Remove completed items. Leave unfinished tasks with enough context to continue without memory of this session.
+**Write progress notes your future self can resume from cold.** Add, update, pause, or complete task cards instead of maintaining a single flat `tasks.md` file.
 
 ---
 
