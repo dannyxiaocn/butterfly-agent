@@ -120,6 +120,14 @@ def save_card(tasks_dir: Path, card: TaskCard) -> Path:
     return path
 
 
+def load_card(tasks_dir: Path, name: str) -> TaskCard | None:
+    """Load one task card by name from core/tasks/."""
+    path = tasks_dir / f"{name}.md"
+    if not path.is_file():
+        return None
+    return _parse_card_file(path)
+
+
 # ── Directory-level operations ──────────────────────────────────────────────
 
 def load_all_cards(tasks_dir: Path) -> list[TaskCard]:

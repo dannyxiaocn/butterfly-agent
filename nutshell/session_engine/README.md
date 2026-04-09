@@ -10,7 +10,7 @@ This subsystem materializes entities into runnable sessions and wraps `Agent` wi
 - `session_init.py`: creates `sessions/<id>/` and `_sessions/<id>/`, seeds memory, tools, skills, playground files, and `.venv`.
 - `session_params.py`: reads and writes `core/params.json`.
 - `session_status.py`: reads and writes `_sessions/<id>/status.json`.
-- `task_cards.py`: task card system — per-task `.md` files in `core/tasks/` with YAML frontmatter (interval, status, last_run_at).
+- `task_cards.py`: task card system — per-task `.md` files in `core/tasks/` with YAML frontmatter (interval, status, last_run_at), legacy `tasks.md` migration, and single-card load/save helpers used by the UI.
 - `session.py`: the persistent session wrapper that reloads capabilities, handles chat and task card ticks, and appends JSONL events.
 
 ## How To Use It
@@ -42,4 +42,3 @@ nutshell chat --entity nutshell_dev "review this repo"
 - Meta sessions are real persistent sessions stored as `sessions/<entity>_meta/` and `_sessions/<entity>_meta/`.
 - If entity config diverges from a synced meta session, child sessions can be blocked with `alignment_blocked` until resolved.
 - `reload_capabilities` is injected at runtime and cannot be overridden from disk.
-

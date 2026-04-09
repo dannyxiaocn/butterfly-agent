@@ -4,9 +4,43 @@ from nutshell.session_engine.session_params import DEFAULT_PARAMS
 from nutshell.llm_engine.providers.anthropic import AnthropicProvider
 
 
+class DummyStream:
+    def __init__(self, owner, kwargs):
+        self._owner = owner
+        self._kwargs = kwargs
+
+    async def __aenter__(self):
+        self._owner.stream_calls.append(self._kwargs)
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    def __aiter__(self):
+        async def _gen():
+            if False:
+                yield None
+
+        return _gen()
+
+    async def get_final_message(self):
+        class Usage:
+            input_tokens = 1
+            output_tokens = 1
+            cache_read_input_tokens = 0
+            cache_creation_input_tokens = 0
+
+        class Response:
+            content = []
+            usage = Usage()
+
+        return Response()
+
+
 class DummyMessagesAPI:
     def __init__(self):
         self.calls = []
+        self.stream_calls = []
 
     async def create(self, **kwargs):
         self.calls.append(kwargs)
@@ -22,6 +56,9 @@ class DummyMessagesAPI:
             usage = Usage()
 
         return Response()
+
+    def stream(self, **kwargs):
+        return DummyStream(self, kwargs)
 
 
 class DummyBetaNamespace:
@@ -57,6 +94,29 @@ async def test_anthropic_thinking_enabled_routes_to_beta_messages():
     assert call["betas"] == ["interleaved-thinking-2025-05-14"]
     assert call["thinking"] == {"type": "enabled", "budget_tokens": 9000}
     assert call["max_tokens"] >= 10000
+
+
+@pytest.mark.asyncio
+async def test_anthropic_thinking_stream_routes_to_beta_messages():
+    provider = AnthropicProvider(api_key="test")
+    provider._client = DummyClient()
+
+    streamed_chunks: list[str] = []
+    await provider.complete(
+        messages=[],
+        tools=[],
+        system_prompt="sys",
+        model="claude-test",
+        thinking=True,
+        thinking_budget=9000,
+        on_text_chunk=streamed_chunks.append,
+    )
+
+    assert provider._client.messages.stream_calls == []
+    stream_call = provider._client.beta.messages.stream_calls[0]
+    assert stream_call["betas"] == ["interleaved-thinking-2025-05-14"]
+    assert stream_call["thinking"] == {"type": "enabled", "budget_tokens": 9000}
+    assert stream_call["max_tokens"] >= 10000
 
 
 @pytest.mark.asyncio

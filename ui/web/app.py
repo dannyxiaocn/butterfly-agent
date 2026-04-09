@@ -232,18 +232,21 @@ def create_app(sessions_dir: Path, system_sessions_dir: Path | None = None) -> F
 
     @app.put("/api/sessions/{session_id}/tasks")
     async def set_tasks(session_id: str, body: dict):
-        from nutshell.session_engine.task_cards import TaskCard, save_card
+        from nutshell.session_engine.task_cards import TaskCard, load_card, save_card
         session_dir = sessions_dir / session_id
         if not session_dir.exists():
             raise HTTPException(404, f"Session not found: {session_id}")
         tasks_dir = session_dir / "core" / "tasks"
         tasks_dir.mkdir(parents=True, exist_ok=True)
         if "name" in body:
+            existing = load_card(tasks_dir, body["name"])
             card = TaskCard(
                 name=body["name"],
-                content=body.get("content", ""),
-                interval=body.get("interval"),
-                status=body.get("status", "pending"),
+                content=body.get("content", existing.content if existing else ""),
+                interval=body.get("interval", existing.interval if existing else None),
+                status=body.get("status", existing.status if existing else "pending"),
+                last_run_at=body.get("last_run_at", existing.last_run_at if existing else None),
+                created_at=body.get("created_at", existing.created_at if existing else datetime.now().isoformat()),
             )
             save_card(tasks_dir, card)
         elif "content" in body:

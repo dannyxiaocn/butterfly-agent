@@ -22,8 +22,11 @@ Key endpoints:
 - `POST /api/sessions/{id}/messages`
 - `GET /api/sessions/{id}/events`
 - `GET /api/sessions/{id}/history`
+- `GET /api/sessions/{id}/tasks`: returns task cards from `core/tasks/` as `{"cards": [...]}` and migrates legacy `core/tasks.md` on first read
+- `PUT /api/sessions/{id}/tasks`: creates or updates a named task card; when updating an existing card, schedule metadata is preserved unless explicitly overridden
+- `GET /api/sessions/{id}/config`
+- `PUT /api/sessions/{id}/config`
 
 ## How It Contributes To The Whole System
 
 This directory gives operators a live, streaming view of session activity without introducing a second state model. Everything still comes from the on-disk session files.
-

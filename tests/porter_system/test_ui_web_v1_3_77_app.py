@@ -7,6 +7,7 @@ from tempfile import TemporaryDirectory
 
 from fastapi.testclient import TestClient
 
+from nutshell.session_engine.task_cards import TaskCard, save_card
 from ui.web.app import create_app
 from ui.web.sessions import _is_stale_stopped
 
@@ -104,3 +105,34 @@ class WebUnitTests(unittest.TestCase):
             self.assertEqual(len(heartbeat_cards), 1, "second PUT must update, not duplicate")
             self.assertEqual(heartbeat_cards[0]["content"], "v2")
 
+    def test_put_tasks_by_name_preserves_existing_metadata(self) -> None:
+        """Editing an existing recurring card must not wipe its scheduling metadata."""
+        with TemporaryDirectory() as td:
+            root = _make_session(Path(td))
+            tasks_dir = root / "sessions" / "test-session" / "core" / "tasks"
+            save_card(
+                tasks_dir,
+                TaskCard(
+                    name="heartbeat",
+                    content="v1",
+                    interval=600,
+                    status="paused",
+                    last_run_at="2026-04-09T10:00:00",
+                    created_at="2026-04-08T09:00:00",
+                ),
+            )
+            app = create_app(root / "sessions", root / "_sessions")
+            with TestClient(app) as client:
+                put_resp = client.put(
+                    "/api/sessions/test-session/tasks",
+                    json={"name": "heartbeat", "content": "v2"},
+                )
+                self.assertEqual(put_resp.status_code, 200)
+                get_resp = client.get("/api/sessions/test-session/tasks")
+
+            card = next(c for c in get_resp.json()["cards"] if c["name"] == "heartbeat")
+            self.assertEqual(card["content"], "v2")
+            self.assertEqual(card["interval"], 600)
+            self.assertEqual(card["status"], "paused")
+            self.assertEqual(card["last_run_at"], "2026-04-09T10:00:00")
+            self.assertEqual(card["created_at"], "2026-04-08T09:00:00")
