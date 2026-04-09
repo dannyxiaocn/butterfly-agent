@@ -15,10 +15,18 @@ export function createSidebar(): HTMLElement {
       const tone = sessionTone(s);
       const color = toneColor(tone);
       const active = s.id === current ? ' active' : '';
+      const isRunning = tone === 'running' && s.id === current;
+      const pulseClass = isRunning ? ' running-pulse' : '';
+      const dotPulse = tone === 'running' ? ' pulse' : '';
+      // Derive a short entity label
+      const entityLabel = s.entity.replace(/^entity\//, '');
       return `
-        <div class="session-item${active}" data-id="${escHtml(s.id)}" title="${escHtml(s.entity)}">
-          <span class="session-dot" style="background:${color}"></span>
-          <span class="session-item-name">${escHtml(s.id)}</span>
+        <div class="session-item${active}${pulseClass}" data-id="${escHtml(s.id)}" title="${escHtml(s.id)} · ${escHtml(s.entity)}">
+          <span class="session-dot${dotPulse}" style="background:${color}"></span>
+          <span class="session-item-info">
+            <span class="session-item-name">${escHtml(s.id)}</span>
+            <span class="session-item-entity">${escHtml(entityLabel)}</span>
+          </span>
         </div>
       `;
     }).join('');
@@ -29,7 +37,7 @@ export function createSidebar(): HTMLElement {
         <button class="btn-icon" id="btn-new-session" title="New session">+</button>
       </div>
       <div class="session-list" id="session-list">
-        ${listHtml}
+        ${listHtml || '<div style="padding:12px 8px;font-size:12px;color:var(--dimmed)">No sessions</div>'}
       </div>
       <div class="sidebar-footer">
         <button class="btn-sm btn-start" id="btn-start" title="Resume heartbeat">▶ Start</button>

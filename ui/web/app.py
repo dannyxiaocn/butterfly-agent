@@ -19,6 +19,9 @@ from pathlib import Path
 from typing import AsyncIterator
 
 import uvicorn
+import re
+import subprocess
+
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -32,8 +35,6 @@ _SYSTEM_SESSIONS_DIR = Path(__file__).parent.parent.parent / "_sessions"
 _DEFAULT_ENTITY = "entity/agent"
 _DEFAULT_PORT = 8080
 _DIST_DIR = Path(__file__).parent / "frontend" / "dist"
-
-_HTML = (Path(__file__).parent / "index.html").read_text(encoding="utf-8")
 
 
 def _sse_format(event: dict, seq: int | None = None) -> str:
@@ -118,12 +119,9 @@ def create_app(sessions_dir: Path, system_sessions_dir: Path | None = None) -> F
     if _DIST_DIR.exists():
         app.mount("/assets", StaticFiles(directory=_DIST_DIR / "assets"), name="assets")
 
-    @app.get("/", response_class=HTMLResponse)
+    @app.get("/", response_class=FileResponse)
     async def index():
-        dist_index = _DIST_DIR / "index.html"
-        if dist_index.exists():
-            return FileResponse(dist_index)
-        return _HTML
+        return FileResponse(_DIST_DIR / "index.html")
 
     @app.get("/api/sessions")
     async def list_sessions():
@@ -398,6 +396,73 @@ def create_app(sessions_dir: Path, system_sessions_dir: Path | None = None) -> F
         if system_dir.exists():
             shutil.rmtree(system_dir)
         return {"ok": True}
+
+    @app.get("/api/sessions/{session_id}/hud")
+    async def get_session_hud(session_id: str):
+        """HUD data: cwd, context size, git diff stat, latest token usage."""
+        system_dir = system_sessions_dir / session_id
+        session_dir = sessions_dir / session_id
+        if not system_dir.exists():
+            raise HTTPException(404, f"Session not found: {session_id}")
+
+        # Resolve git root (search upward from sessions_dir parent = project root)
+        project_root = sessions_dir.parent
+        git_root: str | None = None
+        try:
+            r = subprocess.run(
+                ["git", "rev-parse", "--show-toplevel"],
+                cwd=project_root, capture_output=True, text=True, timeout=3,
+            )
+            if r.returncode == 0:
+                git_root = r.stdout.strip()
+        except Exception:
+            pass
+
+        # Git diff stat (staged + unstaged vs HEAD)
+        git_added = git_deleted = git_files = 0
+        if git_root:
+            try:
+                r = subprocess.run(
+                    ["git", "diff", "--shortstat", "HEAD"],
+                    cwd=git_root, capture_output=True, text=True, timeout=3,
+                )
+                if r.stdout:
+                    m = re.search(r"(\d+) files? changed", r.stdout)
+                    if m: git_files = int(m.group(1))
+                    m = re.search(r"(\d+) insertions?\(\+\)", r.stdout)
+                    if m: git_added = int(m.group(1))
+                    m = re.search(r"(\d+) deletions?\(-\)", r.stdout)
+                    if m: git_deleted = int(m.group(1))
+            except Exception:
+                pass
+
+        # Context size in bytes
+        from nutshell.runtime.ipc import FileIPC
+        ipc = FileIPC(system_dir)
+        context_bytes = ipc.context_size()
+
+        # Latest token usage from most recent turn
+        latest_usage: dict | None = None
+        if ipc.context_path.exists():
+            try:
+                lines = ipc.context_path.read_bytes().splitlines()
+                for line in reversed(lines):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    ev = json.loads(line)
+                    if ev.get("type") == "turn" and ev.get("usage"):
+                        latest_usage = ev["usage"]
+                        break
+            except Exception:
+                pass
+
+        return {
+            "cwd": git_root or str(project_root),
+            "context_bytes": context_bytes,
+            "git": {"files": git_files, "added": git_added, "deleted": git_deleted},
+            "usage": latest_usage,
+        }
 
     @app.get("/api/weixin/status")
     async def weixin_status():

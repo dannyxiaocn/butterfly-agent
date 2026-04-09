@@ -57,4 +57,7 @@ export const api = {
 
   getWeixinStatus: (): Promise<{ status: string; error?: string; session?: string; account?: string }> =>
     request('GET', '/api/weixin/status'),
+
+  getHud: (id: string): Promise<{ cwd: string; context_bytes: number; git: { files: number; added: number; deleted: number }; usage: { input?: number; output?: number; cache_read?: number; cache_write?: number } | null }> =>
+    request('GET', `/api/sessions/${encodeURIComponent(id)}/hud`),
 };

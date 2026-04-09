@@ -31,6 +31,7 @@ interface ChatEl extends HTMLElement {
   clearMessages(): void;
   appendEvent(e: DisplayEvent): void;
   handleEvent(e: DisplayEvent): void;
+  refreshHud(id: string): Promise<void>;
 }
 
 function getChatEl(): ChatEl {
@@ -85,6 +86,9 @@ export async function attachSession(id: string): Promise<void> {
   } catch (e) {
     console.error('Failed to load config:', e);
   }
+
+  // Refresh HUD on attach
+  getChatEl().refreshHud(id).catch(() => {});
 
   // Open SSE from history offsets
   sseConn.attach(id, contextOffset, eventsOffset, (event: DisplayEvent) => {
@@ -148,6 +152,23 @@ async function init(): Promise<void> {
       // ignore
     }
   }, 15000);
+
+  // Refresh HUD every 10s when a session is active
+  setInterval(async () => {
+    if (!store.currentSessionId) return;
+    getChatEl().refreshHud(store.currentSessionId).catch(() => {});
+  }, 10000);
+
+  // Keyboard shortcut: Cmd+K / Ctrl+K to focus chat input
+  document.addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+      e.preventDefault();
+      const input = document.getElementById('chat-input') as HTMLTextAreaElement | null;
+      if (input && !input.disabled) {
+        input.focus();
+      }
+    }
+  });
 
   // Auto-attach first session if any
   if (store.sessions.length > 0) {

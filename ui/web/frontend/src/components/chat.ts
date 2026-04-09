@@ -8,11 +8,34 @@ export function createChat(): HTMLElement {
   el.id = 'chat';
   el.innerHTML = `
     <div id="messages" class="messages"></div>
+    <div id="hud-bar" class="hud-bar hidden">
+      <span class="hud-item hud-cwd" title="Working directory">
+        <span class="hud-icon">📁</span>
+        <span class="hud-cwd-text">…</span>
+      </span>
+      <span class="hud-sep">·</span>
+      <span class="hud-item hud-context" title="Context size">
+        <span class="hud-icon">💬</span>
+        <span class="hud-ctx-text">…</span>
+      </span>
+      <span class="hud-sep">·</span>
+      <span class="hud-item hud-git" title="Git changes">
+        <span class="hud-icon">⎇</span>
+        <span class="hud-git-text">…</span>
+      </span>
+      <span class="hud-sep">·</span>
+      <span class="hud-item hud-tokens" title="Last turn token usage">
+        <span class="hud-icon">⚡</span>
+        <span class="hud-tokens-text">…</span>
+      </span>
+    </div>
     <div id="chat-input-area" class="chat-input-area">
       <textarea id="chat-input" placeholder="Type a message… (Shift+Enter for newline, Enter to send)" rows="3"></textarea>
       <div class="chat-input-actions">
         <button id="btn-interrupt" class="btn-sm btn-warn" title="Interrupt current turn">⚡ Interrupt</button>
-        <button id="btn-send" class="btn-primary">Send</button>
+        <div class="chat-input-actions-right">
+          <button id="btn-send" class="btn-primary">Send</button>
+        </div>
       </div>
     </div>
   `;
@@ -114,11 +137,61 @@ export function createChat(): HTMLElement {
     }
   }
 
-  // Expose these methods to main.ts
-  type ChatMethods = { clearMessages(): void; appendEvent(e: DisplayEvent): void; handleEvent(e: DisplayEvent): void };
+  async function refreshHud(sessionId: string) {
+    try {
+      const data = await api.getHud(sessionId);
+      const hudBar = el.querySelector('#hud-bar') as HTMLElement;
+      hudBar.classList.remove('hidden');
+
+      // CWD: show just the last 2 path components
+      const pathParts = data.cwd.replace(/\\/g, '/').split('/').filter(Boolean);
+      const displayCwd = pathParts.length > 2 ? '…/' + pathParts.slice(-2).join('/') : data.cwd;
+      const cwdEl = hudBar.querySelector('.hud-cwd-text') as HTMLElement;
+      cwdEl.textContent = displayCwd;
+      cwdEl.title = data.cwd;
+
+      // Context bytes → KB/MB
+      const kb = data.context_bytes / 1024;
+      const ctxStr = kb < 1 ? `${data.context_bytes}B` : kb < 1024 ? `${kb.toFixed(1)}KB` : `${(kb / 1024).toFixed(2)}MB`;
+      (hudBar.querySelector('.hud-ctx-text') as HTMLElement).textContent = `ctx: ${ctxStr}`;
+
+      // Git stat
+      const gitEl = hudBar.querySelector('.hud-git-text') as HTMLElement;
+      const { added, deleted, files } = data.git;
+      if (files === 0) {
+        gitEl.innerHTML = '<span style="color:var(--dimmed)">clean</span>';
+      } else {
+        gitEl.innerHTML = `${files}f <span class="hud-git-added">+${added}</span> <span class="hud-git-deleted">-${deleted}</span>`;
+      }
+
+      // Token usage
+      const tokEl = hudBar.querySelector('.hud-tokens-text') as HTMLElement;
+      if (data.usage) {
+        const u = data.usage;
+        const tokParts: string[] = [];
+        if (u.input) tokParts.push(`in:${(u.input / 1000).toFixed(1)}k`);
+        if (u.output) tokParts.push(`out:${(u.output / 1000).toFixed(1)}k`);
+        if (u.cache_read) tokParts.push(`cache:${(u.cache_read / 1000).toFixed(1)}k`);
+        tokEl.textContent = tokParts.join(' ');
+      } else {
+        tokEl.textContent = 'no usage';
+      }
+    } catch {
+      // ignore — HUD is best-effort
+    }
+  }
+
+  // Expose methods to main.ts
+  type ChatMethods = {
+    clearMessages(): void;
+    appendEvent(e: DisplayEvent): void;
+    handleEvent(e: DisplayEvent): void;
+    refreshHud(id: string): Promise<void>;
+  };
   (el as HTMLElement & ChatMethods).clearMessages = clearMessages;
   (el as HTMLElement & ChatMethods).appendEvent = appendEvent;
   (el as HTMLElement & ChatMethods).handleEvent = handleEvent;
+  (el as HTMLElement & ChatMethods).refreshHud = refreshHud;
 
   async function sendMessage() {
     const content = inputEl.value.trim();
@@ -250,9 +323,10 @@ function renderToolEvent(event: DisplayEvent): string {
 
   if (name === 'bash' || name === 'shell') {
     const cmd = String(input['command'] ?? input['cmd'] ?? JSON.stringify(input));
-    const isLong = cmd.length > 200 || cmd.includes('\n');
+    const lineCount = cmd.split('\n').length;
+    const isLong = cmd.length > 500 || lineCount > 10;
     const cmdHtml = isLong
-      ? `<details class="tool-collapse"><summary>command (${cmd.split('\n').length} lines)</summary><pre class="tool-pre">${escapeHtml(cmd)}</pre></details>`
+      ? `<details class="tool-collapse"><summary>command (${lineCount} lines, ${cmd.length} chars)</summary><pre class="tool-pre">${escapeHtml(cmd)}</pre></details>`
       : `<pre class="tool-pre">${escapeHtml(cmd)}</pre>`;
     return `
       <div class="msg-header">

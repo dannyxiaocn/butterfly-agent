@@ -86,11 +86,11 @@ export function createPanel(): HTMLElement {
   }
 
   function renderTaskCard(card: TaskCard): string {
-    const statusColor = taskStatusColor(card.status);
     const isHb = card.name === 'heartbeat';
     const hbPill = isHb ? `<span class="hb-pill">heartbeat</span>` : '';
     const intervalStr = formatInterval(card.interval);
     const lastRun = formatRelative(card.last_run_at);
+    const statusClass = `task-status-${card.status}`;
 
     // Content preview: first 3 non-empty lines
     const preview = card.content.split('\n').filter(l => l.trim()).slice(0, 3).join('\n');
@@ -100,7 +100,7 @@ export function createPanel(): HTMLElement {
         <div class="task-card-header">
           <span class="task-name">${escHtml(card.name)}</span>
           ${hbPill}
-          <span class="task-status-badge" style="color:${statusColor};border-color:${statusColor}44;background:${statusColor}11">${card.status}</span>
+          <span class="task-status-badge ${statusClass}">${card.status}</span>
         </div>
         <div class="task-card-meta">
           <span class="task-interval">${escHtml(intervalStr)}</span>
@@ -271,13 +271,4 @@ export function createPanel(): HTMLElement {
   return el;
 }
 
-function taskStatusColor(status: string): string {
-  switch (status) {
-    case 'running': return 'var(--green)';
-    case 'pending': return 'var(--accent)';
-    case 'completed': return 'var(--muted)';
-    case 'paused': return 'var(--yellow)';
-    default: return 'var(--muted)';
-  }
-}
 
