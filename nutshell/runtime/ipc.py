@@ -317,11 +317,15 @@ class FileIPC:
         in-progress turn (model_status:running + partial_text chunks) so a
         re-attaching client immediately sees the streaming state.
 
-        Returns events_size() if no running event is found (safe default).
+        Returns events_size() if:
+        - No running event is found (safe default), OR
+        - A model_status:idle event follows the last running event (turn already
+          completed — replaying would cause duplicate tool events in the UI).
         """
         if not self.events_path.exists():
             return 0
         last_offset = -1
+        has_idle_after = False
         with self.events_path.open("r", encoding="utf-8") as f:
             while True:
                 line_start = f.tell()
@@ -333,8 +337,15 @@ class FileIPC:
                     continue
                 try:
                     ev = json.loads(stripped)
-                    if ev.get("type") == "model_status" and ev.get("state") == "running":
-                        last_offset = line_start
+                    if ev.get("type") == "model_status":
+                        if ev.get("state") == "running":
+                            last_offset = line_start
+                            has_idle_after = False  # reset on each new running event
+                        elif ev.get("state") == "idle" and last_offset >= 0:
+                            has_idle_after = True
                 except Exception:
                     pass
-        return last_offset if last_offset >= 0 else self.events_size()
+        if last_offset < 0 or has_idle_after:
+            # No running event, or turn already completed — no replay needed
+            return self.events_size()
+        return last_offset

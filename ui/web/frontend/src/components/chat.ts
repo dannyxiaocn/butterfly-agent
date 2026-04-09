@@ -107,7 +107,12 @@ export function createChat(): HTMLElement {
   function appendEvent(event: DisplayEvent) {
     const msgEl = renderEvent(event);
     if (msgEl) {
-      messages.appendChild(msgEl);
+      // Keep streaming bubble at the bottom: insert new events before it when streaming
+      if (streamingEl && messages.contains(streamingEl)) {
+        messages.insertBefore(msgEl, streamingEl);
+      } else {
+        messages.appendChild(msgEl);
+      }
       scrollToBottom();
     }
   }

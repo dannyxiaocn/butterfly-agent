@@ -7,6 +7,8 @@ export function createSidebar(): HTMLElement {
   const el = document.createElement('aside');
   el.id = 'sidebar';
 
+  let formVisible = false;
+
   function render() {
     const sessions = store.sessions;
     const current = store.currentSessionId;
@@ -50,7 +52,7 @@ export function createSidebar(): HTMLElement {
         <button class="btn-sm btn-stop" id="btn-stop" title="Pause heartbeat">⏸ Stop</button>
         <button class="btn-sm btn-danger" id="btn-delete" title="Delete session">🗑</button>
       </div>
-      <div id="new-session-form" class="new-session-form hidden">
+      <div id="new-session-form" class="new-session-form${formVisible ? '' : ' hidden'}">
         <div class="form-field">
           <label>Session ID</label>
           <input id="ns-id" type="text" placeholder="my-session (optional)" />
@@ -58,10 +60,6 @@ export function createSidebar(): HTMLElement {
         <div class="form-field">
           <label>Entity</label>
           <input id="ns-entity" type="text" value="entity/agent" />
-        </div>
-        <div class="form-field">
-          <label>Heartbeat (s)</label>
-          <input id="ns-heartbeat" type="number" value="7200" />
         </div>
         <div class="form-row">
           <button class="btn-sm btn-primary" id="ns-create">Create</button>
@@ -72,24 +70,25 @@ export function createSidebar(): HTMLElement {
 
     // bind events
     el.querySelector('#btn-new-session')?.addEventListener('click', () => {
-      el.querySelector('#new-session-form')?.classList.toggle('hidden');
+      formVisible = !formVisible;
+      el.querySelector('#new-session-form')?.classList.toggle('hidden', !formVisible);
     });
 
     el.querySelector('#ns-cancel')?.addEventListener('click', () => {
+      formVisible = false;
       el.querySelector('#new-session-form')?.classList.add('hidden');
     });
 
     el.querySelector('#ns-create')?.addEventListener('click', async () => {
       const idEl = el.querySelector('#ns-id') as HTMLInputElement;
       const entityEl = el.querySelector('#ns-entity') as HTMLInputElement;
-      const hbEl = el.querySelector('#ns-heartbeat') as HTMLInputElement;
-      const body: { id?: string; entity: string; heartbeat?: number } = {
+      const body: { id?: string; entity: string } = {
         entity: entityEl.value.trim() || 'entity/agent',
-        heartbeat: parseFloat(hbEl.value) || 7200,
       };
       if (idEl.value.trim()) body.id = idEl.value.trim();
       try {
         const res = await api.createSession(body);
+        formVisible = false;
         el.querySelector('#new-session-form')?.classList.add('hidden');
         idEl.value = '';
         // Refresh sessions list
