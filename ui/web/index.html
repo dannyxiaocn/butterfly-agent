@@ -179,6 +179,14 @@
   .config-key { color: var(--muted); font-family: var(--ui-font); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; padding-top: 2px; }
   .config-value { word-break: break-word; }
   .config-empty { color: var(--muted); font-style: italic; }
+  .task-card { border: 1px solid var(--border); border-radius: 4px; margin-bottom: 8px; padding: 8px 10px; }
+  .task-card-header { font-size: 11px; color: var(--muted); margin-bottom: 4px; display: flex; align-items: center; gap: 6px; }
+  .task-card-body { font-size: 12px; white-space: pre-wrap; word-break: break-word; }
+  .task-status { font-size: 10px; padding: 1px 5px; border-radius: 3px; background: var(--border); color: var(--muted); }
+  .task-status.pending { background: rgba(88,166,255,0.15); color: #58a6ff; }
+  .task-status.running { background: rgba(63,185,80,0.15); color: #3fb950; }
+  .task-status.completed { background: rgba(139,148,158,0.15); color: var(--muted); }
+  .task-status.paused { background: rgba(210,153,34,0.15); color: #d9a92a; }
   .danger-btn { color: #ffb7b1; border-color: rgba(248, 81, 73, 0.45); }
   .danger-btn:hover { color: var(--red); border-color: var(--red); }
 </style>
@@ -237,7 +245,7 @@
       <button id="tasks-edit-btn" onclick="toggleTasksEdit()">edit</button>
     </div>
     <div id="panel-tabs">
-      <button class="panel-tab active" data-page="task" onclick="setPanelPage('task')">task.md</button>
+      <button class="panel-tab active" data-page="task" onclick="setPanelPage('task')">tasks</button>
       <button class="panel-tab" data-page="default" onclick="setPanelPage('default')">default task</button>
       <button class="panel-tab" data-page="config" onclick="setPanelPage('config')">config</button>
     </div>
@@ -712,7 +720,7 @@
       const taskData = await tasksRes.json();
       const sessionData = await sessionRes.json();
       mergeSessionMeta(sessionData);
-      renderTaskPage(taskData.content || '');
+      renderTaskPage(taskData.cards || []);
       renderDefaultTaskPage(sessionData.default_task || '');
       renderConfigPage(sessionData.params || {});
       renderFooter(sessionData);
@@ -720,7 +728,7 @@
       renderSessionIndicator();
       renderSessionList();
       updateChatAvailability();
-    } catch (e) {}
+    } catch (e) { console.error('refreshPanelData error:', e); }
   }
 
   function mergeSessionMeta(data) {
@@ -729,11 +737,27 @@
     else sessions.push(data);
   }
 
-  function renderTaskPage(content) {
-    document.getElementById('tasks-content').textContent = content.trim() || '(empty)';
-    document.getElementById('tasks-textarea').value = content;
+  function renderTaskPage(cards) {
+    // cards: array of {name, content, interval, status, last_run_at, created_at}
+    const view = document.getElementById('tasks-content');
+    const textarea = document.getElementById('tasks-textarea');
     const meta = currentSessionMeta();
-    if (meta) meta.has_tasks = Boolean(content.trim());
+    if (!cards || !cards.length) {
+      view.textContent = '(no task cards)';
+      textarea.value = '';
+      if (meta) meta.has_tasks = false;
+      return;
+    }
+    const activeCards = cards.filter(c => c.status !== 'completed');
+    if (meta) meta.has_tasks = activeCards.length > 0;
+    view.innerHTML = cards.map(c => {
+      const badge = `<span class="task-status ${escHtml(c.status)}">${escHtml(c.status)}</span>`;
+      const interval = c.interval ? ` · every ${c.interval >= 60 ? Math.round(c.interval/60) + 'm' : c.interval + 's'}` : ' · one-shot';
+      return `<div class="task-card"><div class="task-card-header">${escHtml(c.name)}${badge}${interval}</div><div class="task-card-body">${escHtml(c.content || '')}</div></div>`;
+    }).join('');
+    // textarea shows first pending card content for quick editing
+    const editable = cards.find(c => c.status === 'pending') || cards[0];
+    textarea.value = editable ? editable.content || '' : '';
   }
 
   function renderDefaultTaskPage(content) {

@@ -73,15 +73,22 @@ class AnthropicProvider(Provider):
         if api_tools:
             kwargs["tools"] = api_tools
 
+        # beta.messages is required when betas=[...] is set (e.g. interleaved thinking).
+        # Regular messages.stream/create does not accept the 'betas' kwarg.
+        betas = kwargs.pop("betas", None)
+        messages_ns = self._client.beta.messages if betas else self._client.messages
+
         saw_streamed_thinking = False
         if on_text_chunk is not None:
-            async with self._client.messages.stream(**kwargs) as stream:
+            stream_kwargs = {"betas": betas, **kwargs} if betas else kwargs
+            async with messages_ns.stream(**stream_kwargs) as stream:
                 async for event in stream:
                     if _forward_stream_event(event, on_text_chunk):
                         saw_streamed_thinking = True
                 response = await stream.get_final_message()
         else:
-            response = await self._client.messages.create(**kwargs)
+            create_kwargs = {"betas": betas, **kwargs} if betas else kwargs
+            response = await messages_ns.create(**create_kwargs)
 
         content_text = ""
         tool_calls: list[ToolCall] = []

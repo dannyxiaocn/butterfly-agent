@@ -211,8 +211,12 @@ def create_app(sessions_dir: Path, system_sessions_dir: Path | None = None) -> F
 
     @app.get("/api/sessions/{session_id}/tasks")
     async def get_tasks(session_id: str):
-        from nutshell.session_engine.task_cards import load_all_cards
-        tasks_dir = sessions_dir / session_id / "core" / "tasks"
+        from nutshell.session_engine.task_cards import load_all_cards, migrate_tasks_md
+        core_dir = sessions_dir / session_id / "core"
+        # Migrate legacy tasks.md → core/tasks/*.md if still present
+        if core_dir.exists():
+            migrate_tasks_md(core_dir)
+        tasks_dir = core_dir / "tasks"
         cards = load_all_cards(tasks_dir)
         return {"cards": [
             {
