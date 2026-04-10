@@ -57,7 +57,9 @@ def test_no_wait_writes_user_input_and_exits_0(tmp_path, capsys):
         e.get("type") == "user_input" and e.get("content") == "fire and forget"
         for e in events
     )
-    assert capsys.readouterr().err == ""
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert f"[queued] message sent to {sid}" in captured.out
 
 
 def test_continue_session_timeout_exits_1(tmp_path, capsys):

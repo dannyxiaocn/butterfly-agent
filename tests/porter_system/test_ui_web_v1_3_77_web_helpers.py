@@ -18,6 +18,15 @@ class WebHelpersTest(unittest.TestCase):
         self.assertIn("id: 7", payload)
         self.assertIn("event: agent", payload)
 
+    def test_sse_format_embeds_resume_offsets(self) -> None:
+        payload = _sse_format({"type": "agent", "content": "hello"}, seq=7, ctx=12, evt=34)
+        data_line = next(line for line in payload.splitlines() if line.startswith("data: "))
+        parsed = json.loads(data_line.removeprefix("data: "))
+
+        self.assertEqual(parsed["_ctx"], 12)
+        self.assertEqual(parsed["_evt"], 34)
+        self.assertEqual(parsed["content"], "hello")
+
     def test_sort_sessions_prioritizes_running_before_idle(self) -> None:
         sessions = [
             {"id": "idle", "pid_alive": False, "status": "active", "model_state": "idle", "created_at": "2026-01-01T00:00:00"},

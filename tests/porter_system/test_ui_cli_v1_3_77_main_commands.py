@@ -1,7 +1,9 @@
 """Tests for the unified `nutshell` CLI (ui/cli/main.py)."""
 from __future__ import annotations
 
+import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -15,12 +17,18 @@ from ui.cli.main import (
     cmd_start,
     cmd_log,
     cmd_tasks,
+    _add_log_parser,
+    _add_prompt_stats_parser,
+    _add_tasks_parser,
+    _add_token_report_parser,
+    _add_visit_parser,
     _read_all_sessions,
     _fmt_ago,
     _session_tone,
     _fmt_msg_content,
     _parse_inject_memory,
     _write_inject_memory,
+    main,
 )
 
 
@@ -151,7 +159,6 @@ def test_cmd_new_creates_session(tmp_path, capsys):
 
 
 def test_cmd_new_generates_id(tmp_path, capsys):
-    import argparse
     args = argparse.Namespace(
         session_id=None,  # auto-generate
         entity="agent",
@@ -162,12 +169,11 @@ def test_cmd_new_generates_id(tmp_path, capsys):
     code = cmd_new(args)
     assert code == 0
     out = capsys.readouterr().out.strip()
-    assert len(out) > 0  # some ID printed
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}-[0-9a-f]{4}", out)
     assert (tmp_path / "_sessions" / out / "manifest.json").exists()
 
 
 def test_cmd_new_bad_entity(tmp_path, capsys):
-    import argparse
     args = argparse.Namespace(
         session_id="x",
         entity="nonexistent_entity_xyz",
@@ -178,6 +184,41 @@ def test_cmd_new_bad_entity(tmp_path, capsys):
     code = cmd_new(args)
     assert code == 1
     assert "Error" in capsys.readouterr().err
+
+
+def _parse_subcommand(add_parser, argv: list[str]):
+    parser = argparse.ArgumentParser(allow_abbrev=False)
+    subparsers = parser.add_subparsers(dest="command")
+    add_parser(subparsers)
+    return parser.parse_args(argv)
+
+
+@pytest.mark.parametrize(
+    ("add_parser", "command"),
+    [
+        (_add_log_parser, "log"),
+        (_add_tasks_parser, "tasks"),
+        (_add_prompt_stats_parser, "prompt-stats"),
+        (_add_token_report_parser, "token-report"),
+        (_add_visit_parser, "visit"),
+    ],
+)
+def test_session_alias_parsers_accept_flag_form(add_parser, command):
+    args = _parse_subcommand(add_parser, [command, "--session", "demo-session"])
+    assert args.session_id == "demo-session"
+
+
+def test_main_disables_option_abbreviation(capsys):
+    with pytest.raises(SystemExit) as exc:
+        from unittest.mock import patch
+
+        with patch.object(sys, "argv", ["nutshell", "log", "--sess", "demo-session"]):
+            main()
+
+    assert exc.value.code == 2
+    err = capsys.readouterr().err
+    assert "--sess" in err
+    assert ("ambiguous option" in err) or ("unrecognized arguments" in err)
 
 
 # ── cmd_stop / cmd_start ──────────────────────────────────────────────────────

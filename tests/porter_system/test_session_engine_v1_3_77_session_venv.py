@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 from unittest import mock
@@ -53,6 +54,36 @@ def test_create_session_venv_idempotent(tmp_path):
     p2 = _create_session_venv(session_dir)
     assert p1 == p2
     assert p1.is_dir()
+
+
+def test_create_session_venv_returns_existing_venv_after_race(tmp_path):
+    """If concurrent creation loses the race but .venv now exists, treat it as success."""
+    session_dir = tmp_path / "sess"
+    session_dir.mkdir()
+    venv_path = session_dir / ".venv"
+
+    def _racing_create(*_args, **_kwargs):
+        venv_path.mkdir(parents=True, exist_ok=True)
+        raise subprocess.CalledProcessError(1, [sys.executable, "-m", "venv"])
+
+    with mock.patch("nutshell.session_engine.session_init.subprocess.run", side_effect=_racing_create):
+        created = _create_session_venv(session_dir)
+
+    assert created == venv_path
+    assert venv_path.exists()
+
+
+def test_create_session_venv_reraises_when_race_did_not_create_venv(tmp_path):
+    """A real venv creation failure should still surface when .venv is absent."""
+    session_dir = tmp_path / "sess"
+    session_dir.mkdir()
+
+    with mock.patch(
+        "nutshell.session_engine.session_init.subprocess.run",
+        side_effect=subprocess.CalledProcessError(1, [sys.executable, "-m", "venv"]),
+    ):
+        with pytest.raises(subprocess.CalledProcessError):
+            _create_session_venv(session_dir)
 
 
 # ── 2. _venv_env injects correct env vars ─────────────────────────────────────

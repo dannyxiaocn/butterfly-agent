@@ -55,7 +55,17 @@ class SessionEngineTest(unittest.TestCase):
             (session_dir / "core").mkdir(parents=True)
             (session_dir / "core" / "params.json").write_text("{not json", encoding="utf-8")
             params = read_session_params(session_dir)
-        self.assertEqual(params["heartbeat_interval"], 600.0)
+        self.assertEqual(params["heartbeat_interval"], 7200.0)
+
+    def test_session_params_reset_invalid_heartbeat_interval_to_default(self) -> None:
+        with TemporaryDirectory() as tmp:
+            session_dir = Path(tmp) / "session"
+            (session_dir / "core").mkdir(parents=True)
+            write_session_params(session_dir, heartbeat_interval=0)
+
+            params = read_session_params(session_dir)
+
+        self.assertEqual(params["heartbeat_interval"], 7200.0)
 
     def test_session_status_round_trips_updates(self) -> None:
         with TemporaryDirectory() as tmp:
