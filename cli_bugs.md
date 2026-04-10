@@ -1,180 +1,155 @@
-# Nutshell CLI Bug Report
+# Nutshell CLI Bug Backlog
 
-*Generated: 2026-04-10 — Full CLI test round*
+*Updated: 2026-04-10*
+
+只保留未解决问题，以及待验证的修复方向。
 
 ---
 
-## Bug 1: `--session` 在 `log` 命令中被 argparse 误解为 `--sessions-base` [高危]
+## Bug 3: `nutshell log/tasks/visit/prompt-stats` 默认 session 可能落到 meta session，而不是最近聊天 session [低危]
 
 ### 现象
+不显式传 `session_id` 时，默认 session 来自 `_sort_sessions()[0]`。
+当前排序会把运行中的 meta session 和普通聊天 session 混排，因此某些情况下：
+
 ```bash
-nutshell log --session test-cli-session
-# 实际效果：查看的是错误的 session，不会报错
+nutshell log
 ```
+
+看到的是 `<entity>_meta`，而不是用户刚刚聊天的那个 session。
 
 ### 根因
-argparse 默认开启 `allow_abbrev=True`（前缀缩写匹配）。
-`log` 子命令有 `--sessions-base` 和 `--system-base` 两个隐藏参数，
-`--session` 是 `--sessions-base` 的合法前缀缩写，因此被静默地匹配为：
-```
---sessions-base test-cli-session
-```
-这导致 sessions 查找目录被设为 `test-cli-session`（不存在），最终选出错误的 session。
+`ui/web/sessions.py` 的 `_sort_sessions()` 只按状态优先级和 `last_run_at/created_at` 排序，没有把 meta session 从“默认聊天目标”候选里排除。
 
-### 影响命令
-所有使用了 positional `session_id` + 隐藏 `--sessions-base` 的子命令：
-- `nutshell log`
-- `nutshell tasks`
-- `nutshell visit`
-- `nutshell prompt-stats`
-- `nutshell token-report`
-- `nutshell kanban`
-
-### 修复方案
-在 `main()` 的 top-level parser 中设置 `allow_abbrev=False`，或者给上述命令的子 parser 也设置。
+### 待验证修复方向
+- 给这些“默认取最近 session”的 CLI 命令增加 `exclude_meta=True` 的选择逻辑。
+- 或把“最近 session”拆成两套语义：
+  `sessions/friends` 保留全量排序，`log/tasks/visit/prompt-stats` 默认优先 non-meta session。
 
 ---
 
-## Bug 2: CLI 接口不一致 — `chat` 用 `--session`，其他命令用 positional [中危]
-
-### 现象
-```bash
-# chat 用 flag：
-nutshell chat --session test-cli-session "消息"
-
-# 其他命令用 positional：
-nutshell log test-cli-session
-nutshell tasks test-cli-session
-nutshell visit test-cli-session
-nutshell prompt-stats test-cli-session
-nutshell token-report test-cli-session
-```
-
-### 根因
-`chat` 命令的设计思路不同（消息是必需的 positional，session 是可选的），
-其他命令只需要 session_id，设计为 positional。
-这两种风格混用，导致用户（尤其从 `chat` 切换到 `log`）自然地写出 `nutshell log --session ...` 而不报错，但行为完全错误（见 Bug 1）。
-
-### 修复方案
-选一：给 `log`/`tasks`/`visit`/`prompt-stats`/`token-report` 也添加 `--session` alias（保留 positional 同时支持 flag）。
-选二：修复 Bug 1（allow_abbrev=False），让错误用法至少报错而不是静默错误。
-
----
-
-## Bug 3: `nutshell log` 默认 session 选择依赖 last_run_at，但文档说"最近活跃" [低危]
-
-### 现象
-`nutshell sessions` 的顺序和 `nutshell log` 默认选取的 session 不一致。
-`log` 选的是 `_sort_sessions()[0]`，优先级排序为：napping < idle < running，
-而 `sessions` 命令排序逻辑相同。实际表现是 meta session（agent_meta）在某些状态下会被优先选中，而用户通常期望选择"最近用于聊天的 session"。
-
-### 根因
-`_session_priority` 函数将 meta session 和 non-meta session 混排。
-用户想要的"最近的 chat session"可能排在 meta session 之后。
-
----
-
-## Bug 4: `--no-wait` 成功发送时无任何输出 [低危]
-
-### 现象
-```bash
-nutshell chat --session xxx --no-wait "消息"
-# 输出：（空）
-```
-没有任何确认信息，用户不知道消息是否真的发送成功。
-
-### 建议
-输出一行类似 `[queued] message sent to xxx` 的确认。
-
----
-
-## 验证通过的功能（正常）
-
-| 命令 | 结果 |
-|------|------|
-| `nutshell sessions` | ✅ 正确列出所有 session |
-| `nutshell friends` | ✅ IM 风格展示，在线状态正确 |
-| `nutshell friends --json` | ✅ JSON 输出格式正确 |
-| `nutshell new [id] --entity [name]` | ✅ 创建 session 正常 |
-| `nutshell chat --session [id] "msg"` | ✅ 消息发送 + agent 执行正常 |
-| `nutshell chat --session [id] --no-wait "msg"` | ✅ 异步发送正常（但见 Bug 4）|
-| `nutshell log [session_id]` | ✅ Positional 方式正确显示历史 |
-| `nutshell log [session_id] -n N` | ✅ -n 参数正常 |
-| `nutshell tasks [session_id]` | ✅ Task card 显示正常 |
-| `nutshell kanban` | ✅ 全局 task 看板正常 |
-| `nutshell visit [session_id]` | ✅ agent room 视图正常 |
-| `nutshell prompt-stats [session_id]` | ✅ Prompt 空间分析正常 |
-| `nutshell token-report [session_id]` | ✅ Token 报告正常 |
-| `nutshell meta [entity]` | ✅ 元信息查看正常 |
-| `nutshell dream [entity]` | ✅ 命令存在，参数正确 |
-| Context 连续性 | ✅ 多轮对话历史正确追加到 context.jsonl |
-| History 加载 | ✅ `load_history()` 从 context.jsonl 的 `turn` events 重建 agent._history |
-| `_sessions/<id>/context.jsonl` | ✅ 存储格式正确（user_input + turn events）|
-| `_sessions/<id>/events.jsonl` | ✅ 运行时事件独立存储 |
-
----
-
-## Bug 5: `nutshell entity new -n NAME` 仍会触发交互式提示（要求选择 parent）[低危]
+## Bug 5: `nutshell entity new -n NAME` 仍会触发交互式 parent 询问 [低危]
 
 ### 现象
 ```bash
 nutshell entity new -n my-agent
-# 输出: "Extend which entity? ..."
-# 然后 EOFError (非交互环境下)
 ```
+
+仍会继续询问 `Extend which entity?`；在非交互环境下会直接失败。
 
 ### 根因
-`cmd_entity` 中当 `args.standalone` 和 `args.extends` 都未指定时，会调用 `_ask_parent()` 进行交互式询问。`-n NAME` 只跳过了 name 询问，未跳过 parent 询问。
+`-n/--name` 只绕过了名称输入，没有绕过 parent 选择。若未显式给 `--extends` 或 `--standalone`，流程仍会进入 `_ask_parent()`。
 
-### 修复方案
-添加 `--parent NAME` flag 或让 `-n NAME` + 无 `--extends/--standalone` 时默认使用 `agent` 作为 parent（当前 help 示例误导用户认为 `-n` 足够非交互）。
-
-### 临时 workaround
-```bash
-nutshell entity new -n my-agent --extends agent
-# 或
-nutshell entity new -n my-agent --standalone
-```
+### 待验证修复方向
+- 增加 `--parent NAME`。
+- 或在 `-n NAME` 且未指定 `--extends/--standalone` 时，默认采用 `--extends agent`。
 
 ---
 
----
-
-## Bug 6: Web API `/api/sessions/{session_id}/history` 返回 HTTP 500 [高危]
+## Bug 7: `new` 子命令仍会把 `--session` / `--sess` 静默误解为 `--sessions-base` [高危]
 
 ### 现象
+当前提交虽然在 top-level parser 上加了 `allow_abbrev=False`，但这不会自动作用到子 parser。
+因此：
+
 ```bash
-curl http://localhost:8080/api/sessions/lifecycle-test/history
-# 输出：Internal Server Error (HTTP 500)
-# 所有 session 均返回 500
+nutshell new --session foo
+nutshell new --sess foo
+```
+
+不会报“未知参数”，而是被解析成：
+
+```text
+--sessions-base foo
+```
+
+最终 `session_id` 仍为空，CLI 会在错误目录下建 session 或以非常误导的方式失败。
+
+### 已确认复现
+在当前代码上直接构造 `new` 子 parser，可得到：
+
+```text
+Namespace(..., session_id=None, sessions_base=PosixPath('foo'))
 ```
 
 ### 根因
-`ui/web/app.py` 第 30 行只导入了 `write_session_status`，但 `get_history` 路由（第 242 行）调用了未导入的 `read_session_status`：
-```python
-# 原来（bug）：
-from nutshell.session_engine.session_status import write_session_status
-# ...
-status_payload = read_session_status(system_dir)  # NameError!
-```
+`ui/cli/main.py` 只在 `main()` 的顶层 `ArgumentParser` 上设置了 `allow_abbrev=False`。
+`subparsers.add_parser(...)` 新建的各个子 parser 仍然使用 `allow_abbrev=True` 默认值。
 
-### 修复方案
-```python
-from nutshell.session_engine.session_status import read_session_status, write_session_status
-```
-
-### 影响
-所有 session 的 history API 均不可用，Web UI 无法显示对话历史。
+### 待验证修复方向
+- 给所有 `subparsers.add_parser(...)` 显式传 `allow_abbrev=False`。
+- 或自定义 `parser_class`，统一关闭子命令缩写匹配。
 
 ---
 
-## 修复状态
+## Bug 8: session ID 唯一化只修了 CLI，新建 session 的其他入口仍可能发生同秒碰撞 [高危]
 
-| Bug | 状态 | 修复说明 |
-|-----|------|----------|
-| Bug 1 | ✅ 已修复 | `ui/cli/main.py`: 给 top-level parser 添加 `allow_abbrev=False`；同时给各子 parser 显式添加 `--session` flag，从根本上消除歧义 |
-| Bug 2 | ✅ 已修复 | `ui/cli/main.py`: `log`/`tasks`/`visit`/`prompt-stats`/`token-report` 均添加 `--session ID` alias（positional 仍保留）。使用 `default=argparse.SUPPRESS` 防止 positional 覆盖 optional |
-| Bug 3 | 待处理 | 低优先级，暂不修改 |
-| Bug 4 | ✅ 已修复 | `ui/cli/chat.py` `_continue_session()`: `no_wait=True` 时输出 `[queued] message sent to {session_id}` |
-| Bug 5 | 待处理 | `entity new -n NAME` 仍触发交互式 parent 询问；临时 workaround：加 `--extends agent` 或 `--standalone` |
-| Bug 6 | ✅ 已修复 | `ui/web/app.py` line 30: 添加 `read_session_status` 到 import；重启 nutshell-web 后验证所有 session history 返回 200 |
+### 现象
+当前提交给 `nutshell new` 和 `nutshell chat` 加了 `-<uuid4[:4]>` 后缀，但系统其他入口仍使用秒级时间戳：
+
+- `ui/web/app.py` `POST /api/sessions`
+- `ui/web/weixin.py` `/new`
+- `nutshell/session_engine/session.py` 默认构造
+
+这意味着“同秒双创建”在系统层面仍然存在。
+
+### 已确认复现
+固定 `ui.web.app.datetime.now()` 后，两次 `POST /api/sessions` 返回相同 ID：
+
+```text
+status 200 200
+ids 2026-04-10_23-30-00 2026-04-10_23-30-00
+same True
+```
+
+第二次调用不会报冲突，而是复用/覆盖同一个 session。
+
+### 根因
+session ID 生成策略没有收敛到统一入口；本次修复只覆盖了 CLI 的两个路径。
+
+### 系统影响
+- Web/UI 创建 session 仍可能触发目录碰撞、manifest 覆写、上下文串写。
+- 这次 commit 提到的 `.venv` race 风险，并没有在系统层面被彻底消除。
+
+### 待验证修复方向
+- 提供统一的 `generate_session_id()` 帮助函数，所有入口共用。
+- Web/API 层对重复 `session_id` 返回冲突错误，而不是静默复用。
+
+---
+
+## Bug 9: `_create_session_venv()` 会把真实的 venv 创建失败误判为“并发竞争已成功” [高危]
+
+### 现象
+当前提交在 `nutshell/session_engine/session_init.py` 中加入：
+
+- `python -m venv ...` 失败后，
+- 只要 `.venv/` 目录已经存在，
+- 就直接返回该路径并吞掉异常。
+
+这会把“半途失败留下的半成品目录”误当成成功创建。
+
+### 已确认复现
+mock `subprocess.run()` 为：
+
+1. 先创建 `.venv/`
+2. 再抛出 `CalledProcessError`
+
+当前函数会返回 `.venv` 路径，同时：
+
+```text
+pyvenv.cfg == False
+```
+
+说明返回的是损坏环境，而不是完整 venv。
+
+### 根因
+异常分支只检查目录存在，不检查 venv 完整性，也不区分“并发创建完成”与“本进程创建失败留下残骸”。
+
+### 系统影响
+- `init_session()` 可能在 venv 实际损坏时仍然报告成功。
+- 后续 terminal/tool 执行会把损坏 `.venv` 注入 `PATH` / `VIRTUAL_ENV`，导致运行环境不确定。
+- 这是本次提交引入的新回归；之前这里会直接失败并暴露错误。
+
+### 待验证修复方向
+- 仅在 `pyvenv.cfg` 和解释器文件存在时才接受“竞争者已创建完成”。
+- 更稳妥的做法是使用文件锁或临时目录 + 原子 rename，而不是靠异常后目录存在判断成功。

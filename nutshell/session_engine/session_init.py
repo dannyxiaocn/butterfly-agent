@@ -56,8 +56,9 @@ def _create_session_venv(session_dir: Path) -> Path:
             capture_output=True,
         )
     except subprocess.CalledProcessError:
-        # Another process may have won the race and already created the venv.
-        if venv_path.exists():
+        # Another process may have won the race and already created a valid venv.
+        # Check pyvenv.cfg (created last by venv) as the completion sentinel.
+        if (venv_path / "pyvenv.cfg").exists():
             return venv_path
         raise
     return venv_path

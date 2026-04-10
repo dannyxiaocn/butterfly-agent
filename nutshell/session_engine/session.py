@@ -2,6 +2,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -76,7 +77,7 @@ class Session:
         on_text_chunk: OnTextChunk | None = None,
     ) -> None:
         self._agent = agent
-        self._session_id = session_id or datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        self._session_id = session_id or (datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + "-" + uuid.uuid4().hex[:4])
         self._base_dir = base_dir
         self._system_base = system_base
         self._heartbeat_interval = heartbeat

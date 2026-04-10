@@ -14,6 +14,7 @@ import argparse
 import asyncio
 import json
 import shutil
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import AsyncIterator
@@ -153,7 +154,7 @@ def create_app(sessions_dir: Path, system_sessions_dir: Path | None = None) -> F
 
     @app.post("/api/sessions")
     async def create_session(body: dict):
-        session_id = body.get("id") or datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        session_id = body.get("id") or (datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + "-" + uuid.uuid4().hex[:4])
         entity = body.get("entity", _DEFAULT_ENTITY)
         heartbeat = float(body.get("heartbeat", 7200.0))
         _init_session(sessions_dir, system_sessions_dir, session_id, entity, heartbeat)

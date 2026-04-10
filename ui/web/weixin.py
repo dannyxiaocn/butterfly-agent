@@ -19,6 +19,7 @@ import json
 import os
 import struct
 import time
+import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -234,7 +235,7 @@ class WeixinBridge:
 
         if cmd == "/new":
             entity = arg or "entity/agent"
-            sid = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            sid = datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + "-" + uuid.uuid4().hex[:4]
             try:
                 from .sessions import _init_session
                 _init_session(self._sessions_dir, self._sys_dir, sid, entity, 600.0)

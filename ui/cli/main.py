@@ -148,6 +148,7 @@ def _read_all_sessions(
 def _add_chat_parser(subparsers) -> None:
     p = subparsers.add_parser(
         "chat",
+        allow_abbrev=False,
         help="Send a message to a session and print the response.",
         description=(
             "Send a message to an existing session or create a new one.\n\n"
@@ -208,6 +209,7 @@ def cmd_chat(args) -> int:
 def _add_sessions_parser(subparsers) -> None:
     p = subparsers.add_parser(
         "sessions",
+        allow_abbrev=False,
         help="List all sessions.",
         description="List all sessions with status, entity, and last-run time.",
     )
@@ -260,6 +262,7 @@ def cmd_sessions(args) -> int:
 def _add_new_parser(subparsers) -> None:
     p = subparsers.add_parser(
         "new",
+        allow_abbrev=False,
         help="Create a new session (no message — use 'chat' to send immediately).",
         description=(
             "Create a session from an entity. Session ID is auto-generated from\n"
@@ -436,6 +439,7 @@ def _load_context(path) -> tuple[dict, list]:
 def _add_log_parser(subparsers) -> None:
     p = subparsers.add_parser(
         "log",
+        allow_abbrev=False,
         help="Show recent conversation history for a session.",
         description=(
             "Display the last N conversation turns from a session.\n\n"
@@ -617,6 +621,7 @@ def _print_turns(turns: list[dict], inputs_by_id: dict[str, dict]) -> None:
 def _add_token_report_parser(subparsers) -> None:
     p = subparsers.add_parser(
         "token-report",
+        allow_abbrev=False,
         help="Show per-turn token usage breakdown for a session.",
         description=(
             "Display token costs per turn with totals and cache efficiency.\n\n"
@@ -748,6 +753,7 @@ def cmd_token_report(args) -> int:
 def _add_tasks_parser(subparsers) -> None:
     p = subparsers.add_parser(
         "tasks",
+        allow_abbrev=False,
         help="Show a session's task cards (core/tasks/).",
         description=(
             "Display task cards for a session.\n\n"
@@ -815,6 +821,7 @@ _MEMORY_LAYER_INLINE_LINES = 60  # must match Agent._MEMORY_LAYER_INLINE_LINES
 def _add_prompt_stats_parser(subparsers) -> None:
     p = subparsers.add_parser(
         "prompt-stats",
+        allow_abbrev=False,
         help="Show prompt space breakdown for a session.",
         description=(
             "Display a component-by-component breakdown of system prompt size.\n\n"
@@ -1046,6 +1053,7 @@ def _exec_entrypoint(name: str) -> int:
 def _add_kanban_parser(subparsers) -> None:
     p = subparsers.add_parser(
         "kanban",
+        allow_abbrev=False,
         help="Unified task board — show task cards for all sessions.",
         description=(
             "Display every session's task board in one view.\n\n"
@@ -1091,6 +1099,7 @@ def cmd_kanban(args) -> int:
 def _add_friends_parser(subparsers) -> None:
     p = subparsers.add_parser(
         "friends",
+        allow_abbrev=False,
         help="IM-style session list with online/idle/offline status.",
         description=(
             "Show all sessions as a contact list with live status indicators.\n\n"
@@ -1185,6 +1194,7 @@ def _cmd_repo_dev(args) -> int:
 def _add_visit_parser(subparsers) -> None:
     p = subparsers.add_parser(
         "visit",
+        allow_abbrev=False,
         help="Agent room view — detailed status of a single session.",
         description=(
             "Show an agent's room: identity, status, recent activity,\n"
@@ -1218,6 +1228,7 @@ def _cmd_visit(args) -> int:
 def _add_dream_parser(subparsers) -> None:
     p = subparsers.add_parser(
         "dream",
+        allow_abbrev=False,
         help="Trigger the meta agent to run its dream cycle.",
         description="Sends a wake-up message to the entity's meta session, prompting it to review all child sessions.",
     )
@@ -1267,6 +1278,7 @@ def _read_meta_info(meta_dir: Path) -> dict:
 def _add_meta_parser(subparsers) -> None:
     p = subparsers.add_parser(
         "meta",
+        allow_abbrev=False,
         help="Show entity meta-session info.",
         description="Show all or one _meta session state.",
     )
