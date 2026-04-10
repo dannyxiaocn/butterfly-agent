@@ -100,10 +100,10 @@ def _context_event_to_display(event: dict, *, for_history: bool = False) -> list
                             thinking_text = block.get("thinking", "")
                             if thinking_text:
                                 thinking_ev: dict = {"type": "thinking", "content": thinking_text, "ts": ts}
-                                if not for_history:
-                                    # Use per-block index so multiple thinking blocks
-                                    # in one turn get distinct IDs and survive dedup.
-                                    thinking_ev["id"] = f"thinking:{ts}:{thinking_idx}"
+                                # Always set id (not guarded by for_history) so thinking events
+                                # returned by the history endpoint can also be deduped client-side,
+                                # preventing repeat renders on visibilitychange (Bug 4).
+                                thinking_ev["id"] = f"thinking:{ts}:{thinking_idx}"
                                 thinking_idx += 1
                                 result.append(thinking_ev)
 

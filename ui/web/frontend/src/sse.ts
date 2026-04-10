@@ -39,11 +39,12 @@ export class SSEConnection {
   }
 
   /** Re-connect immediately with fresh offsets (e.g. after tab regains focus).
-   * sessionId must match the currently attached session; otherwise no-op. */
+   * sessionId must match the currently attached session; otherwise no-op.
+   * Uses Math.max so SSE's already-advanced offsets are never rolled back (Bug 2). */
   reconnectWithOffsets(sessionId: string, contextSince: number, eventsSince: number): void {
     if (this.closed || !this.sessionId || this.sessionId !== sessionId) return;
-    this.contextSince = contextSince;
-    this.eventsSince = eventsSince;
+    this.contextSince = Math.max(this.contextSince, contextSince);
+    this.eventsSince = Math.max(this.eventsSince, eventsSince);
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -85,7 +86,12 @@ export class SSEConnection {
           // Dedup by event data 'id' field (only permanent events carry an id).
           // Ephemeral events (partial_text, model_status, tool) have no id and
           // always pass through — their handlers are idempotent.
-          const eventId = data.id;
+          // Strip meta-fields before passing to handler so they don't leak
+          // into DisplayEvent objects seen by renderEvent/handleEvent (Bug 3).
+          const { _ctx, _evt, ...cleanData } = data as any;
+          const cleanEvent = cleanData as DisplayEvent;
+
+          const eventId = cleanEvent.id;
           if (eventId) {
             if (this.seenIds.has(eventId)) return;
             this.seenIds.add(eventId);
@@ -95,7 +101,7 @@ export class SSEConnection {
               this.seenIds = new Set(arr.slice(arr.length - 1000));
             }
           }
-          this.handler?.(data);
+          this.handler?.(cleanEvent);
         } catch {
           // ignore parse errors
         }
