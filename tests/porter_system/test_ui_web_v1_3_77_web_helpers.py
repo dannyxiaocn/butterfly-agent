@@ -2,14 +2,17 @@ from __future__ import annotations
 
 import json
 import unittest
+from datetime import datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 
 from ui.web.app import _sse_format, create_app
 from ui.web.sessions import _init_session, _sort_sessions
+from ui.web.weixin import WeixinBridge
 
 
 class WebHelpersTest(unittest.TestCase):
@@ -72,6 +75,38 @@ class WebHelpersTest(unittest.TestCase):
         self.assertEqual(sessions.status_code, 200)
         self.assertEqual(len(sessions.json()), 2)
         self.assertEqual(blocked.status_code, 403)
+
+    def test_weixin_new_command_generates_unique_session_ids(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bridge = WeixinBridge(root / "sessions", root / "_sessions")
+            fixed = datetime(2026, 4, 10, 23, 59, 59)
+            fake_client = object()
+
+            async def _run() -> None:
+                with patch("ui.web.sessions._init_session") as init_mock, patch.object(
+                    bridge,
+                    "_send_text",
+                    new=AsyncMock(),
+                ) as send_mock, patch("ui.web.weixin.datetime") as mock_dt, patch("ui.web.weixin.uuid.uuid4") as mock_uuid:
+                    mock_dt.now.return_value = fixed
+                    mock_uuid.side_effect = [
+                        SimpleNamespace(hex="aaaabbbbccccdddd"),
+                        SimpleNamespace(hex="1111222233334444"),
+                    ]
+                    await bridge._handle_command(fake_client, "user-1", "/new", None)
+                    first_sid = bridge._current_session
+                    await bridge._handle_command(fake_client, "user-1", "/new", None)
+                    second_sid = bridge._current_session
+
+                self.assertNotEqual(first_sid, second_sid)
+                self.assertTrue(str(first_sid).startswith("2026-04-10_23-59-59-"))
+                self.assertTrue(str(second_sid).startswith("2026-04-10_23-59-59-"))
+                self.assertEqual(init_mock.call_count, 2)
+                self.assertEqual(send_mock.await_count, 2)
+
+            import asyncio
+            asyncio.run(_run())
 
 
 if __name__ == "__main__":

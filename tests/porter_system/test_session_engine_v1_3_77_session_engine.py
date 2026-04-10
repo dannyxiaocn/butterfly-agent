@@ -6,6 +6,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from nutshell.core.agent import Agent
@@ -165,6 +166,25 @@ class SessionEngineTest(unittest.TestCase):
 
             status = read_session_status(session.system_dir)
             self.assertEqual(status["status"], "active")
+
+    def test_session_default_id_uses_uuid_suffix_for_same_second_uniqueness(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fixed = datetime(2026, 4, 10, 23, 59, 59)
+            with patch("nutshell.session_engine.session.datetime") as mock_dt, patch(
+                "nutshell.session_engine.session.uuid.uuid4"
+            ) as mock_uuid:
+                mock_dt.now.return_value = fixed
+                mock_uuid.side_effect = [
+                    SimpleNamespace(hex="aaaabbbbccccdddd"),
+                    SimpleNamespace(hex="1111222233334444"),
+                ]
+                s1 = Session(Agent(provider=None), base_dir=root / "sessions", system_base=root / "_sessions")
+                s2 = Session(Agent(provider=None), base_dir=root / "sessions", system_base=root / "_sessions")
+
+            self.assertNotEqual(s1.session_dir.name, s2.session_dir.name)
+            self.assertTrue(s1.session_dir.name.startswith("2026-04-10_23-59-59-"))
+            self.assertTrue(s2.session_dir.name.startswith("2026-04-10_23-59-59-"))
 
 
 if __name__ == "__main__":

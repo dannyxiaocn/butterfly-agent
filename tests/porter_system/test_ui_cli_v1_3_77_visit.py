@@ -283,11 +283,15 @@ class TestCmdVisit:
         assert parsed["entity"] == "agent"
 
     def test_default_latest_session(self, tmp_path: Path, capsys):
-        # Create two sessions, should pick the latest (alphabetically last)
-        for sid in ["2026-01-01_00-00-00", "2026-02-01_00-00-00"]:
+        # Create two sessions; should pick the most recently active one.
+        fixtures = [
+            ("2026-01-01_00-00-00", "2026-01-01T00:00:00"),
+            ("2026-02-01_00-00-00", "2026-02-01T00:00:00"),
+        ]
+        for sid, created_at in fixtures:
             _make_session(
                 tmp_path, sid,
-                manifest={"entity": f"ent-{sid[:7]}"},
+                manifest={"entity": f"ent-{sid[:7]}", "created_at": created_at},
                 status={"status": "active"},
             )
         args = Namespace(
@@ -300,6 +304,31 @@ class TestCmdVisit:
         assert ret == 0
         out = capsys.readouterr().out
         assert "2026-02-01_00-00-00" in out
+
+    def test_default_session_skips_meta_when_non_meta_exists(self, tmp_path: Path, capsys):
+        _make_session(
+            tmp_path,
+            "zz_agent_meta",
+            manifest={"entity": "agent", "created_at": "2026-01-01T00:00:00"},
+            status={"status": "active"},
+        )
+        _make_session(
+            tmp_path,
+            "2026-02-01_00-00-00",
+            manifest={"entity": "agent", "created_at": "2026-02-01T00:00:00"},
+            status={"status": "active"},
+        )
+        args = Namespace(
+            session_id=None,
+            as_json=False,
+            sessions_base=tmp_path / "sessions",
+            system_base=tmp_path / "_sessions",
+        )
+        ret = cmd_visit(args)
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "Session: 2026-02-01_00-00-00" in out
+        assert "Session: zz_agent_meta" not in out
 
     def test_session_not_found(self, tmp_path: Path, capsys):
         (tmp_path / "_sessions").mkdir(parents=True, exist_ok=True)

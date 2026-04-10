@@ -17,6 +17,8 @@ from ui.cli.main import (
     cmd_start,
     cmd_log,
     cmd_tasks,
+    cmd_entity,
+    _add_new_parser,
     _add_log_parser,
     _add_prompt_stats_parser,
     _add_tasks_parser,
@@ -221,6 +223,98 @@ def test_main_disables_option_abbreviation(capsys):
     assert ("ambiguous option" in err) or ("unrecognized arguments" in err)
 
 
+@pytest.mark.parametrize("flag", ["--session", "--sess"])
+def test_new_subcommand_does_not_silently_reinterpret_session_like_flags(flag):
+    try:
+        args = _parse_subcommand(_add_new_parser, ["new", flag, "demo-session"])
+    except SystemExit as exc:
+        assert exc.code == 2
+        return
+
+    assert args.sessions_base != Path("demo-session")
+
+
+def test_cmd_log_defaults_to_non_meta_session_when_meta_is_first(tmp_path, capsys):
+    import types
+    from unittest.mock import patch
+
+    system_base = tmp_path / "_sessions"
+    sessions_base = tmp_path / "sessions"
+    system_base.mkdir()
+    sessions_base.mkdir()
+
+    def _seed_context(session_id: str, reply: str) -> None:
+        system_dir = system_base / session_id
+        system_dir.mkdir()
+        (system_dir / "manifest.json").write_text(json.dumps({"entity": "agent"}), encoding="utf-8")
+        (system_dir / "context.jsonl").write_text(
+            "\n".join(
+                [
+                    json.dumps({"type": "user_input", "id": "u1", "content": "hello", "ts": "2026-03-25T10:00:00"}),
+                    json.dumps(
+                        {
+                            "type": "turn",
+                            "user_input_id": "u1",
+                            "ts": "2026-03-25T10:00:01",
+                            "messages": [{"role": "assistant", "content": reply}],
+                        }
+                    ),
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+    _seed_context("agent_meta", "meta reply")
+    _seed_context("chat-session", "user reply")
+
+    args = types.SimpleNamespace(
+        session_id=None,
+        num_turns=5,
+        since=None,
+        watch=False,
+        system_base=system_base,
+        sessions_base=sessions_base,
+    )
+
+    def fake_read_all_sessions(_sessions_base, _system_base, *, exclude_meta=False):
+        assert exclude_meta is True
+        return [{"id": "chat-session"}]
+
+    with patch("ui.cli.main._read_all_sessions", side_effect=fake_read_all_sessions):
+        code = cmd_log(args)
+
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "[chat-session]" in out
+    assert "user reply" in out
+    assert "meta reply" not in out
+
+
+def test_cmd_entity_name_only_does_not_require_parent_prompt(tmp_path, capsys):
+    from argparse import Namespace
+    from unittest.mock import patch
+
+    created = tmp_path / "child"
+    args = Namespace(
+        entity_cmd="new",
+        name="child",
+        extends=None,
+        standalone=False,
+        entity_dir=str(tmp_path),
+    )
+
+    with patch("ui.cli.new_agent._ask_parent", side_effect=AssertionError("interactive parent prompt should not be used")), patch(
+        "ui.cli.new_agent.create_entity",
+        return_value=created,
+    ) as create_entity:
+        code = cmd_entity(args)
+
+    assert code == 0
+    create_entity.assert_called_once()
+    assert "Created:" in capsys.readouterr().out
+
+
 # ── cmd_stop / cmd_start ──────────────────────────────────────────────────────
 
 def test_cmd_stop_and_start(tmp_path, capsys):
@@ -339,6 +433,40 @@ def test_cmd_tasks_defaults_to_latest(tmp_path, capsys):
     out = capsys.readouterr().out
     # Output should reference one of the sessions (whichever is "latest")
     assert "session" in out
+
+
+def test_cmd_tasks_defaults_to_non_meta_session(tmp_path, capsys):
+    import argparse
+    from unittest.mock import patch
+
+    sessions = tmp_path / "sessions"
+    system = tmp_path / "_sessions"
+    (sessions / "agent_meta" / "core" / "tasks").mkdir(parents=True)
+    (sessions / "chat-session" / "core" / "tasks").mkdir(parents=True)
+    (system / "agent_meta").mkdir(parents=True)
+    (system / "chat-session").mkdir(parents=True)
+    (system / "agent_meta" / "manifest.json").write_text(json.dumps({"entity": "agent"}), encoding="utf-8")
+    (system / "chat-session" / "manifest.json").write_text(json.dumps({"entity": "agent"}), encoding="utf-8")
+    (sessions / "agent_meta" / "core" / "tasks" / "heartbeat.md").write_text("meta task", encoding="utf-8")
+    (sessions / "chat-session" / "core" / "tasks" / "real.md").write_text("chat task", encoding="utf-8")
+
+    args = argparse.Namespace(
+        session_id=None,
+        sessions_base=sessions,
+        system_base=system,
+    )
+
+    def fake_read_all_sessions(_sessions_base, _system_base, *, exclude_meta=False):
+        assert exclude_meta is True
+        return [{"id": "chat-session"}]
+
+    with patch("ui.cli.main._read_all_sessions", side_effect=fake_read_all_sessions):
+        code = cmd_tasks(args)
+
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "[chat-session]" in out
+    assert "[agent_meta]" not in out
 
 
 # ── _fmt_msg_content ──────────────────────────────────────────────────────────

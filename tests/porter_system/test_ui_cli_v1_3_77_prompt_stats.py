@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 import pytest
+from unittest.mock import patch
 
 from ui.cli.main import cmd_prompt_stats, _MEMORY_LAYER_INLINE_LINES
 
@@ -152,3 +153,27 @@ def test_prompt_stats_tokens_approximate(tmp_path, capsys):
     assert rc == 0
     out = capsys.readouterr().out
     assert "100" in out
+
+
+def test_prompt_stats_default_session_skips_meta(tmp_path, capsys):
+    sessions_base, system_base = _make_session(tmp_path, "agent_meta")
+    meta_core = sessions_base / "agent_meta" / "core"
+    (meta_core / "system.md").write_text("meta system", encoding="utf-8")
+
+    _make_session(tmp_path, "chat-session")
+    chat_core = sessions_base / "chat-session" / "core"
+    (chat_core / "system.md").write_text("chat system", encoding="utf-8")
+
+    args = _FakeArgs(None, sessions_base, system_base)
+
+    def fake_read_all_sessions(_sessions_base, _system_base, *, exclude_meta=False):
+        assert exclude_meta is True
+        return [{"id": "chat-session"}]
+
+    with patch("ui.cli.main._read_all_sessions", side_effect=fake_read_all_sessions):
+        rc = cmd_prompt_stats(args)
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "[chat-session] prompt-stats" in out
+    assert "[agent_meta] prompt-stats" not in out

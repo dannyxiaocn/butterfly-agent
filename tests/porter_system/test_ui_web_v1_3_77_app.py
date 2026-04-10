@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import unittest
+from datetime import datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -243,3 +245,21 @@ class WebUnitTests(unittest.TestCase):
             with TestClient(app) as client:
                 resp = client.delete("/api/sessions/test-session/tasks/bad%5Cname")
             self.assertEqual(resp.status_code, 400)
+
+    def test_create_session_same_second_does_not_silently_reuse_existing_id(self) -> None:
+        fixed = datetime(2026, 4, 10, 23, 30, 0)
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            app = create_app(root / "sessions", root / "_sessions")
+            with patch("ui.web.app.datetime") as mock_dt:
+                mock_dt.now.return_value = fixed
+                mock_dt.fromisoformat = datetime.fromisoformat
+                with TestClient(app) as client:
+                    first = client.post("/api/sessions", json={"entity": "agent"})
+                    second = client.post("/api/sessions", json={"entity": "agent"})
+
+            self.assertEqual(first.status_code, 200)
+            self.assertTrue(
+                second.status_code == 409 or first.json()["id"] != second.json()["id"],
+                "session creation should either generate a unique ID or reject the duplicate",
+            )

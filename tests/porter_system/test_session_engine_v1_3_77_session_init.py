@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 import shutil
 import unittest
 import uuid
@@ -7,7 +8,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from nutshell.session_engine.session_init import init_session
+from nutshell.session_engine.session_init import _create_session_venv, init_session
 
 
 def _repo_root() -> Path:
@@ -70,3 +71,20 @@ class SessionInitUnitTests(unittest.TestCase):
             if leaked_meta_dir.exists():
                 shutil.rmtree(leaked_meta_dir)
 
+
+def test_create_session_venv_does_not_accept_incomplete_existing_directory(tmp_path):
+    session_dir = tmp_path / "demo"
+    session_dir.mkdir()
+    venv_path = session_dir / ".venv"
+
+    def fake_run(*args, **kwargs):
+        venv_path.mkdir()
+        raise subprocess.CalledProcessError(1, args[0])
+
+    with patch("nutshell.session_engine.session_init.subprocess.run", side_effect=fake_run):
+        try:
+            result = _create_session_venv(session_dir)
+        except subprocess.CalledProcessError:
+            return
+
+    assert (result / "pyvenv.cfg").exists()
