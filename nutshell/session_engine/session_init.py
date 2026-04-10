@@ -41,15 +41,25 @@ def _create_session_venv(session_dir: Path) -> Path:
 
     Uses --system-site-packages so all globally installed packages are
     available without re-installing.  Returns the venv path.
+
+    Race-safe: if two processes attempt concurrent creation (same session_id
+    generated within the same second), the loser catches CalledProcessError
+    and returns the venv that the winner already created.
     """
     venv_path = session_dir / ".venv"
     if venv_path.exists():
         return venv_path
-    subprocess.run(
-        [sys.executable, "-m", "venv", "--system-site-packages", str(venv_path)],
-        check=True,
-        capture_output=True,
-    )
+    try:
+        subprocess.run(
+            [sys.executable, "-m", "venv", "--system-site-packages", str(venv_path)],
+            check=True,
+            capture_output=True,
+        )
+    except subprocess.CalledProcessError:
+        # Another process may have won the race and already created the venv.
+        if venv_path.exists():
+            return venv_path
+        raise
     return venv_path
 
 

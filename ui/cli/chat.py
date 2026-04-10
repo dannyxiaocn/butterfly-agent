@@ -141,6 +141,7 @@ def _continue_session(
     msg_id = _send_message(ctx_path, message, caller=caller)
 
     if no_wait:
+        print(f"[queued] message sent to {session_id}")
         return 0
 
     reply = _wait_for_reply(ctx_path, msg_id, timeout)
@@ -179,7 +180,7 @@ def _new_session(
         print(f"Error: failed to load entity '{entity_name}': {exc}", file=sys.stderr)
         return 1
 
-    session_id = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    session_id = datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + "-" + uuid.uuid4().hex[:4]
 
     # Populate core/ with entity files so _load_session_capabilities() finds them
     try:

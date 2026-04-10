@@ -29,6 +29,7 @@ import json
 import os
 import sys
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -288,7 +289,7 @@ def _add_new_parser(subparsers) -> None:
 
 def cmd_new(args) -> int:
     from nutshell.session_engine.session_init import init_session
-    session_id = args.session_id or datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    session_id = args.session_id or (datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + "-" + uuid.uuid4().hex[:4])
     entity_dir = _REPO_ROOT / "entity" / args.entity
     if not entity_dir.exists():
         print(f"Error: entity '{args.entity}' not found in entity/", file=sys.stderr)
@@ -448,8 +449,10 @@ def _add_log_parser(subparsers) -> None:
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p.add_argument("session_id", nargs="?", default=None,
+    p.add_argument("session_id", nargs="?", default=argparse.SUPPRESS,
                    help="Session ID (default: most recently active session)")
+    p.add_argument("--session", dest="session_id", metavar="ID", default=None,
+                   help="Session ID (alias for positional session_id)")
     p.add_argument("-n", type=int, default=5, dest="num_turns",
                    metavar="N", help="Number of turns to show (default: 5)")
     p.add_argument("--since", type=str, default=None, metavar="TIMESTAMP",
@@ -623,8 +626,10 @@ def _add_token_report_parser(subparsers) -> None:
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p.add_argument("session_id", nargs="?", default=None,
+    p.add_argument("session_id", nargs="?", default=argparse.SUPPRESS,
                    help="Session ID (default: most recently active session)")
+    p.add_argument("--session", dest="session_id", metavar="ID", default=None,
+                   help="Session ID (alias for positional session_id)")
     p.add_argument("--system-base", type=Path, default=_DEFAULT_SYSTEM_BASE,
                    help=argparse.SUPPRESS)
     p.add_argument("--sessions-base", type=Path, default=_DEFAULT_SESSIONS_BASE,
@@ -752,8 +757,10 @@ def _add_tasks_parser(subparsers) -> None:
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p.add_argument("session_id", nargs="?", default=None,
+    p.add_argument("session_id", nargs="?", default=argparse.SUPPRESS,
                    help="Session ID (default: most recently active session)")
+    p.add_argument("--session", dest="session_id", metavar="ID", default=None,
+                   help="Session ID (alias for positional session_id)")
     p.add_argument("--system-base", type=Path, default=_DEFAULT_SYSTEM_BASE,
                    help=argparse.SUPPRESS)
     p.add_argument("--sessions-base", type=Path, default=_DEFAULT_SESSIONS_BASE,
@@ -817,8 +824,10 @@ def _add_prompt_stats_parser(subparsers) -> None:
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p.add_argument("session_id", nargs="?", default=None,
+    p.add_argument("session_id", nargs="?", default=argparse.SUPPRESS,
                    help="Session ID (default: most recently active session)")
+    p.add_argument("--session", dest="session_id", metavar="ID", default=None,
+                   help="Session ID (alias for positional session_id)")
     p.add_argument("--system-base", type=Path, default=_DEFAULT_SYSTEM_BASE,
                    help=argparse.SUPPRESS)
     p.add_argument("--sessions-base", type=Path, default=_DEFAULT_SESSIONS_BASE,
@@ -1187,8 +1196,10 @@ def _add_visit_parser(subparsers) -> None:
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p.add_argument("session_id", nargs="?", default=None, metavar="SESSION_ID",
+    p.add_argument("session_id", nargs="?", default=argparse.SUPPRESS, metavar="SESSION_ID",
                    help="Session ID (default: latest session)")
+    p.add_argument("--session", dest="session_id", metavar="ID", default=None,
+                   help="Session ID (alias for positional session_id)")
     p.add_argument("--json", action="store_true", dest="as_json",
                    help="Output as JSON")
     p.add_argument("--system-base", type=Path, default=_DEFAULT_SYSTEM_BASE,
@@ -1361,6 +1372,7 @@ def main() -> None:
         prog="nutshell",
         description="Nutshell agent runtime CLI.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
+        allow_abbrev=False,
         epilog=(
             "Session management (no server required):\n"
             "  nutshell sessions                   List all sessions\n"
