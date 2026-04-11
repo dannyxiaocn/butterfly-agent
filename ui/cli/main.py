@@ -495,6 +495,9 @@ def cmd_log(args) -> int:
     except FileNotFoundError:
         print(f"Error: session '{session_id}' not found", file=sys.stderr)
         return 1
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
 
     if not turns_to_show:
         if pending_inputs:
@@ -839,6 +842,9 @@ def cmd_prompt_stats(args) -> int:
         stats = get_prompt_stats(session_id, args.sessions_base, args.system_base)
     except FileNotFoundError:
         print(f"Error: session '{session_id}' not found", file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
         return 1
 
     rows = [(r["label"], r["lines"], r["chars"], r["tokens"], r["note"]) for r in stats["rows"]]

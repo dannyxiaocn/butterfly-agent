@@ -50,6 +50,49 @@ class WebUnitTests(unittest.TestCase):
             self.assertEqual(start_response.status_code, 404)
             self.assertFalse((root / "_sessions" / "missing").exists())
 
+    def test_invalid_session_id_returns_400_instead_of_server_error(self) -> None:
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            app = create_app(root / "sessions", root / "_sessions")
+            with TestClient(app, raise_server_exceptions=False) as client:
+                responses = [
+                    client.get("/api/sessions/bad.id"),
+                    client.get("/api/sessions/bad.id/history"),
+                    client.get("/api/sessions/bad.id/hud"),
+                    client.get("/api/sessions/bad.id/events"),
+                    client.post("/api/sessions/bad.id/messages", json={"content": "hi"}),
+                    client.post("/api/sessions", json={"id": "bad.id", "entity": "agent"}),
+                ]
+
+            for response in responses:
+                self.assertEqual(response.status_code, 400)
+
+    def test_history_endpoint_returns_display_history(self) -> None:
+        with TemporaryDirectory() as td:
+            root = _make_session(Path(td))
+            system_dir = root / "_sessions" / "test-session"
+            (system_dir / "context.jsonl").write_text(
+                "\n".join([
+                    json.dumps({"type": "user_input", "id": "u1", "content": "hello", "ts": "2026-03-25T10:00:00"}),
+                    json.dumps({
+                        "type": "turn",
+                        "user_input_id": "u1",
+                        "ts": "2026-03-25T10:00:05",
+                        "messages": [{"role": "assistant", "content": "hi there"}],
+                    }),
+                ]) + "\n",
+                encoding="utf-8",
+            )
+            app = create_app(root / "sessions", root / "_sessions")
+            with TestClient(app) as client:
+                resp = client.get("/api/sessions/test-session/history")
+
+            self.assertEqual(resp.status_code, 200)
+            payload = resp.json()
+            self.assertEqual([event["type"] for event in payload["events"]], ["user", "agent"])
+            self.assertEqual(payload["events"][0]["content"], "hello")
+            self.assertEqual(payload["events"][1]["content"], "hi there")
+
     def test_get_tasks_returns_empty_cards_for_new_session(self) -> None:
         with TemporaryDirectory() as td:
             root = _make_session(Path(td))

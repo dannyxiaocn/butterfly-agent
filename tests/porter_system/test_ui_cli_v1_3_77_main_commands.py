@@ -554,6 +554,27 @@ def test_cmd_log_no_history(tmp_path, capsys):
     assert "No conversation" in capsys.readouterr().out
 
 
+def test_cmd_log_shows_pending_user_inputs_without_completed_turns(tmp_path, capsys):
+    import argparse
+    events = [
+        {"type": "user_input", "content": "queued one", "id": "uid-1", "ts": "2026-03-25T10:00:00"},
+        {"type": "user_input", "content": "queued two", "id": "uid-2", "ts": "2026-03-25T10:01:00"},
+    ]
+    sessions, system = _seed_context(tmp_path, "pending-session", events)
+    args = argparse.Namespace(
+        session_id="pending-session",
+        num_turns=5,
+        sessions_base=sessions,
+        system_base=system,
+    )
+    code = cmd_log(args)
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "pending (no agent response yet)" in out
+    assert "queued one" in out
+    assert "queued two" in out
+
+
 def test_cmd_log_not_found(tmp_path, capsys):
     import argparse
     args = argparse.Namespace(
@@ -565,6 +586,21 @@ def test_cmd_log_not_found(tmp_path, capsys):
     code = cmd_log(args)
     assert code == 1
     assert "not found" in capsys.readouterr().err
+
+
+def test_cmd_log_rejects_invalid_session_id(tmp_path, capsys):
+    import argparse
+    args = argparse.Namespace(
+        session_id="bad.id",
+        num_turns=5,
+        sessions_base=tmp_path / "sessions",
+        system_base=tmp_path / "_sessions",
+        since=None,
+        watch=False,
+    )
+    code = cmd_log(args)
+    assert code == 1
+    assert "Invalid session_id" in capsys.readouterr().err
 
 
 def test_cmd_log_limits_turns(tmp_path, capsys):

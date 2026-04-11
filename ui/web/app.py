@@ -42,6 +42,7 @@ from nutshell.service import (
     upsert_task as service_upsert_task,
     delete_task as service_delete_task,
 )
+from nutshell.service.sessions_service import _validate_session_id as _service_validate_session_id
 
 SESSIONS_DIR = Path(__file__).parent.parent.parent / "sessions"
 _SYSTEM_SESSIONS_DIR = Path(__file__).parent.parent.parent / "_sessions"
@@ -110,6 +111,19 @@ def _parse_task_status(value) -> str:
     return status
 
 
+def _raise_session_error(exc: Exception, session_id: str) -> None:
+    if isinstance(exc, ValueError):
+        raise HTTPException(400, str(exc))
+    raise HTTPException(404, f"Session not found: {session_id}")
+
+
+def _validate_session_id_or_400(session_id: str) -> None:
+    try:
+        _service_validate_session_id(session_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
 def create_app(sessions_dir: Path, system_sessions_dir: Path | None = None) -> FastAPI:
     if system_sessions_dir is None:
         system_sessions_dir = sessions_dir.parent / "_sessions"
@@ -141,13 +155,13 @@ def create_app(sessions_dir: Path, system_sessions_dir: Path | None = None) -> F
 
     @app.get("/api/sessions/{session_id}")
     async def get_session(session_id: str):
-        info = service_get_session(session_id, sessions_dir, system_sessions_dir)
-        if info is None:
-            raise HTTPException(404, f"Session not found: {session_id}")
         try:
+            info = service_get_session(session_id, sessions_dir, system_sessions_dir)
+            if info is None:
+                raise FileNotFoundError(session_id)
             params_view = service_get_config(session_id, sessions_dir, system_sessions_dir)
-        except FileNotFoundError:
-            raise HTTPException(404, f"Session not found: {session_id}")
+        except (FileNotFoundError, ValueError) as exc:
+            _raise_session_error(exc, session_id)
         return {**info, "params": params_view}
 
     @app.post("/api/sessions")
@@ -155,7 +169,10 @@ def create_app(sessions_dir: Path, system_sessions_dir: Path | None = None) -> F
         session_id = body.get("id") or (datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + "-" + uuid.uuid4().hex[:4])
         entity = body.get("entity", _DEFAULT_ENTITY)
         heartbeat = float(body.get("heartbeat", 7200.0))
-        return service_create_session(session_id, entity, heartbeat, sessions_dir, system_sessions_dir)
+        try:
+            return service_create_session(session_id, entity, heartbeat, sessions_dir, system_sessions_dir)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
 
     @app.post("/api/sessions/{session_id}/messages")
     async def send_message(session_id: str, body: dict):
@@ -163,8 +180,8 @@ def create_app(sessions_dir: Path, system_sessions_dir: Path | None = None) -> F
             raise HTTPException(403, "Direct chat with meta sessions is disabled.")
         try:
             msg_id = service_send_message(session_id, body.get("content", ""), system_sessions_dir)
-        except FileNotFoundError:
-            raise HTTPException(404, f"Session not found: {session_id}")
+        except (FileNotFoundError, ValueError) as exc:
+            _raise_session_error(exc, session_id)
         return {"id": msg_id}
 
     @app.post("/api/sessions/{session_id}/interrupt")
@@ -176,8 +193,8 @@ def create_app(sessions_dir: Path, system_sessions_dir: Path | None = None) -> F
         """
         try:
             service_interrupt_session(session_id, system_sessions_dir)
-        except FileNotFoundError:
-            raise HTTPException(404, f"Session not found: {session_id}")
+        except (FileNotFoundError, ValueError) as exc:
+            _raise_session_error(exc, session_id)
         return {"ok": True}
 
     @app.get("/api/sessions/{session_id}/events")
@@ -196,6 +213,7 @@ def create_app(sessions_dir: Path, system_sessions_dir: Path | None = None) -> F
         Event dedup is handled by BridgeSession.async_iter_events(), which
         uses a BoundedIDSet ring buffer to drop re-delivered events.
         """
+        _validate_session_id_or_400(session_id)
         system_dir = system_sessions_dir / session_id
         if not system_dir.exists():
             raise HTTPException(404, f"Session not found: {session_id}")
@@ -222,31 +240,39 @@ def create_app(sessions_dir: Path, system_sessions_dir: Path | None = None) -> F
     async def get_history(session_id: str, context_since: int = 0):
         try:
             return service_get_history(session_id, system_sessions_dir, context_since=context_since)
-        except FileNotFoundError:
-            raise HTTPException(404, f"Session not found: {session_id}")
+        except (FileNotFoundError, ValueError) as exc:
+            _raise_session_error(exc, session_id)
 
     @app.post("/api/sessions/{session_id}/stop")
     async def stop_session(session_id: str):
-        if not service_stop_session(session_id, system_sessions_dir):
+        try:
+            stopped = service_stop_session(session_id, system_sessions_dir)
+        except ValueError as exc:
+            _raise_session_error(exc, session_id)
+        if not stopped:
             raise HTTPException(404, f"Session not found: {session_id}")
         return {"ok": True}
 
     @app.post("/api/sessions/{session_id}/start")
     async def start_session(session_id: str):
-        if not service_start_session(session_id, system_sessions_dir):
+        try:
+            started = service_start_session(session_id, system_sessions_dir)
+        except ValueError as exc:
+            _raise_session_error(exc, session_id)
+        if not started:
             raise HTTPException(404, f"Session not found: {session_id}")
         return {"ok": True}
 
     @app.get("/api/sessions/{session_id}/tasks")
     async def get_tasks(session_id: str):
-        return {"cards": service_get_tasks(session_id, sessions_dir)}
+        try:
+            return {"cards": service_get_tasks(session_id, sessions_dir)}
+        except ValueError as exc:
+            _raise_session_error(exc, session_id)
 
 
     @app.put("/api/sessions/{session_id}/tasks")
     async def set_tasks(session_id: str, body: dict):
-        session_dir = sessions_dir / session_id
-        if not session_dir.exists():
-            raise HTTPException(404, f"Session not found: {session_id}")
         payload = dict(body)
         if "name" in payload:
             payload["name"] = _normalize_task_name(payload["name"])
@@ -261,18 +287,23 @@ def create_app(sessions_dir: Path, system_sessions_dir: Path | None = None) -> F
             if "status" in payload:
                 payload["status"] = _parse_task_status(payload.get("status"))
         try:
-            service_upsert_task(session_id, sessions_dir, **payload)
+            updated = service_upsert_task(session_id, sessions_dir, **payload)
         except FileExistsError as exc:
             raise HTTPException(409, f"Task '{exc.args[0]}' already exists; choose a different name")
+        except ValueError as exc:
+            _raise_session_error(exc, session_id)
+        if not updated:
+            raise HTTPException(404, f"Session not found: {session_id}")
         return {"ok": True}
 
     @app.delete("/api/sessions/{session_id}/tasks/{task_name}")
     async def remove_task(session_id: str, task_name: str):
         normalized = _normalize_task_name(task_name, "Task name")
-        session_dir = sessions_dir / session_id
-        if not session_dir.exists():
-            raise HTTPException(404, f"Session not found: {session_id}")
-        if not service_delete_task(session_id, normalized, sessions_dir):
+        try:
+            deleted = service_delete_task(session_id, normalized, sessions_dir)
+        except ValueError as exc:
+            _raise_session_error(exc, session_id)
+        if not deleted:
             raise HTTPException(404, f"Task not found: {task_name}")
         return {"ok": True}
 
@@ -280,8 +311,8 @@ def create_app(sessions_dir: Path, system_sessions_dir: Path | None = None) -> F
     async def get_config(session_id: str):
         try:
             return {"params": service_get_config(session_id, sessions_dir, system_sessions_dir)}
-        except FileNotFoundError:
-            raise HTTPException(404, f"Session not found: {session_id}")
+        except (FileNotFoundError, ValueError) as exc:
+            _raise_session_error(exc, session_id)
 
 
     @app.put("/api/sessions/{session_id}/config")
@@ -294,13 +325,17 @@ def create_app(sessions_dir: Path, system_sessions_dir: Path | None = None) -> F
             params["heartbeat_interval"] = _parse_task_interval(params["heartbeat_interval"])
         try:
             saved = service_update_config(session_id, sessions_dir, system_sessions_dir, params)
-        except FileNotFoundError:
-            raise HTTPException(404, f"Session not found: {session_id}")
+        except (FileNotFoundError, ValueError) as exc:
+            _raise_session_error(exc, session_id)
         return {"ok": True, "params": saved}
 
     @app.delete("/api/sessions/{session_id}")
     async def delete_session(session_id: str):
-        if not service_delete_session(session_id, sessions_dir, system_sessions_dir):
+        try:
+            deleted = service_delete_session(session_id, sessions_dir, system_sessions_dir)
+        except ValueError as exc:
+            _raise_session_error(exc, session_id)
+        if not deleted:
             raise HTTPException(404, f"Session not found: {session_id}")
         return {"ok": True}
 
@@ -308,8 +343,8 @@ def create_app(sessions_dir: Path, system_sessions_dir: Path | None = None) -> F
     async def get_session_hud(session_id: str):
         try:
             return service_get_hud(session_id, sessions_dir, system_sessions_dir)
-        except FileNotFoundError:
-            raise HTTPException(404, f"Session not found: {session_id}")
+        except (FileNotFoundError, ValueError) as exc:
+            _raise_session_error(exc, session_id)
 
     @app.get("/api/weixin/status")
     async def weixin_status():

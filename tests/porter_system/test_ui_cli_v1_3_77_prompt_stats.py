@@ -53,6 +53,17 @@ def test_prompt_stats_unknown_session(tmp_path, capsys):
     assert "not found" in capsys.readouterr().err
 
 
+def test_prompt_stats_invalid_session_id(tmp_path, capsys):
+    args = _FakeArgs(
+        session_id="bad.id",
+        sessions_base=tmp_path / "sessions",
+        system_base=tmp_path / "_sessions",
+    )
+    rc = cmd_prompt_stats(args)
+    assert rc == 1
+    assert "Invalid session_id" in capsys.readouterr().err
+
+
 def test_prompt_stats_empty_session(tmp_path, capsys):
     sessions_base, system_base = _make_session(tmp_path)
     args = _FakeArgs("test-session", sessions_base, system_base)

@@ -4,9 +4,11 @@ from datetime import datetime
 from pathlib import Path
 
 from nutshell.session_engine.session_params import read_session_params, write_session_params
+from .sessions_service import _validate_session_id
 
 
 def get_tasks(session_id: str, sessions_dir: Path) -> list[dict]:
+    _validate_session_id(session_id)
     from nutshell.session_engine.task_cards import load_all_cards, migrate_legacy_task_sources
     session_dir = sessions_dir / session_id
     if session_dir.exists():
@@ -20,6 +22,7 @@ def get_tasks(session_id: str, sessions_dir: Path) -> list[dict]:
 
 
 def upsert_task(session_id: str, sessions_dir: Path, **task_fields) -> bool:
+    _validate_session_id(session_id)
     from nutshell.session_engine.task_cards import TaskCard, delete_card, load_card, migrate_legacy_task_sources, save_card
     session_dir = sessions_dir / session_id
     if not session_dir.exists():
@@ -60,6 +63,7 @@ def upsert_task(session_id: str, sessions_dir: Path, **task_fields) -> bool:
 
 
 def delete_task(session_id: str, task_name: str, sessions_dir: Path) -> bool:
+    _validate_session_id(session_id)
     from nutshell.session_engine.task_cards import delete_card, migrate_legacy_task_sources
     session_dir = sessions_dir / session_id
     if not session_dir.exists():

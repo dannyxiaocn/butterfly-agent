@@ -19,6 +19,8 @@ This keeps porter-managed suites visually separate from feature-local pytest fil
 
 Recent runtime/session coverage includes IPC lifecycle assertions for `loop_start`, `loop_end`, `tool_call`, and `tool_done`, so hook-related behavior changes should be validated there before merge.
 
+Service-layer refactors should keep adapter-parity tests in place for CLI/Web behavior that users can observe directly, even when the underlying logic moves into `nutshell.service`.
+
 ## How To Use It
 
 ```bash

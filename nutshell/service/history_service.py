@@ -4,15 +4,18 @@ import json
 from datetime import datetime
 from pathlib import Path
 
+from .sessions_service import _validate_session_id
+
 _MEMORY_LAYER_INLINE_LINES = 60
 
 
 def get_history(session_id: str, system_sessions_dir: Path, context_since: int = 0) -> dict:
+    _validate_session_id(session_id)
     system_dir = system_sessions_dir / session_id
     if not system_dir.exists():
         raise FileNotFoundError(session_id)
     from nutshell.runtime.ipc import FileIPC
-    from nutshell.runtime.session_status import read_session_status
+    from nutshell.session_engine.session_status import read_session_status
 
     ipc = FileIPC(system_dir)
     events: list[dict] = []
@@ -93,6 +96,7 @@ def _load_context(context_path: Path) -> tuple[dict, list]:
 
 
 def get_log_turns(session_id: str, system_sessions_dir: Path, n=None, since=None) -> list[dict]:
+    _validate_session_id(session_id)
     system_dir = system_sessions_dir / session_id
     context_path = system_dir / 'context.jsonl'
     if not (system_dir / 'manifest.json').exists():
@@ -127,6 +131,7 @@ def get_log_turns(session_id: str, system_sessions_dir: Path, n=None, since=None
 
 
 def get_pending_inputs(session_id: str, system_sessions_dir: Path, n=None) -> list[dict]:
+    _validate_session_id(session_id)
     system_dir = system_sessions_dir / session_id
     context_path = system_dir / 'context.jsonl'
     if not (system_dir / 'manifest.json').exists():
@@ -145,6 +150,7 @@ def get_pending_inputs(session_id: str, system_sessions_dir: Path, n=None) -> li
 
 
 def get_token_report(session_id: str, system_sessions_dir: Path) -> list[dict]:
+    _validate_session_id(session_id)
     system_dir = system_sessions_dir / session_id
     context_path = system_dir / 'context.jsonl'
     if not (system_dir / 'manifest.json').exists():
@@ -172,6 +178,7 @@ def get_token_report(session_id: str, system_sessions_dir: Path) -> list[dict]:
 
 
 def get_prompt_stats(session_id: str, sessions_dir: Path, system_sessions_dir: Path) -> dict:
+    _validate_session_id(session_id)
     core = sessions_dir / session_id / 'core'
     system_dir = system_sessions_dir / session_id
     if not core.exists() or not system_dir.exists():
