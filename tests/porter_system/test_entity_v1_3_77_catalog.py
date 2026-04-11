@@ -1,4 +1,4 @@
-"""Tests for curated built-in entity documentation."""
+"""Tests for curated built-in entity documentation (migrated to docs/)."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -6,7 +6,7 @@ from pathlib import Path
 from porter_test_support import repo_root_from
 
 REPO_ROOT = repo_root_from(Path(__file__))
-ENTITY_DIR = REPO_ROOT / "entity"
+DOCS_DIR = REPO_ROOT / "docs" / "entity"
 ACTIVE_ENTITIES = [
     "agent",
     "nutshell_dev",
@@ -15,29 +15,24 @@ ACTIVE_ENTITIES = [
 ]
 
 
-def test_entity_catalog_exists():
-    catalog = ENTITY_DIR / "README.md"
-    assert catalog.exists()
-    text = catalog.read_text(encoding="utf-8")
-    assert "Entity Catalog" in text
+def test_entity_docs_exist():
+    assert DOCS_DIR.exists()
+    design = DOCS_DIR / "design.md"
+    assert design.exists()
+    text = design.read_text(encoding="utf-8")
+    assert "Entity" in text
 
 
-def test_active_entities_are_listed_in_catalog():
-    text = (ENTITY_DIR / "README.md").read_text(encoding="utf-8")
+def test_active_entities_have_docs():
     for entity in ACTIVE_ENTITIES:
-        assert f"`{entity}`" in text
+        entity_docs = DOCS_DIR / entity
+        assert entity_docs.exists(), f"missing docs dir for {entity}"
+        assert (entity_docs / "design.md").exists(), f"missing design.md for {entity}"
+        assert (entity_docs / "impl.md").exists(), f"missing impl.md for {entity}"
+        assert (entity_docs / "todo.md").exists(), f"missing todo.md for {entity}"
 
 
-def test_each_active_entity_has_readme():
+def test_entity_design_has_content():
     for entity in ACTIVE_ENTITIES:
-        readme = ENTITY_DIR / entity / "README.md"
-        assert readme.exists(), f"missing README for {entity}"
-        text = readme.read_text(encoding="utf-8").strip()
-        assert text.startswith(f"# {entity}")
-        assert "## Purpose" in text
-
-
-def test_entity_readmes_describe_status_or_notes():
-    for entity in ACTIVE_ENTITIES:
-        text = (ENTITY_DIR / entity / "README.md").read_text(encoding="utf-8")
-        assert "## Notes" in text
+        text = (DOCS_DIR / entity / "design.md").read_text(encoding="utf-8")
+        assert len(text.strip()) > 0, f"empty design.md for {entity}"

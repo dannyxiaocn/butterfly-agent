@@ -13,16 +13,19 @@ ENTITY_ROOT = REPO_ROOT / "entity"
 ACTIVE_ENTITIES = ["agent", "nutshell_dev", "nutshell_dev_codex", "porters"]
 
 
+DOCS_ROOT = REPO_ROOT / "docs" / "entity"
+
+
 class EntityUnitTests(unittest.TestCase):
-    def test_active_entity_readmes_follow_contract(self) -> None:
-        catalog = (ENTITY_ROOT / "README.md").read_text(encoding="utf-8")
-        self.assertIn("Entity Catalog", catalog)
+    def test_active_entity_docs_follow_contract(self) -> None:
+        design = (DOCS_ROOT / "design.md").read_text(encoding="utf-8")
+        self.assertIn("Entity", design)
         for entity in ACTIVE_ENTITIES:
-            self.assertIn(f"`{entity}`", catalog)
-            readme = (ENTITY_ROOT / entity / "README.md").read_text(encoding="utf-8")
-            self.assertTrue(readme.startswith(f"# {entity}"))
-            self.assertIn("## Purpose", readme)
-            self.assertIn("## Notes", readme)
+            entity_docs = DOCS_ROOT / entity
+            self.assertTrue(entity_docs.exists(), f"missing docs for {entity}")
+            self.assertTrue((entity_docs / "design.md").exists(), f"missing design.md for {entity}")
+            self.assertTrue((entity_docs / "impl.md").exists(), f"missing impl.md for {entity}")
+            self.assertTrue((entity_docs / "todo.md").exists(), f"missing todo.md for {entity}")
 
     def test_active_entities_load_without_inheritance_errors(self) -> None:
         loader = AgentLoader()

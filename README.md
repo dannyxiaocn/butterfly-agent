@@ -41,7 +41,7 @@ entity/            built-in agent templates
 tests/             automated coverage for runtime, CLI, providers, tools, porter suites
 ```
 
-Every active subsystem directory has its own `README.md`.
+Detailed documentation for every subsystem lives in `docs/` — see [Documentation](#documentation) below.
 
 ## How It Works
 
@@ -92,9 +92,59 @@ nutshell meta nutshell_dev
 nutshell web
 ```
 
-## Reading Order
+## Documentation
 
-- [nutshell/README.md](/Users/xiaobocheng/agent_core/nutshell/nutshell/README.md)
-- [entity/README.md](/Users/xiaobocheng/agent_core/nutshell/entity/README.md)
-- [ui/README.md](/Users/xiaobocheng/agent_core/nutshell/ui/README.md)
-- [tests/README.md](/Users/xiaobocheng/agent_core/nutshell/tests/README.md)
+All component documentation lives in `docs/`, mirroring the code structure. Each sub-directory contains three standard files:
+
+| File | Purpose |
+|------|---------|
+| `design.md` | Component design, architecture, and rationale. Agents read this to understand intent; write back after implementing new designs. Keep concise. |
+| `impl.md` | Implementation details: files, APIs, usage examples, important behaviors. The reference manual. |
+| `todo.md` | Work log and tracking: completed work (with commit IDs), known bugs, future directions. |
+
+```text
+docs/
+  nutshell/                      the Python runtime package
+    core/                        agent loop, types, provider interface
+    llm_engine/                  LLM provider adapters
+      providers/                 per-vendor adapter details
+    runtime/                     watcher, IPC, bridge, coordination
+    service/                     shared service layer (CLI + Web)
+    session_engine/              entity → meta → session lifecycle
+    skill_engine/                skill loading and rendering
+    tool_engine/                 tool loading and executors
+      executor/                  concrete tool runtimes
+        skill/                   built-in skill tool
+        terminal/                shell execution backends
+        web_search/              search provider backends
+  entity/                        agent templates
+    agent/                       base entity
+      prompts/ tools/ skills/
+    nutshell_dev/                project dev entity
+      prompts/ memory/ skills/
+    nutshell_dev_codex/          Codex variant
+      memory/
+    porters/                     merge-verification entity
+  ui/                            user interfaces
+    cli/                         command-line interface
+    web/                         web UI + API
+  tests/                         test infrastructure
+    porter_system/               centralized pytest coverage
+    runtime/                     runtime test markers
+    tool_engine/                 tool engine test markers
+```
+
+Conventions:
+
+- **Agents** should read `design.md` before working on a component and update it after implementing significant changes.
+- **`impl.md`** is the source of truth for "how does this work" and "how do I use it".
+- **`todo.md`** replaces inline task tracking. Link commit IDs, note bugs, and plan future work here.
+- Deeper directories inherit context from their parent’s docs — no need to repeat shared information.
+
+Start here:
+
+- [docs/nutshell/design.md](docs/nutshell/design.md) — architecture and design principles
+- [docs/nutshell/impl.md](docs/nutshell/impl.md) — implementation details and session lifecycle
+- [docs/entity/design.md](docs/entity/design.md) — entity template system
+- [docs/ui/design.md](docs/ui/design.md) — CLI and Web frontends
+- [docs/tests/design.md](docs/tests/design.md) — test infrastructure

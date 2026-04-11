@@ -17,19 +17,21 @@ class PackageSurfaceTest(unittest.TestCase):
         for name in nutshell.__all__:
             self.assertTrue(hasattr(nutshell, name), name)
 
-    def test_subsystem_readmes_exist(self) -> None:
+    def test_subsystem_docs_exist(self) -> None:
         for name in [
             "core",
             "llm_engine",
             "runtime",
+            "service",
             "session_engine",
             "skill_engine",
             "tool_engine",
         ]:
-            self.assertTrue((REPO_ROOT / "nutshell" / name / "README.md").exists(), name)
+            self.assertTrue((REPO_ROOT / "docs" / "nutshell" / name / "design.md").exists(), name)
+            self.assertTrue((REPO_ROOT / "docs" / "nutshell" / name / "impl.md").exists(), name)
 
-    def test_readme_lists_all_runtime_subsystems(self) -> None:
-        text = (REPO_ROOT / "nutshell" / "README.md").read_text(encoding="utf-8")
+    def test_docs_list_all_runtime_subsystems(self) -> None:
+        text = (REPO_ROOT / "docs" / "nutshell" / "impl.md").read_text(encoding="utf-8")
         for name in [
             "core/",
             "llm_engine/",
@@ -37,6 +39,7 @@ class PackageSurfaceTest(unittest.TestCase):
             "skill_engine/",
             "session_engine/",
             "runtime/",
+            "service/",
         ]:
             self.assertIn(name, text)
 
