@@ -8,8 +8,6 @@ Nutshell is a file-backed Python agent runtime. The design follows these princip
 4. **`entity/` is assets** — read-only config (prompts, tools, skills) seeded into sessions at creation.
 5. **Filesystem as agent's backend** — agents read/write their session dir; UI and server communicate via `context.jsonl` + `events.jsonl`. No sockets, no databases.
 6. **CLI is the primary user interface**.
-7. **Porters system** is the central system for evaluating and maintaining the system.
-
 ## Layer Diagram
 
 ```

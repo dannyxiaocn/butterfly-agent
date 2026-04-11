@@ -15,7 +15,6 @@ Entities are **reusable agent templates**. Each entity directory defines prompts
 agent (base, standalone)
   └── nutshell_dev (extends agent)
         └── nutshell_dev_codex (extends nutshell_dev)
-              └── porters (extends nutshell_dev_codex)
 ```
 
 ## Inheritance Semantics

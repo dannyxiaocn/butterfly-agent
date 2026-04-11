@@ -1,4 +1,4 @@
-# Nutshell `v1.3.77`
+# Nutshell `v1.3.84`
 
 Nutshell is a file-backed Python agent runtime. Sessions, prompts, tools, skills, state, and UI traffic all live on disk, so the server, CLI, Web UI, and agents share the same source of truth.
 
@@ -38,7 +38,7 @@ ui/
   web/             FastAPI + SSE monitoring UI
 
 entity/            built-in agent templates
-tests/             automated coverage for runtime, CLI, providers, tools, porter suites
+tests/             automated coverage mirroring source tree layout
 ```
 
 Detailed documentation for every subsystem lives in `docs/` — see [Documentation](#documentation) below.
@@ -124,14 +124,14 @@ docs/
       prompts/ memory/ skills/
     nutshell_dev_codex/          Codex variant
       memory/
-    porters/                     merge-verification entity
   ui/                            user interfaces
     cli/                         command-line interface
     web/                         web UI + API
-  tests/                         test infrastructure
-    porter_system/               centralized pytest coverage
-    runtime/                     runtime test markers
-    tool_engine/                 tool engine test markers
+  tests/                         test infrastructure (mirrors source layout)
+    nutshell/                    nutshell subsystem tests
+    entity/                      entity contract tests
+    ui/                          UI layer tests
+    integration/                 cross-component tests
 ```
 
 Conventions:

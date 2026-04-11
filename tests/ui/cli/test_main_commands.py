@@ -8,7 +8,8 @@ import sys
 from pathlib import Path
 
 import pytest
-from porter_test_support import repo_root_from
+
+from conftest import REPO_ROOT
 
 from ui.cli.main import (
     cmd_new,
@@ -685,7 +686,7 @@ def test_cmd_new_inject_memory(tmp_path):
     sessions = tmp_path / "sessions"
     system = tmp_path / "_sessions"
 
-    assert (repo_root_from(Path(__file__)) / "entity" / "agent").exists()
+    assert (REPO_ROOT / "entity" / "agent").exists()
     args = argparse.Namespace(
         session_id="inject-test",
         entity="agent",

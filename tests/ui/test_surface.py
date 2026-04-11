@@ -4,10 +4,9 @@ import unittest
 from pathlib import Path
 
 import ui
-from porter_test_support import repo_root_from
 
 
-REPO_ROOT = repo_root_from(Path(__file__))
+from conftest import REPO_ROOT
 DOCS_UI = REPO_ROOT / "docs" / "ui"
 
 

@@ -16,4 +16,4 @@ nutshell chat --entity nutshell_dev "implement the next track.md item"
 ## Branch Policy
 
 - `wip-<slug>` for active implementation
-- `ready-<slug>` for porter/merge review
+- `ready-<slug>` for merge review

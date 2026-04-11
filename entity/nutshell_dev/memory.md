@@ -33,7 +33,7 @@ cd playground/nutshell
 git push -u origin ready-<task-slug>       # push the merge-ready branch back to origin
 ```
 
-Claude Code and porter workflows can review `ready-` branches from there. Active implementation should stay on `wip-` branches until it is ready for handoff.
+Ready branches can be reviewed and merged from there. Active implementation should stay on `wip-` branches until it is ready for handoff.
 
 ## Project State
 
