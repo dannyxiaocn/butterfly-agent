@@ -24,6 +24,7 @@ from datetime import datetime
 from pathlib import Path
 
 import httpx
+from nutshell.service import send_message as service_send_message, start_session as service_start_session, stop_session as service_stop_session, wait_for_reply as service_wait_for_reply
 
 _WEIXIN_STATE_DIR = Path.home() / ".openclaw" / "openclaw-weixin"
 _WEIXIN_ACCOUNTS_INDEX = _WEIXIN_STATE_DIR / "accounts.json"
@@ -249,12 +250,10 @@ class WeixinBridge:
                 reply = "⚠️ 没有活跃 session"
             else:
                 try:
-                    from nutshell.session_engine.session_status import write_session_status
-                    from nutshell.runtime.ipc import FileIPC
-                    sys_dir = self._sys_dir / self._current_session
-                    write_session_status(sys_dir, status="stopped", stopped_at=datetime.now().isoformat())
-                    FileIPC(sys_dir).append_event({"type": "status", "value": "heartbeat paused"})
-                    reply = f"⏸ Session '{self._current_session}' 已暂停"
+                    if not service_stop_session(self._current_session, self._sys_dir):
+                        reply = f"⚠️ Session '{self._current_session}' 不存在"
+                    else:
+                        reply = f"⏸ Session '{self._current_session}' 已暂停"
                 except Exception as exc:
                     reply = f"⚠️ 错误: {exc}"
 
@@ -263,12 +262,10 @@ class WeixinBridge:
                 reply = "⚠️ 没有活跃 session"
             else:
                 try:
-                    from nutshell.session_engine.session_status import write_session_status
-                    from nutshell.runtime.ipc import FileIPC
-                    sys_dir = self._sys_dir / self._current_session
-                    write_session_status(sys_dir, status="active", stopped_at=None)
-                    FileIPC(sys_dir).append_event({"type": "status", "value": "heartbeat resumed"})
-                    reply = f"▶ Session '{self._current_session}' 已恢复"
+                    if not service_start_session(self._current_session, self._sys_dir):
+                        reply = f"⚠️ Session '{self._current_session}' 不存在"
+                    else:
+                        reply = f"▶ Session '{self._current_session}' 已恢复"
                 except Exception as exc:
                     reply = f"⚠️ 错误: {exc}"
 
@@ -374,10 +371,8 @@ class WeixinBridge:
             return
 
         async with self._lock:
-            from nutshell.runtime.bridge import BridgeSession
-            bridge = BridgeSession(sys_dir)
-            msg_id = bridge.send_message(text, caller="human")
-            reply = await bridge.async_wait_for_reply(msg_id, timeout=_REPLY_TIMEOUT)
+            msg_id = service_send_message(self._current_session, text, self._sys_dir, caller="human")
+            reply = await service_wait_for_reply(self._current_session, msg_id, self._sys_dir, timeout=_REPLY_TIMEOUT)
 
         if reply:
             await self._send_text(client, from_user, reply, ctx_token)

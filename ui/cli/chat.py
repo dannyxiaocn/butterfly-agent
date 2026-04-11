@@ -168,9 +168,9 @@ def _new_session(
 ) -> int:
     """Handle new-session mode. Spawns daemon thread, returns exit code."""
     import asyncio
+    from nutshell.service import build_ready_notifying_ipc
     from nutshell.session_engine.agent_loader import AgentLoader
     from nutshell.session_engine.session import Session
-    from nutshell.runtime.ipc import FileIPC
     from nutshell.session_engine.session_init import init_session
 
     entity_base = Path(__file__).parent.parent.parent / "entity"
@@ -203,12 +203,12 @@ def _new_session(
             (mem_dir / f"{key}.md").write_text(value, encoding="utf-8")
 
     session = Session(agent, session_id=session_id, base_dir=sessions_base, system_base=system_base)
-    ipc = FileIPC(session.system_dir)
 
     # ready_event: set by the daemon once it has recorded input_offset.
     # We MUST NOT write user_input before this point, or the daemon will
     # skip it (input_offset is captured at daemon startup via context_size()).
     ready_event = threading.Event()
+    ipc = build_ready_notifying_ipc(session.system_dir, ready_event)
     stop_event_holder: list = []  # filled once asyncio loop is running
 
     def _run_daemon() -> None:
@@ -217,20 +217,6 @@ def _new_session(
         async def _async() -> None:
             stop_ev = _asyncio.Event()
             stop_event_holder.append(stop_ev)
-
-            # Patch context_size() to signal readiness on first call
-            original_ctx_size = ipc.context_size
-            patched = False
-
-            def _patched_ctx_size() -> int:
-                nonlocal patched
-                result = original_ctx_size()
-                if not patched:
-                    patched = True
-                    ready_event.set()
-                return result
-
-            ipc.context_size = _patched_ctx_size  # type: ignore[method-assign]
             await session.run_daemon_loop(ipc, stop_event=stop_ev)
 
         _asyncio.run(_async())

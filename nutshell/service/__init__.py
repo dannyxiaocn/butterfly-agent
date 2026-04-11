@@ -8,7 +8,7 @@ from .sessions_service import (
     start_session,
     stop_session,
 )
-from .messages_service import interrupt_session, send_message
+from .messages_service import build_ready_notifying_ipc, interrupt_session, iter_events, send_message, wait_for_reply
 from .history_service import get_history, get_log_turns, get_pending_inputs, get_prompt_stats, get_token_report
 from .tasks_service import delete_task, get_tasks, upsert_task
 from .config_service import get_config, update_config
@@ -24,7 +24,10 @@ __all__ = [
     "start_session",
     "stop_session",
     "interrupt_session",
+    "iter_events",
     "send_message",
+    "wait_for_reply",
+    "build_ready_notifying_ipc",
     "get_history",
     "get_log_turns",
     "get_pending_inputs",

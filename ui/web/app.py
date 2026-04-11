@@ -25,6 +25,7 @@ from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from nutshell.service import (
+    iter_events as service_iter_events,
     create_session as service_create_session,
     delete_session as service_delete_session,
     get_config as service_get_config,
@@ -219,10 +220,10 @@ def create_app(sessions_dir: Path, system_sessions_dir: Path | None = None) -> F
             raise HTTPException(404, f"Session not found: {session_id}")
 
         async def generator() -> AsyncIterator[str]:
-            from nutshell.runtime.bridge import BridgeSession
-            bridge = BridgeSession(system_dir)
             seq = 0
-            async for event, _ctx, _evt in bridge.async_iter_events(
+            async for event, _ctx, _evt in service_iter_events(
+                session_id,
+                system_sessions_dir,
                 context_offset=context_since,
                 events_offset=events_since,
                 poll_interval=0.3,
