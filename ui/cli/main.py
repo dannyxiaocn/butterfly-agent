@@ -1220,9 +1220,8 @@ def _add_meta_parser(subparsers) -> None:
     )
     p.add_argument("entity", nargs="?", default=None, help="Entity name (optional)")
     p.add_argument("--memory", action="store_true", help="Print meta memory.md content")
+    p.add_argument("--versions", action="store_true", help="Show version history for a specific entity")
     p.add_argument("--json", action="store_true", dest="as_json", help="Output as JSON")
-    p.add_argument("--check", action="store_true", help="Show alignment diff for a specific entity")
-    p.add_argument("--sync", choices=["entity-wins", "meta-wins"], help="Resolve alignment conflict")
     p.add_argument("--init", action="store_true", help="Re-run gene commands (delete marker and re-execute)")
     p.add_argument("--sessions-base", type=Path, default=_DEFAULT_SESSIONS_BASE, help=argparse.SUPPRESS)
     p.set_defaults(func=cmd_meta)
@@ -1230,12 +1229,9 @@ def _add_meta_parser(subparsers) -> None:
 
 def cmd_meta(args) -> int:
     from nutshell.session_engine.entity_state import (
-        MetaAlignmentError,
-        check_meta_alignment,
-        compute_meta_diffs,
+        get_meta_version,
+        get_version_history,
         run_gene_commands,
-        sync_entity_to_meta,
-        sync_meta_to_entity,
     )
 
     base = args.sessions_base
@@ -1255,28 +1251,25 @@ def cmd_meta(args) -> int:
         run_gene_commands(args.entity, s_base=base)
         return 0
 
-    if args.check or args.sync:
+    if args.versions:
         if not args.entity:
-            print("Error: ENTITY is required for --check/--sync.", file=sys.stderr)
+            print("Error: ENTITY is required for --versions.", file=sys.stderr)
             return 2
-        meta_dir = base / f"{args.entity}_meta"
-        if not meta_dir.is_dir():
-            print(f"No meta-session found for entity: {args.entity}", file=sys.stderr)
-            return 1
-        if args.sync == "entity-wins":
-            sync_entity_to_meta(args.entity, s_base=base)
-            print(f"Synced entity → meta for {args.entity}")
+        _DEFAULT_SYSTEM_SESSIONS_BASE = Path(__file__).resolve().parent.parent.parent / "_sessions"
+        sys_base = _DEFAULT_SYSTEM_SESSIONS_BASE
+        history = get_version_history(args.entity, sys_base=sys_base)
+        current = get_meta_version(args.entity, s_base=base)
+        if args.as_json:
+            print(json.dumps({"current": current, "history": history}, ensure_ascii=False, indent=2))
             return 0
-        if args.sync == "meta-wins":
-            sync_meta_to_entity(args.entity, s_base=base)
-            print(f"Synced meta → entity for {args.entity}")
-            return 0
-        diffs = compute_meta_diffs(args.entity, s_base=base)
-        if not diffs:
-            print(f"Meta-session aligned: {args.entity}")
-            return 0
-        print(MetaAlignmentError(args.entity, diffs).format_report())
-        return 1
+        print(f"Entity: {args.entity}  current version: {current or '(none)'}")
+        if not history:
+            print("No version history.")
+        else:
+            for entry in history:
+                note = f"  {entry['note']}" if entry.get("note") else ""
+                print(f"  {entry['version']}  {entry.get('ts', '')}  {note}")
+        return 0
 
     if args.entity:
         meta_dir = base / f"{args.entity}_meta"

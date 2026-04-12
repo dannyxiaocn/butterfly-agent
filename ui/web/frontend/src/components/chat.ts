@@ -430,6 +430,12 @@ function renderEvent(event: DisplayEvent): HTMLElement | null {
       break;
     }
 
+    case 'system_notice': {
+      div.className = 'msg msg-system-notice';
+      div.innerHTML = `<span class="msg-label">notice</span><div class="msg-body">${escapeHtml(event.message ?? '')}</div>`;
+      break;
+    }
+
     default:
       return null;
   }

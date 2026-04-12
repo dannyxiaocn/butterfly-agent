@@ -541,6 +541,9 @@ class Session:
                 interval=float(params.get("heartbeat_interval") or self._heartbeat_interval),
             )
 
+        # Notify if meta session has a newer version than this session.
+        self._emit_version_notice_if_stale()
+
         # Skip existing context events — only process new user_input events.
         input_offset = ipc.context_size()
         interrupt_offset = ipc.events_size()
@@ -769,6 +772,39 @@ class Session:
                 ext(result)
 
         return on_loop_end
+
+    def _emit_version_notice_if_stale(self) -> None:
+        """Emit system_notice if the meta session is at a newer version than this session."""
+        manifest_path = self.system_dir / "manifest.json"
+        if not manifest_path.exists():
+            return
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except Exception:
+            return
+        entity_name = manifest.get("entity", "")
+        if not entity_name:
+            return
+        # Skip the meta session itself
+        if self._session_id == f"{entity_name}_meta":
+            return
+        try:
+            from nutshell.session_engine.entity_state import get_meta_version
+            meta_version = get_meta_version(entity_name, s_base=self._base_dir)
+        except Exception:
+            return
+        session_version = read_session_params(self.session_dir).get("agent_version")
+        if meta_version and session_version and meta_version != session_version:
+            self._append_event({
+                "type": "system_notice",
+                "message": (
+                    f"Agent updated to v{meta_version} "
+                    f"(this session is on v{session_version}). "
+                    "Start a new session to get the latest configuration."
+                ),
+                "meta_version": meta_version,
+                "session_version": session_version,
+            })
 
     def _reshape_history(self, new_content: str) -> str:
         """Clean up orphaned trailing user message before processing new user input.

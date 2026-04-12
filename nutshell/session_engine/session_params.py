@@ -13,6 +13,7 @@ DEFAULT_PARAMS: dict = {
     "thinking": False,      # True → enable extended thinking for this session
     "thinking_budget": 8000,  # budget_tokens for extended thinking (Anthropic/Kimi only)
     "thinking_effort": "high",  # reasoning effort level (Codex only): none/minimal/low/medium/high/xhigh
+    "agent_version": None,  # Copied from meta session at creation; used to detect stale sessions
 }
 
 

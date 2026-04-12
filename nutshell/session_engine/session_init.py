@@ -17,9 +17,9 @@ from nutshell.session_engine.session_status import ensure_session_status, write_
 from nutshell.session_engine.task_cards import ensure_heartbeat_card
 from nutshell.session_engine.entity_state import (
     _meta_is_synced,
-    check_meta_alignment,
     ensure_gene_initialized,
     ensure_meta_session,
+    get_meta_version,
     populate_meta_from_entity,
     start_meta_agent,
     sync_from_entity,
@@ -160,8 +160,6 @@ def init_session(
     if entity_dir.exists():
         if not _meta_is_synced(meta_dir):
             populate_meta_from_entity(entity_name, ent_base, s_base)
-        else:
-            check_meta_alignment(entity_name, ent_base, s_base)
         ensure_gene_initialized(entity_name, ent_base, s_base)
         start_meta_agent(entity_name, entity_base=ent_base, s_base=s_base, sys_base=sys_base)
 
@@ -205,6 +203,10 @@ def init_session(
         write_session_params(session_dir, heartbeat_interval=effective_heartbeat, model=model, provider=provider, **extra, **entity_params)
     else:
         write_session_params(session_dir, heartbeat_interval=effective_heartbeat, **entity_params)
+    # Record meta version in session params so staleness can be detected later.
+    meta_version = get_meta_version(entity_name, s_base=s_base)
+    if meta_version:
+        write_session_params(session_dir, agent_version=meta_version)
     # Seed mutable state from meta session, with entity memory as bootstrap fallback.
     meta_dir = ensure_meta_session(entity_name, s_base=s_base)
     sync_from_entity(entity_name, ent_base, s_base=s_base)

@@ -70,7 +70,8 @@ export class SSEConnection {
     const eventTypes = [
       'agent', 'user', 'tool', 'thinking', 'model_status', 'partial_text',
       'tool_done', 'loop_start', 'loop_end',
-      'heartbeat_trigger', 'heartbeat_finished', 'status', 'error', 'message'
+      'heartbeat_trigger', 'heartbeat_finished', 'status', 'error', 'message',
+      'system_notice'
     ];
 
     for (const type of eventTypes) {

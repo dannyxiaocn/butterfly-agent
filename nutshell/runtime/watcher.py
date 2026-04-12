@@ -108,9 +108,6 @@ class SessionWatcher:
             if pid_alive(status_data.get("pid")):
                 continue
 
-            if status_data.get("status") == "alignment_blocked":
-                continue
-
             if status_data.get("status") == "stopped":
                 # Auto-expire sessions stopped for more than _AUTO_EXPIRE_HOURS
                 stopped_at_str = status_data.get("stopped_at")
@@ -151,23 +148,6 @@ class SessionWatcher:
         from nutshell.session_engine.session_params import read_session_params
 
         session_dir = self.sessions_dir / session_id
-
-        from nutshell.session_engine.entity_state import check_meta_alignment, MetaAlignmentError, get_meta_session_id
-        entity_name = manifest.get("entity", "")
-        meta_session_id = f"{entity_name}_meta" if entity_name else ""
-        if entity_name and session_id != meta_session_id:
-            try:
-                check_meta_alignment(entity_name)
-            except MetaAlignmentError as e:
-                print(f"\n[server] ⚠️  ALIGNMENT CONFLICT: entity {e.entity_name}")
-                print(e.format_report())
-                print(f"[server] Resolve with:")
-                print(f"[server]   nutshell meta {e.entity_name} --sync entity-wins  # entity overwrites meta")
-                print(f"[server]   nutshell meta {e.entity_name} --sync meta-wins    # meta updates entity")
-                print(f"[server] Sessions blocked until resolved.")
-                from nutshell.session_engine.session_status import write_session_status
-                write_session_status(system_dir, status="alignment_blocked")
-                return
 
         # Read heartbeat_interval from core/params.json (source of truth).
         heartbeat = float(read_session_params(session_dir).get("heartbeat_interval") or 7200.0)

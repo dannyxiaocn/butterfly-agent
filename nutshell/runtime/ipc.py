@@ -28,6 +28,7 @@ events.jsonl event types:
   heartbeat_finished — {"type": "heartbeat_finished", "ts": "..."}
   status             — {"type": "status", "value": "...", "ts": "..."}
   error              — {"type": "error", "content": "...", "ts": "..."}
+  system_notice      — {"type": "system_notice", "message": "...", "meta_version": "...", "session_version": "...", "ts": "..."}
 
 Display events derived for the UI:
   user             — from user_input (context)
@@ -161,6 +162,7 @@ def _runtime_event_to_display(event: dict) -> list[dict]:
         "heartbeat_finished",
         "status",
         "error",
+        "system_notice",
     ):
         return [event]
 
