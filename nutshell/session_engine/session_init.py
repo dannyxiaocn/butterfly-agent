@@ -160,6 +160,13 @@ def init_session(
         src = meta_core_dir / fname
         _write_if_absent(core_dir / fname, src.read_text(encoding="utf-8") if src.exists() else "")
 
+    # Copy tool.md from meta or entity (toolhub-based tool list)
+    for tool_md_src in (meta_core_dir / "tool.md", entity_dir / "tool.md"):
+        if tool_md_src.exists():
+            _write_if_absent(core_dir / "tool.md", tool_md_src.read_text(encoding="utf-8"))
+            break
+
+    # Legacy: copy tool JSON files from meta for backward compat
     meta_tools_dir = meta_core_dir / "tools"
     if meta_tools_dir.is_dir():
         for src in sorted(meta_tools_dir.glob('*.json')):

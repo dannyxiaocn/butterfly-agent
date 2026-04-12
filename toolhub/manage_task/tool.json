@@ -1,0 +1,35 @@
+{
+  "name": "manage_task",
+  "description": "Create, update, pause, finish, or list task cards. Tasks are stored as JSON files in core/tasks/.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "action": {
+        "type": "string",
+        "enum": ["create", "update", "pause", "finish", "list"],
+        "description": "The action to perform."
+      },
+      "name": {
+        "type": "string",
+        "description": "Task name (required for create/update/pause/finish)."
+      },
+      "description": {
+        "type": "string",
+        "description": "Task description (used with create)."
+      },
+      "interval": {
+        "type": "number",
+        "description": "Recurring interval in seconds. Null for one-shot tasks (used with create)."
+      },
+      "comments": {
+        "type": "string",
+        "description": "Update comments/notes on the task."
+      },
+      "progress": {
+        "type": "string",
+        "description": "Update progress notes on the task."
+      }
+    },
+    "required": ["action"]
+  }
+}

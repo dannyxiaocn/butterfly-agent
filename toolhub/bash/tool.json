@@ -1,0 +1,26 @@
+{
+  "name": "bash",
+  "description": "Execute a shell command. Returns stdout+stderr combined and exit code. Use pty=true for commands that need an interactive terminal (color output, progress bars).",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "command": {
+        "type": "string",
+        "description": "The shell command to execute."
+      },
+      "timeout": {
+        "type": "number",
+        "description": "Timeout in seconds. Omit to use the default (30s)."
+      },
+      "workdir": {
+        "type": "string",
+        "description": "Working directory path. Omit to use the current directory."
+      },
+      "pty": {
+        "type": "boolean",
+        "description": "Run in a pseudo-terminal. Preserves color output and isatty(). Unix only. Default false."
+      }
+    },
+    "required": ["command"]
+  }
+}

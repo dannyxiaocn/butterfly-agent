@@ -221,7 +221,12 @@ def populate_meta_from_entity(
         if src.exists():
             (core_dir / dst_name).write_text(src.read_text(encoding='utf-8'), encoding='utf-8')
 
-    # Copy tools
+    # Copy tool.md (toolhub-based tool list)
+    tool_md = entity_dir / 'tool.md'
+    if tool_md.exists():
+        (core_dir / 'tool.md').write_text(tool_md.read_text(encoding='utf-8'), encoding='utf-8')
+
+    # Copy tools (legacy JSON + agent-created shell tools)
     dst_tools = core_dir / 'tools'
     _clear_dir_contents(dst_tools)
     src_tools = entity_dir / 'tools'

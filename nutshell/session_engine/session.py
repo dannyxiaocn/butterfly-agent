@@ -19,7 +19,7 @@ from nutshell.session_engine.task_cards import (
 )
 from nutshell.llm_engine.registry import provider_name, resolve_provider
 from nutshell.session_engine.session_status import ensure_session_status, read_session_status, write_session_status
-from nutshell.tool_engine.executor.terminal.bash_terminal import BashExecutor
+from nutshell.tool_engine.loader import ToolLoader
 
 if TYPE_CHECKING:
     from nutshell.runtime.ipc import FileIPC
@@ -124,7 +124,6 @@ class Session:
     def _load_session_capabilities(self) -> None:
         """Reload params, prompts, skills, and tools from core/. Call inside agent lock before each run."""
         from nutshell.skill_engine.loader import SkillLoader
-        from nutshell.tool_engine.loader import ToolLoader
 
         # 1. config → provider + model
         cfg = read_config(self.session_dir)
@@ -186,28 +185,32 @@ class Session:
             skills = []
         self._agent.skills = skills
 
-        # 4. tools from core/tools/ + tool_providers overrides
+        # 4. tools from tool.md (toolhub) + local tools from core/tools/
         # default_workdir: bash and shell tools run from the session directory so
         # agents use short relative paths (core/tasks/) instead of full session paths.
         try:
-            tools = ToolLoader(
+            loader = ToolLoader(
                 default_workdir=str(self.session_dir),
                 skills=skills,
-            ).load_dir(self.core_dir / "tools")
-            for i, t in enumerate(tools):
-                if t.name == "bash":
-                    executor = BashExecutor(workdir=str(self.session_dir))
-
-                    async def _bash_impl(**kwargs):
-                        return await executor.execute(**kwargs)
-
-                    tools[i] = Tool(name=t.name, description=t.description, func=_bash_impl, schema=t.schema)
+                tasks_dir=self.tasks_dir,
+                memory_dir=self.core_dir / "memory",
+            )
+            # Load tools from tool.md (toolhub)
+            tool_md_path = self.core_dir / "tool.md"
+            if tool_md_path.exists():
+                tools = loader.load_from_tool_md(tool_md_path)
+            else:
+                # Legacy fallback: load from core/tools/*.json
+                tools = loader.load_dir(self.core_dir / "tools")
+            # Also load agent-created tools from core/tools/
+            tools.extend(loader.load_local_tools(self.core_dir / "tools"))
         except (FileNotFoundError, PermissionError):
             tools = []
         except Exception as e:
             print(f"[session] Warning: failed to load tools: {e}")
             tools = []
 
+        # Apply tool_providers overrides (e.g. web_search → brave/tavily)
         tool_providers = cfg.get("tool_providers") or {}
         if tool_providers:
             from nutshell.tool_engine.registry import resolve_tool_impl

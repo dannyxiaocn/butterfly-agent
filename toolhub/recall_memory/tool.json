@@ -1,0 +1,14 @@
+{
+  "name": "recall_memory",
+  "description": "Read a specific memory layer file. Use when memory content was truncated in the system prompt and you need the full text.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "name": {
+        "type": "string",
+        "description": "Name of the memory layer file (without .md extension)."
+      }
+    },
+    "required": ["name"]
+  }
+}
