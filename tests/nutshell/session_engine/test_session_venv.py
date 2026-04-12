@@ -64,6 +64,7 @@ def test_create_session_venv_returns_existing_venv_after_race(tmp_path):
 
     def _racing_create(*_args, **_kwargs):
         venv_path.mkdir(parents=True, exist_ok=True)
+        (venv_path / "pyvenv.cfg").write_text("home = /usr/bin\n")
         raise subprocess.CalledProcessError(1, [sys.executable, "-m", "venv"])
 
     with mock.patch("nutshell.session_engine.session_init.subprocess.run", side_effect=_racing_create):
