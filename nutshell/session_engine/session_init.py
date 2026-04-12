@@ -14,7 +14,7 @@ from pathlib import Path
 
 from nutshell.session_engine.session_config import read_config, write_config, ensure_config
 from nutshell.session_engine.session_status import ensure_session_status, write_session_status
-from nutshell.session_engine.task_cards import ensure_heartbeat_card
+from nutshell.session_engine.task_cards import ensure_card
 from nutshell.session_engine.entity_state import (
     ensure_gene_initialized,
     ensure_meta_session,
@@ -63,25 +63,6 @@ def _create_session_venv(session_dir: Path) -> Path:
     return venv_path
 
 
-def _load_entity_overrides(entity_dir: Path) -> dict:
-    """Read runtime overrides from an entity's config.yaml.
-
-    Returns a dict with heartbeat_interval, heartbeat_task, and session_type
-    if present in the entity config. These are the fields needed during session
-    creation that aren't simply copied with the config file.
-    """
-    config = read_config(entity_dir)
-    overrides: dict = {}
-    if config.get("heartbeat_interval"):
-        overrides["heartbeat_interval"] = config["heartbeat_interval"]
-    if config.get("heartbeat_task"):
-        overrides["heartbeat_task"] = config["heartbeat_task"]
-    elif config.get("default_task"):
-        overrides["heartbeat_task"] = config["default_task"]
-    if config.get("session_type"):
-        overrides["session_type"] = config["session_type"]
-    return overrides
-
 def init_session(
     session_id: str,
     entity_name: str,
@@ -89,8 +70,8 @@ def init_session(
     sessions_base: Path | None = None,
     system_sessions_base: Path | None = None,
     entity_base: Path | None = None,
-    heartbeat: float = 600.0,
     initial_message: str | None = None,
+    **_kwargs,  # absorb legacy heartbeat= for backward compat
 ) -> str:
     """Create a new session on disk from an entity, ready for the server to pick up.
 
@@ -102,7 +83,6 @@ def init_session(
         sessions_base:       Root of agent-visible sessions/ directory.
         system_sessions_base: Root of _sessions/ directory.
         entity_base:         Root of entity/ directory.
-        heartbeat:           Heartbeat interval in seconds (default: 600).
         initial_message:     Optional first user message to write to context.jsonl.
     """
     s_base = sessions_base or _DEFAULT_SESSIONS_BASE
@@ -140,11 +120,6 @@ def init_session(
     )
 
     entity_dir = ent_base / entity_name
-
-    # Load entity-level overrides (heartbeat, session_type, etc.)
-    entity_overrides = _load_entity_overrides(entity_dir)
-    effective_heartbeat = entity_overrides.pop("heartbeat_interval", None) or heartbeat
-    heartbeat_task_content = entity_overrides.pop("heartbeat_task", None)
 
     # Config always comes from meta session; meta is initially populated from entity.
     meta_dir = ensure_meta_session(entity_name, s_base=s_base)
@@ -189,7 +164,7 @@ def init_session(
                 if not dst.exists():
                     shutil.copy2(src, dst)
 
-    # Copy config.yaml from meta (or entity) into session core/, then apply overrides.
+    # Copy config.yaml from meta (or entity) into session core/.
     meta_config_path = meta_core_dir / "config.yaml"
     session_config_path = core_dir / "config.yaml"
     if not session_config_path.exists():
@@ -201,9 +176,7 @@ def init_session(
             if entity_config_path.exists():
                 shutil.copy2(entity_config_path, session_config_path)
             else:
-                ensure_config(session_dir, heartbeat_interval=effective_heartbeat, **entity_overrides)
-    # Always apply heartbeat + any remaining overrides
-    write_config(session_dir, heartbeat_interval=effective_heartbeat, **entity_overrides)
+                ensure_config(session_dir)
     # Record meta version in status.json so staleness can be detected later.
     meta_version = get_meta_version(entity_name, sys_base=sys_base)
     if meta_version:
@@ -244,18 +217,20 @@ def init_session(
             if not dst_path.exists():
                 shutil.copy2(src_path, dst_path)
 
-    # Create task cards directory; seed heartbeat card for persistent sessions
+    # Create task cards directory; seed duty card if config defines one
     tasks_dir = core_dir / "tasks"
     tasks_dir.mkdir(parents=True, exist_ok=True)
-    if entity_overrides.get("session_type") == "persistent":
-        ensure_heartbeat_card(
+    session_cfg = read_config(session_dir)
+    duty = session_cfg.get("duty")
+    if isinstance(duty, dict) and duty.get("interval"):
+        ensure_card(
             tasks_dir,
-            interval=effective_heartbeat,
-            content=heartbeat_task_content,
+            name="duty",
+            interval=float(duty["interval"]),
+            description=duty.get("description", ""),
         )
 
     ensure_session_status(system_dir)
-    write_session_status(system_dir, heartbeat_interval=effective_heartbeat)
 
     # Write optional initial message
     if initial_message:

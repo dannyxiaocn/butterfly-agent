@@ -290,7 +290,7 @@ def cmd_new(args) -> int:
         print(f"Error: entity '{args.entity}' not found in entity/", file=sys.stderr)
         return 1
     try:
-        create_session(session_id, args.entity, args.heartbeat, args.sessions_base, args.system_base)
+        create_session(session_id, args.entity, sessions_dir=args.sessions_base, system_sessions_dir=args.system_base)
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1

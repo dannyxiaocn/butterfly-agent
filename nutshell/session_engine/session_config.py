@@ -30,6 +30,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "tools": [],
     "skills": [],
+    "duty": None,  # Optional dict: {"interval": N, "description": "..."}
 }
 
 

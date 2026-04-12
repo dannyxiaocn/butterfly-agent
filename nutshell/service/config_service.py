@@ -18,7 +18,7 @@ def get_config(session_id: str, sessions_dir: Path, system_sessions_dir: Path) -
 
 def update_config(session_id: str, sessions_dir: Path, system_sessions_dir: Path, params: dict) -> dict:
     _validate_session_id(session_id)
-    from nutshell.session_engine.task_cards import ensure_heartbeat_card, load_card, migrate_legacy_task_sources, save_card
+    from nutshell.session_engine.task_cards import ensure_card, load_card, migrate_legacy_task_sources, save_card
     session_dir = sessions_dir / session_id
     system_dir = system_sessions_dir / session_id
     if not system_dir.exists() or not session_dir.exists():
@@ -26,28 +26,34 @@ def update_config(session_id: str, sessions_dir: Path, system_sessions_dir: Path
     params = dict(params)
     params.pop('is_meta_session', None)
     migrate_legacy_task_sources(session_dir)
-    if 'default_task' in params:
-        heartbeat_content = params.pop('default_task')
-        if heartbeat_content not in (None, ''):
-            existing_heartbeat = load_card(session_dir / 'core' / 'tasks', 'heartbeat')
-            if existing_heartbeat is None:
-                ensure_heartbeat_card(
-                    session_dir / 'core' / 'tasks',
-                    interval=float(params.get('heartbeat_interval') or read_config(session_dir).get('heartbeat_interval') or 7200.0),
-                    content=str(heartbeat_content),
-                )
-            else:
-                existing_heartbeat.content = str(heartbeat_content)
-                save_card(session_dir / 'core' / 'tasks', existing_heartbeat)
-    if 'heartbeat_interval' in params:
-        interval = params['heartbeat_interval']
-        if interval is not None:
-            heartbeat = load_card(session_dir / 'core' / 'tasks', 'heartbeat')
-            if heartbeat is not None:
-                heartbeat.interval = interval
-                save_card(session_dir / 'core' / 'tasks', heartbeat)
-            elif params.get('session_type') == 'persistent':
-                ensure_heartbeat_card(session_dir / 'core' / 'tasks', interval=interval)
+
+    # Legacy compat: convert default_task/heartbeat_interval to duty format
+    legacy_task = params.pop('default_task', None)
+    legacy_interval = params.pop('heartbeat_interval', None)
+    if legacy_task or legacy_interval:
+        tasks_dir = session_dir / 'core' / 'tasks'
+        existing = load_card(tasks_dir, 'duty') or load_card(tasks_dir, 'heartbeat')
+        if existing is not None:
+            if legacy_task:
+                existing.description = str(legacy_task)
+            if legacy_interval is not None:
+                existing.interval = float(legacy_interval)
+            save_card(tasks_dir, existing)
+        elif legacy_interval is not None:
+            ensure_card(tasks_dir, name='duty', interval=float(legacy_interval), description=str(legacy_task or ''))
+
+    # Sync duty config field with task card
+    duty = params.get('duty')
+    if isinstance(duty, dict) and duty.get('interval'):
+        tasks_dir = session_dir / 'core' / 'tasks'
+        existing = load_card(tasks_dir, 'duty')
+        if existing is not None:
+            existing.interval = float(duty['interval'])
+            existing.description = duty.get('description', existing.description)
+            save_card(tasks_dir, existing)
+        else:
+            ensure_card(tasks_dir, name='duty', interval=float(duty['interval']), description=duty.get('description', ''))
+
     write_config(session_dir, **params)
     saved = read_config(session_dir)
     return {**saved, 'is_meta_session': is_meta_session(session_id)}

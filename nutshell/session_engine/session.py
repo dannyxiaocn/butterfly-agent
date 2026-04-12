@@ -11,10 +11,10 @@ from nutshell.core.agent import Agent
 from nutshell.core.hook import OnLoopEnd, OnLoopStart, OnTextChunk, OnToolCall, OnToolDone
 from nutshell.core.tool import Tool
 from nutshell.core.types import AgentResult
-from nutshell.session_engine.session_config import read_config, write_config, ensure_config
+from nutshell.session_engine.session_config import read_config, ensure_config
 from nutshell.session_engine.task_cards import (
-    TaskCard, clear_all_cards, has_pending_cards,
-    load_all_cards, load_due_cards, migrate_legacy_task_sources, save_card,
+    TaskCard, clear_all_cards,
+    load_due_cards, migrate_legacy_task_sources, save_card,
 )
 from nutshell.llm_engine.registry import provider_name, resolve_provider
 from nutshell.session_engine.session_status import ensure_session_status, read_session_status, write_session_status
@@ -25,7 +25,6 @@ if TYPE_CHECKING:
 
 SESSIONS_DIR = Path(__file__).parent.parent.parent / "sessions"
 _SYSTEM_SESSIONS_DIR = Path(__file__).parent.parent.parent / "_sessions"
-DEFAULT_HEARTBEAT_INTERVAL = 600.0  # 10 minutes
 SESSION_FINISHED = "SESSION_FINISHED"
 
 
@@ -67,7 +66,7 @@ class Session:
         session_id: str | None = None,
         base_dir: Path = SESSIONS_DIR,
         system_base: Path = _SYSTEM_SESSIONS_DIR,
-        heartbeat: float = DEFAULT_HEARTBEAT_INTERVAL,
+        heartbeat: float = 600.0,  # legacy param, ignored (task cards have own intervals)
         *,
         on_loop_start: OnLoopStart | None = None,
         on_loop_end: OnLoopEnd | None = None,
@@ -79,7 +78,7 @@ class Session:
         self._session_id = session_id or (datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + "-" + uuid.uuid4().hex[:4])
         self._base_dir = base_dir
         self._system_base = system_base
-        self._heartbeat_interval = heartbeat
+        # heartbeat param accepted for backward compat but ignored (task cards have their own intervals)
         self._agent_lock: asyncio.Lock = asyncio.Lock()
         self._ipc: FileIPC | None = None
 
@@ -448,19 +447,6 @@ class Session:
         self._set_model_status("idle", triggered_by)
         return result
 
-    # ── Session type ─────────────────────────────────────────────────
-
-    @staticmethod
-    def _resolve_session_type(params: dict) -> str:
-        """Return normalized session_type from params, with backward compat for 'persistent' bool."""
-        st = params.get("session_type")
-        if st in ("ephemeral", "default", "persistent"):
-            return st
-        # Backward compat: old params with persistent=True → "persistent"
-        if params.get("persistent"):
-            return "persistent"
-        return "default"
-
     # ── Stop / Start ───────────────────────────────────────────────
 
     def is_stopped(self) -> bool:
@@ -545,18 +531,6 @@ class Session:
                         await self.chat(content, user_input_id=msg_id, caller_type=caller_type)
                     except Exception as exc:
                         self._append_event({"type": "error", "content": str(exc)})
-
-                # Ephemeral auto-stop: after processing inputs, if no pending
-                # task cards and no new messages, auto-stop.
-                if inputs and not self.is_stopped():
-                    session_type = self._resolve_session_type(read_config(self.session_dir))
-                    if session_type == "ephemeral":
-                        _, next_offset = ipc.poll_inputs(input_offset)
-                        no_pending = next_offset == input_offset
-                        if not has_pending_cards(self.tasks_dir) and no_pending:
-                            self.set_status("stopped")
-                            write_session_status(self.system_dir, stopped_at=datetime.now().isoformat())
-                            self._append_event({"type": "status", "value": "ephemeral auto-stop"})
 
                 # Auto-expire stopped sessions after 5 hours
                 if self.is_stopped():

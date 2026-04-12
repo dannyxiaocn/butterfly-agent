@@ -169,9 +169,8 @@ def create_app(sessions_dir: Path, system_sessions_dir: Path | None = None) -> F
     async def create_session(body: dict):
         session_id = body.get("id") or (datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + "-" + uuid.uuid4().hex[:4])
         entity = body.get("entity", _DEFAULT_ENTITY)
-        heartbeat = float(body.get("heartbeat", 7200.0))
         try:
-            return service_create_session(session_id, entity, heartbeat, sessions_dir, system_sessions_dir)
+            return service_create_session(session_id, entity, sessions_dir=sessions_dir, system_sessions_dir=system_sessions_dir)
         except ValueError as exc:
             raise HTTPException(400, str(exc))
 

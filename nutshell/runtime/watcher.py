@@ -144,13 +144,9 @@ class SessionWatcher:
         """Create a minimal agent from params and run server loop."""
         from nutshell.session_engine.session import Session
         from nutshell.runtime.ipc import FileIPC
-        from nutshell.session_engine.session_status import read_session_status
         from nutshell.session_engine.session_config import read_config
 
         session_dir = self.sessions_dir / session_id
-
-        # Read heartbeat_interval from core/config.yaml (source of truth).
-        heartbeat = float(read_config(session_dir).get("heartbeat_interval") or 7200.0)
 
         try:
             if self._agent_factory is not None:
@@ -184,7 +180,6 @@ class SessionWatcher:
             session_id=session_id,
             base_dir=self.sessions_dir,
             system_base=system_dir.parent,
-            heartbeat=heartbeat,
         )
 
         # Always load history (needed for user messages even when tasks are empty)

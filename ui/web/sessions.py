@@ -7,5 +7,5 @@ def _read_session_info(session_dir, system_dir):
     return _service_get_session(system_dir.name, session_dir.parent, system_dir.parent)
 
 
-def _init_session(sessions_dir, system_sessions_dir, session_id, entity, heartbeat):
-    return _service_create_session(session_id, entity, heartbeat, sessions_dir, system_sessions_dir)
+def _init_session(sessions_dir, system_sessions_dir, session_id, entity, heartbeat=None):
+    return _service_create_session(session_id, entity, sessions_dir=sessions_dir, system_sessions_dir=system_sessions_dir)

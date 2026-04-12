@@ -63,7 +63,6 @@ def get_session(session_id: str, sessions_dir: Path, system_sessions_dir: Path) 
         "id": session_id,
         "entity": manifest.get("entity", "?"),
         "created_at": manifest.get("created_at", ""),
-        "heartbeat": manifest.get("heartbeat", 10.0),
         "pid_alive": pid_alive,
         "status": status,
         "has_tasks": has_tasks,
@@ -73,9 +72,10 @@ def get_session(session_id: str, sessions_dir: Path, system_sessions_dir: Path) 
         "updated_at": status_payload.get("updated_at"),
         "stopped_at": status_payload.get("stopped_at"),
         "tasks_updated_at": tasks_mtime,
-        "heartbeat_interval": status_payload.get("heartbeat_interval", 600.0),
-        "session_type": params.get("session_type", "default"),
-        "persistent": params.get("session_type") == "persistent",
+        # Backward compat — fixed values; session_type distinction removed
+        "heartbeat_interval": 600.0,
+        "session_type": "default",
+        "persistent": False,
         "params": params,
         "alive": pid_alive and status != "stopped",
     }
@@ -112,7 +112,8 @@ def list_sessions(sessions_dir: Path, system_sessions_dir: Path, exclude_meta: b
     return sort_sessions(result)
 
 
-def create_session(session_id: str, entity: str, heartbeat: float, sessions_dir: Path, system_sessions_dir: Path) -> dict:
+def create_session(session_id: str, entity: str, sessions_dir: Path, system_sessions_dir: Path, **_kwargs) -> dict:
+    """Create a new session. Accepts legacy heartbeat= kwarg for backward compat (ignored)."""
     _validate_session_id(session_id)
     from nutshell.session_engine.session_init import init_session
     entity_path = Path(entity)
@@ -131,7 +132,6 @@ def create_session(session_id: str, entity: str, heartbeat: float, sessions_dir:
         sessions_base=sessions_dir,
         system_sessions_base=system_sessions_dir,
         entity_base=entity_base,
-        heartbeat=heartbeat,
     )
     return {"id": session_id, "entity": entity}
 
