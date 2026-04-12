@@ -6,10 +6,9 @@ import unittest
 from pathlib import Path
 
 import nutshell
-from porter_test_support import repo_root_from
 
 
-REPO_ROOT = repo_root_from(Path(__file__))
+from conftest import REPO_ROOT
 
 
 class PackageSurfaceTest(unittest.TestCase):

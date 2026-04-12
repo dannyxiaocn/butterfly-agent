@@ -10,7 +10,6 @@ from ui.cli.visit import gather_room_data
 
 from nutshell.runtime.ipc import FileIPC
 from nutshell.session_engine.session_init import init_session
-from porter_test_support import PORTER_TESTS_ROOT, porter_components, repo_root_from
 
 
 class FullSystemTest(unittest.TestCase):
@@ -66,39 +65,6 @@ class FullSystemTest(unittest.TestCase):
         self.assertEqual(data["entity"], "demo")
         self.assertEqual(data["recent_context"][-1]["summary"], "world")
 
-    def test_porter_suite_registry_contains_expected_components(self) -> None:
-        components = porter_components()
-        for expected in {
-            "cli_app",
-            "entity",
-            "core",
-            "llm_engine",
-            "runtime",
-            "session_engine",
-            "skill_engine",
-            "tool_engine",
-            "nutshell",
-            "ui",
-            "ui_cli",
-            "ui_web",
-            "porter_system",
-        }:
-            self.assertIn(expected, components)
-
-    def test_legacy_unit_test_directories_are_removed(self) -> None:
-        root = repo_root_from(Path(__file__))
-        legacy_dirs = sorted(path.relative_to(root).as_posix() for path in root.glob("**/unit_test"))
-        self.assertEqual(legacy_dirs, [])
-        self.assertTrue(PORTER_TESTS_ROOT.exists())
-
-    def test_non_porter_pytest_files_are_removed(self) -> None:
-        root = repo_root_from(Path(__file__))
-        external_tests = sorted(
-            path.relative_to(root).as_posix()
-            for path in (root / "tests").rglob("test_*.py")
-            if PORTER_TESTS_ROOT not in path.parents
-        )
-        self.assertEqual(external_tests, [])
 
 
 if __name__ == "__main__":

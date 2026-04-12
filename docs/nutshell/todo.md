@@ -41,8 +41,6 @@ See `docs/nutshell/service/todo.md` for full detail.
 - [ ] Sub-agent spawning (call sub-agent / spawn_session)
 - [ ] Sub-agent ACP to OpenClaw
 - [ ] Auto cache system
-- [ ] Porters system completion
-
 ---
 
 ## Completed

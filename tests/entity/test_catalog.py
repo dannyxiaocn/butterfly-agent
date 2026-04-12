@@ -3,15 +3,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from porter_test_support import repo_root_from
 
-REPO_ROOT = repo_root_from(Path(__file__))
+from conftest import REPO_ROOT
 DOCS_DIR = REPO_ROOT / "docs" / "entity"
 ACTIVE_ENTITIES = [
     "agent",
     "nutshell_dev",
     "nutshell_dev_codex",
-    "porters",
 ]
 
 
