@@ -23,6 +23,13 @@ Session-scoped capabilities live in `core/` inside your session directory:
 
 ## Building a tool
 
+Tools in the system live in two places:
+
+- **Shared tools (toolhub)**: `toolhub/<name>/` with `tool.json` (schema) + `executor.py` (implementation). These are available to all sessions and managed centrally.
+- **Session-local tools**: `core/tools/<name>.json` (schema) + `core/tools/<name>.sh` (implementation). Agent-created tools use this pattern — they live in your session and take effect after `reload_capabilities`.
+
+### Creating a session-local tool
+
 1. Write the JSON schema to `core/tools/<name>.json`
 2. Write the shell implementation to `core/tools/<name>.sh`
 3. `chmod +x core/tools/<name>.sh`
@@ -151,25 +158,41 @@ rm -rf sessions/YOUR_ID/core/skills/my-skill
 
 ## Task board
 
-`core/tasks/` drives task execution. Each `.md` file is a task card with YAML frontmatter; `core/tasks/heartbeat.md` is the recurring heartbeat card.
+`core/tasks/` drives task execution. Each `.json` file is a task card. Use the `manage_task` tool to create, update, and manage tasks.
 
-```bash
-# Read tasks
-ls sessions/YOUR_ID/core/tasks
-cat sessions/YOUR_ID/core/tasks/heartbeat.md
+### Task card JSON format
 
-# Update an existing task card body while keeping frontmatter valid
-python - <<'PY'
-from pathlib import Path
-path = Path("sessions/YOUR_ID/core/tasks/heartbeat.md")
-text = path.read_text(encoding="utf-8")
-frontmatter, sep, _body = text.partition("\n---\n\n")
-if text.startswith("---\n") and sep:
-    path.write_text(frontmatter + "\n---\n\nTask 1 — in progress: completed step A, next is step B\n", encoding="utf-8")
-PY
+```json
+{
+  "name": "my-task",
+  "description": "What this task does",
+  "status": "paused",
+  "interval": 3600,
+  "created_at": "2026-04-12T10:00:00",
+  "last_started_at": null,
+  "last_finished_at": null,
+  "comments": "",
+  "progress": ""
+}
 ```
 
-**Write progress notes your future self can resume from cold.** Add, update, pause, or complete task cards instead of maintaining a single flat `tasks.md` file.
+### Status values
+
+- **paused** — task is idle, will be triggered when due (based on interval)
+- **working** — task is currently being executed
+- **finished** — task completed (one-shot) or manually finished
+
+### Managing tasks
+
+```bash
+# List task cards
+ls sessions/YOUR_ID/core/tasks/*.json
+
+# Read a task
+cat sessions/YOUR_ID/core/tasks/duty.json
+```
+
+Use the `manage_task` tool to create/update/delete tasks programmatically. **Write progress notes your future self can resume from cold** — use the `progress` and `comments` fields to track state across activations.
 
 ---
 
@@ -192,21 +215,16 @@ Keep memory concise — it consumes context every activation. One fact per line.
 
 ---
 
-## Runtime config (params.json)
+## Runtime config (config.yaml)
 
-`core/params.json` controls session runtime. Changes take effect on the next activation.
+`core/config.yaml` controls session runtime — model, provider, thinking settings, tool/skill lists. Changes take effect on the next activation.
 
 ```bash
-python3 << 'EOF'
-import json, pathlib
-p = pathlib.Path('sessions/YOUR_ID/core/params.json')
-d = json.loads(p.read_text())
-d['heartbeat_interval'] = 300   # 60-300 = urgent, 600 = normal, 3600+ = slow
-# d['model'] = 'claude-opus-4-6'
-# d['tool_providers'] = {'web_search': 'tavily'}
-p.write_text(json.dumps(d, indent=2))
-EOF
+cat sessions/YOUR_ID/core/config.yaml
+# Edit with any text editor or bash
 ```
+
+Key fields: `model`, `provider`, `thinking`, `thinking_budget`, `tool_providers`, `duty` (recurring task config).
 
 ---
 

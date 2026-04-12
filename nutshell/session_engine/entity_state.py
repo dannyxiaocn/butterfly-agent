@@ -244,8 +244,7 @@ def populate_meta_from_entity(
 
     # Copy entity's config.yaml into meta session core/.
     # config.yaml already contains everything (model, provider, thinking, tools, skills, prompts).
-    # Runtime defaults (heartbeat_interval, session_type, etc.) are filled in
-    # by start_meta_agent() via _META_AGENT_DEFAULTS after this call.
+    # start_meta_agent() ensures basic config exists after this call.
     entity_config = entity_dir / 'config.yaml'
     if entity_config.exists():
         shutil.copy2(entity_config, core_dir / 'config.yaml')
@@ -442,13 +441,6 @@ Be intelligent — consider context and importance, not just mechanical rules.
 # TODO: more efficient tools for learning what to update (session diff summaries, change detection)
 """
 
-_META_AGENT_DEFAULTS = {
-    "session_type": "persistent",
-    "heartbeat_interval": 21600,
-    "default_task": "Dream: review and process all child sessions for this entity",
-}
-
-
 def start_meta_agent(
     entity_name: str,
     entity_base: Path | None = None,
@@ -461,8 +453,8 @@ def start_meta_agent(
     Returns the system dir path (_sessions/<entity>_meta/).
     """
     from nutshell.session_engine.session_status import ensure_session_status
-    from nutshell.session_engine.session_config import read_config, write_config
-    from nutshell.session_engine.task_cards import ensure_heartbeat_card, migrate_legacy_default_task
+    from nutshell.session_engine.session_config import ensure_config
+    from nutshell.session_engine.task_cards import ensure_card, migrate_legacy_task_sources
 
     sessions_base = s_base or _SESSIONS_DIR
     system_base = sys_base or _SYSTEM_SESSIONS_DIR
@@ -498,7 +490,6 @@ def start_meta_agent(
             encoding="utf-8",
         )
 
-    # Write task prompt (new name: task.md; also write heartbeat.md for backward compat)
     task_md = core_dir / "task.md"
     if not task_md.read_text(encoding="utf-8").strip():
         task_md.write_text(
@@ -506,20 +497,17 @@ def start_meta_agent(
             encoding="utf-8",
         )
 
-    current_config = read_config(meta_dir)
-    updates: dict = {}
-    for key, default_val in _META_AGENT_DEFAULTS.items():
-        if current_config.get(key) in (None, False, 0, ""):
-            updates[key] = default_val
-    if updates:
-        write_config(meta_dir, **updates)
-    config_after = read_config(meta_dir)
-    ensure_heartbeat_card(
+    # Ensure basic config exists (no legacy session_type/heartbeat_interval defaults)
+    ensure_config(meta_dir)
+
+    # Create meta task card (6-hour recurring cycle)
+    ensure_card(
         core_dir / "tasks",
-        interval=float(config_after.get("heartbeat_interval") or _META_AGENT_DEFAULTS["heartbeat_interval"]),
-        content=config_after.get("default_task"),
+        name="meta",
+        interval=21600.0,
+        description="Dream: review and process all child sessions for this entity",
     )
-    migrate_legacy_default_task(meta_dir)
+    migrate_legacy_task_sources(meta_dir)
 
     return system_dir
 

@@ -27,20 +27,10 @@ def update_config(session_id: str, sessions_dir: Path, system_sessions_dir: Path
     params.pop('is_meta_session', None)
     migrate_legacy_task_sources(session_dir)
 
-    # Legacy compat: convert default_task/heartbeat_interval to duty format
-    legacy_task = params.pop('default_task', None)
-    legacy_interval = params.pop('heartbeat_interval', None)
-    if legacy_task or legacy_interval:
-        tasks_dir = session_dir / 'core' / 'tasks'
-        existing = load_card(tasks_dir, 'duty') or load_card(tasks_dir, 'heartbeat')
-        if existing is not None:
-            if legacy_task:
-                existing.description = str(legacy_task)
-            if legacy_interval is not None:
-                existing.interval = float(legacy_interval)
-            save_card(tasks_dir, existing)
-        elif legacy_interval is not None:
-            ensure_card(tasks_dir, name='duty', interval=float(legacy_interval), description=str(legacy_task or ''))
+    # Strip legacy keys that no longer belong in config
+    params.pop('default_task', None)
+    params.pop('heartbeat_interval', None)
+    params.pop('session_type', None)
 
     # Sync duty config field with task card
     duty = params.get('duty')

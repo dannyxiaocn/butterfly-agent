@@ -72,10 +72,6 @@ def get_session(session_id: str, sessions_dir: Path, system_sessions_dir: Path) 
         "updated_at": status_payload.get("updated_at"),
         "stopped_at": status_payload.get("stopped_at"),
         "tasks_updated_at": tasks_mtime,
-        # Backward compat — fixed values; session_type distinction removed
-        "heartbeat_interval": 600.0,
-        "session_type": "default",
-        "persistent": False,
         "params": params,
         "alive": pid_alive and status != "stopped",
     }

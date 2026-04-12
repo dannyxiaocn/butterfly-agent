@@ -245,12 +245,6 @@ def _parse_legacy_md_card(path: Path) -> TaskCard:
     )
 
 
-# Legacy aliases for backward compatibility
-def ensure_heartbeat_card(tasks_dir: Path, interval: float, content: str | None = None) -> TaskCard:
-    """Legacy: ensure a heartbeat task card exists."""
-    return ensure_card(tasks_dir, "heartbeat", interval=interval, description=content or "")
-
-
 def migrate_legacy_task_sources(session_dir: Path) -> None:
     """Migrate legacy task sources (tasks.md, default_task) into task cards."""
     core_dir = session_dir / "core"
@@ -267,6 +261,3 @@ def migrate_legacy_task_sources(session_dir: Path) -> None:
             save_card(tasks_dir, card)
         tasks_md.unlink()
 
-
-# Legacy exports
-_DEFAULT_HEARTBEAT_CONTENT = ""

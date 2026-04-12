@@ -2,14 +2,11 @@ import json
 from pathlib import Path
 
 DEFAULT_PARAMS: dict = {
-    "heartbeat_interval": 7200.0,
-    "model": None,          # None → use agent.yaml default
+    "model": None,          # None → use config.yaml default
     "provider": None,       # None → use Anthropic
     "fallback_model": None,     # Optional fallback model if primary fails
     "fallback_provider": None,  # Optional fallback provider if primary fails
     "tool_providers": {"web_search": "brave"},  # web_search: "brave" | "tavily"
-    "session_type": "default",  # "ephemeral" | "default" | "persistent"
-    "default_task": None,   # legacy alias; migrated into core/tasks/heartbeat.md
     "thinking": False,      # True → enable extended thinking for this session
     "thinking_budget": 8000,  # budget_tokens for extended thinking (Anthropic/Kimi only)
     "thinking_effort": "high",  # reasoning effort level (Codex only): none/minimal/low/medium/high/xhigh
@@ -32,14 +29,6 @@ def read_session_params(session_dir: Path) -> dict:
     if not isinstance(raw, dict):
         return dict(DEFAULT_PARAMS)
     params = {**DEFAULT_PARAMS, **raw}
-    # Guard against zero/negative heartbeat_interval which would cause the timer to fire constantly
-    interval = params.get("heartbeat_interval")
-    try:
-        interval_value = float(interval) if interval is not None else None
-    except (TypeError, ValueError):
-        interval_value = None
-    if interval is not None and (interval_value is None or interval_value < 1.0):
-        params["heartbeat_interval"] = DEFAULT_PARAMS["heartbeat_interval"]
     return params
 
 
