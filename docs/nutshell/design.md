@@ -26,6 +26,6 @@ Entity (static templates)
 
 - **Dual directory pattern**: `sessions/<id>/` (agent-visible workspace) vs `_sessions/<id>/` (system-only state). Agents never see system internals.
 - **Hot reload**: Capabilities reload from disk before every agent activation. Edit files → agent picks up changes next run.
-- **Entity inheritance**: Deep inheritance chain with `extends`, `link/own/append` semantics in `agent.yaml`.
-- **Meta sessions**: Each entity has a meta session that holds flattened config and acts as a template for child sessions.
+- **Self-contained entities**: Each entity in `entity/` is fully self-contained — all prompts, tools, and skills are physically present. New entities are created with `--init-from <source>` (one-time copy) or `--blank`.
+- **Meta sessions**: Each entity seeds a meta session once; the meta session is the authoritative, evolving config. Child sessions are seeded from meta. Version staleness notices inform users when meta has advanced.
 - **File-based IPC**: JSONL append-only logs with byte-offset polling. No sockets, no message queues.

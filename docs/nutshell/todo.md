@@ -23,12 +23,6 @@
 - [ ] **skill tool observability**：记录 skill load/use 事件到 runtime stats
 - [ ] **skill engine 端到端测试补强**：新增 provider 真实交互模拟
 
-### Entity Inheritance Bug
-
-- [ ] `init_session()` reads agent.yaml directly for model/provider — does not walk extends chain
-- [ ] `populate_meta_from_entity()` reads params directly — does not resolve inheritance
-- [ ] `own/link/append` fields defined but mostly unused outside memory/playground sync
-
 ### CLI-as-Authority Follow-ups
 
 See `docs/nutshell/service/todo.md` for full detail.

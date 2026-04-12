@@ -4,10 +4,10 @@
 
 | File | Purpose |
 |------|---------|
-| `entity_config.py` | `AgentConfig` dataclass — reads `agent.yaml`, parses inheritance metadata |
-| `agent_loader.py` | `AgentLoader` — builds `Agent` from entity dir, resolving extends chain |
-| `entity_state.py` | Meta session lifecycle, alignment, gene commands, entity↔meta sync |
-| `session_init.py` | `init_session()` — creates full session directory structure from entity |
+| `entity_config.py` | `AgentConfig` dataclass — reads `agent.yaml`, provides typed view of manifest |
+| `agent_loader.py` | `AgentLoader` — builds `Agent` from a fully self-contained entity dir |
+| `entity_state.py` | Meta session lifecycle, version management, gene commands, entity→meta bootstrap |
+| `session_init.py` | `init_session()` — creates full session directory structure from meta session |
 | `session_params.py` | Reads/writes `core/params.json` with defaults |
 | `session_status.py` | Reads/writes `_sessions/<id>/status.json` |
 | `task_cards.py` | Per-task `.md` files in `core/tasks/` with YAML frontmatter |
@@ -17,6 +17,7 @@
 
 ```
 loop (0.5s sleep):
+  ├─ _emit_version_notice_if_stale()  ← once on startup; emits system_notice if meta is newer
   ├─ poll_inputs() → new user_input → chat(message)
   ├─ poll_interrupt() → interrupt → stop current run
   └─ check due task cards → tick(card)
@@ -38,18 +39,26 @@ tick(card):
 2. Write `manifest.json`, create `.venv`
 3. Ensure meta session → `populate_meta_from_entity()` if first time
 4. Copy prompts/tools/skills **from meta** (not directly from entity)
-5. Write `params.json` from entity's `agent.yaml`
+5. Write `params.json` from entity's `agent.yaml`; record meta version as `agent_version`
 6. Seed memory from meta → entity fallback
 7. Seed playground, task cards
 
 ## AgentLoader.load()
 
-Recursively walks `extends` chain:
+Each entity is fully self-contained — no inheritance chain:
 1. Read `agent.yaml` → `AgentConfig`
-2. If `extends` → recursively load parent
-3. Resolve prompts: child has key → use it; empty → inherit parent
-4. Resolve tools/skills: `None` → inherit; explicit → resolve from ancestor dirs
-5. Resolve model/provider: child → parent → hardcoded last-resort fallback `claude-sonnet-4-6/anthropic` (only reached when no entity or parent sets a model)
+2. Load prompts from paths listed under `prompts:` key
+3. Load tools from paths listed under `tools:` key
+4. Load skills from paths listed under `skills:` key
+5. Resolve model/provider from manifest; fall back to `claude-sonnet-4-6/anthropic` if absent
+
+## Version Management
+
+- Meta session version: `agent_version` in `sessions/<entity>_meta/core/params.json`
+- Version history: `_sessions/<entity>_meta/version_history.json`
+- Child session records meta version at creation time in its own `core/params.json`
+- `Session._emit_version_notice_if_stale()` emits a `system_notice` event if meta has advanced
+- `bump_meta_version()` increments patch version and appends to history
 
 ## Session Types
 
@@ -63,5 +72,5 @@ Recursively walks `extends` chain:
 
 - Every session gets its own `.venv` under `sessions/<id>/.venv`
 - `reload_capabilities` tool is always injected at runtime
-- Meta alignment: if entity config diverges from synced meta, child sessions blocked until resolved
 - Legacy `default_task` values are migrated into `core/tasks/heartbeat.md` card
+- `system_notice` events are passed through IPC and rendered in both web UI and SSE stream

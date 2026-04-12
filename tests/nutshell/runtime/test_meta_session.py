@@ -3,16 +3,11 @@ from pathlib import Path
 import pytest
 
 from nutshell.session_engine.entity_state import (
-    MetaAlignmentError,
-    check_meta_alignment,
-    compute_meta_diffs,
     ensure_meta_session,
     get_meta_dir,
     get_meta_session_id,
     populate_meta_from_entity,
-    sync_entity_to_meta,
     sync_from_entity,
-    sync_meta_to_entity,
 )
 
 
@@ -55,41 +50,15 @@ def test_sync_from_entity_bootstraps_memory_when_empty(tmp_path, monkeypatch):
     assert (meta_dir / 'core' / 'memory' / 'notes.md').read_text(encoding='utf-8') == 'layer'
 
 
-def test_populate_and_compute_diffs_and_check(tmp_path, monkeypatch):
+def test_populate_meta_copies_entity_content(tmp_path, monkeypatch):
     entity_base = _seed_entity(tmp_path)
     monkeypatch.setattr('nutshell.session_engine.entity_state._SESSIONS_DIR', tmp_path / 'sessions')
     populate_meta_from_entity('demo', entity_base)
     meta_dir = get_meta_dir('demo')
     assert (meta_dir / 'core' / '.entity_synced').exists()
-    assert compute_meta_diffs('demo', entity_base) == []
-    check_meta_alignment('demo', entity_base)
-    (meta_dir / 'core' / 'system.md').write_text('sys v2\n', encoding='utf-8')
-    diffs = compute_meta_diffs('demo', entity_base)
-    assert diffs and diffs[0]['path'] == 'core/system.md'
-    with pytest.raises(MetaAlignmentError):
-        check_meta_alignment('demo', entity_base)
-
-
-def test_tools_json_normalized_no_false_diff(tmp_path, monkeypatch):
-    entity_base = _seed_entity(tmp_path)
-    monkeypatch.setattr('nutshell.session_engine.entity_state._SESSIONS_DIR', tmp_path / 'sessions')
-    populate_meta_from_entity('demo', entity_base)
-    meta_tool = get_meta_dir('demo') / 'core' / 'tools' / 'bash.json'
-    meta_tool.write_text('{\n  "description": "x", "input_schema": {"type":"object"}, "name": "bash"\n}\n', encoding='utf-8')
-    assert compute_meta_diffs('demo', entity_base) == []
-
-
-def test_sync_entity_to_meta_and_sync_meta_to_entity(tmp_path, monkeypatch):
-    entity_base = _seed_entity(tmp_path)
-    monkeypatch.setattr('nutshell.session_engine.entity_state._SESSIONS_DIR', tmp_path / 'sessions')
-    populate_meta_from_entity('demo', entity_base)
-    meta_dir = get_meta_dir('demo')
-    (meta_dir / 'core' / 'system.md').write_text('meta wins\n', encoding='utf-8')
-    sync_meta_to_entity('demo', entity_base)
-    assert (entity_base / 'demo' / 'prompts' / 'system.md').read_text(encoding='utf-8') == 'meta wins\n'
-    (entity_base / 'demo' / 'prompts' / 'system.md').write_text('entity wins\n', encoding='utf-8')
-    sync_entity_to_meta('demo', entity_base)
-    assert (meta_dir / 'core' / 'system.md').read_text(encoding='utf-8') == 'entity wins'
+    assert (meta_dir / 'core' / 'system.md').read_text(encoding='utf-8') == 'sys v1\n'
+    assert (meta_dir / 'core' / 'tools' / 'bash.json').exists()
+    assert (meta_dir / 'core' / 'skills' / 'alpha' / 'SKILL.md').exists()
 
 
 def test_sync_from_entity_bootstraps_playground_when_empty(tmp_path, monkeypatch):
@@ -113,54 +82,3 @@ def test_sync_from_entity_does_not_overwrite_meta_playground(tmp_path, monkeypat
     (meta_dir / 'playground' / 'config.txt').write_text('meta version', encoding='utf-8')
     sync_from_entity('demo', entity_base)
     assert (meta_dir / 'playground' / 'config.txt').read_text(encoding='utf-8') == 'meta version'
-
-
-def test_sync_from_entity_preserves_own_memory_when_parent_changes(tmp_path, monkeypatch):
-    entity_base = tmp_path / 'entity'
-    parent = entity_base / 'parent'
-    (parent / 'memory').mkdir(parents=True)
-    (parent / 'memory.md').write_text('parent-v1', encoding='utf-8')
-    (parent / 'agent.yaml').write_text('name: parent\n', encoding='utf-8')
-    child = entity_base / 'child'
-    child.mkdir(parents=True)
-    (child / 'agent.yaml').write_text(
-        """name: child
-extends: parent
-own:
-  - memory
-""",
-        encoding='utf-8',
-    )
-    monkeypatch.setattr('nutshell.session_engine.entity_state._SESSIONS_DIR', tmp_path / 'sessions')
-    sync_from_entity('child', entity_base)
-    meta_dir = get_meta_dir('child')
-    (meta_dir / 'core' / 'memory.md').write_text('child-own', encoding='utf-8')
-    (parent / 'memory.md').write_text('parent-v2', encoding='utf-8')
-    sync_from_entity('child', entity_base)
-    assert (meta_dir / 'core' / 'memory.md').read_text(encoding='utf-8') == 'child-own'
-
-
-def test_sync_from_entity_updates_inherited_playground_without_touching_own(tmp_path, monkeypatch):
-    entity_base = tmp_path / 'entity'
-    parent = entity_base / 'parent'
-    (parent / 'playground').mkdir(parents=True)
-    (parent / 'playground' / 'shared.txt').write_text('parent-shared', encoding='utf-8')
-    (parent / 'agent.yaml').write_text('name: parent\n', encoding='utf-8')
-    child = entity_base / 'child'
-    (child / 'playground').mkdir(parents=True)
-    (child / 'playground' / 'own.txt').write_text('child-own', encoding='utf-8')
-    (child / 'agent.yaml').write_text(
-        """name: child
-extends: parent
-link:
-  - playground
-own:
-  - memory
-""",
-        encoding='utf-8',
-    )
-    monkeypatch.setattr('nutshell.session_engine.entity_state._SESSIONS_DIR', tmp_path / 'sessions')
-    sync_from_entity('child', entity_base)
-    meta_dir = get_meta_dir('child')
-    assert (meta_dir / 'playground' / 'own.txt').read_text(encoding='utf-8') == 'child-own'
-    assert (meta_dir / 'playground' / 'shared.txt').read_text(encoding='utf-8') == 'parent-shared'

@@ -16,7 +16,7 @@
 
 Main server loop:
 1. Scans `_sessions/` every 1 second for directories with `manifest.json`
-2. Skips sessions with alive PIDs, alignment conflicts, or stopped status
+2. Skips sessions with alive PIDs or stopped status
 3. Creates asyncio task → reads manifest → builds Agent → starts `session.run_daemon_loop()`
 
 ## FileIPC

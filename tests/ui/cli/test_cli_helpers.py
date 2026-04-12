@@ -55,7 +55,7 @@ class CliHelpersTest(unittest.TestCase):
         self.assertIn("ship it", entries[0]["tasks_content"])
         self.assertIn('"id": "demo"', format_kanban_json(entries))
 
-    def test_create_entity_scaffolds_standalone_and_inheriting_layouts(self) -> None:
+    def test_create_entity_scaffolds_blank_and_init_from_layouts(self) -> None:
         with TemporaryDirectory() as tmp:
             entity_root = Path(tmp) / "entity"
             (entity_root / "agent" / "prompts").mkdir(parents=True)
@@ -66,11 +66,15 @@ class CliHelpersTest(unittest.TestCase):
             (entity_root / "agent" / "prompts" / "session.md").write_text("sess", encoding="utf-8")
             (entity_root / "agent" / "tools" / "bash.json").write_text('{"name":"bash"}', encoding="utf-8")
             (entity_root / "agent" / "tools" / "web_search.json").write_text('{"name":"web_search"}', encoding="utf-8")
-            standalone = create_entity("standalone", entity_root, None)
+            blank = create_entity("blank", entity_root, None)
             child = create_entity("child", entity_root, "agent")
-            self.assertTrue((standalone / "prompts" / "system.md").exists())
-            self.assertTrue((standalone / "tools" / "bash.json").exists())
-            self.assertTrue((child / "tools" / ".gitkeep").exists())
+            # Blank entity: empty prompt placeholders, no tools
+            self.assertTrue((blank / "prompts" / "system.md").exists())
+            self.assertFalse((blank / "tools" / "bash.json").exists())
+            # init_from entity: all files copied from source
+            self.assertTrue((child / "tools" / "bash.json").exists())
+            self.assertTrue((child / "tools" / "web_search.json").exists())
+            self.assertEqual((child / "prompts" / "system.md").read_text(), "sys")
 
     def test_visit_gather_room_data_and_format_text(self) -> None:
         with TemporaryDirectory() as tmp:

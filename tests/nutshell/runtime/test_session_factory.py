@@ -1,7 +1,6 @@
 import pytest
 
 import nutshell.session_engine.entity_state as ms
-from nutshell.session_engine.entity_state import MetaAlignmentError
 from nutshell.session_engine.session_init import init_session
 
 
@@ -43,13 +42,4 @@ def test_init_session_auto_populates_meta_when_unsynced(tmp_path):
     init_session('s1', 'demo', sessions_base=tmp_path / 'sessions', system_sessions_base=tmp_path / '_sessions', entity_base=entity_base)
     meta = tmp_path / 'sessions' / 'demo_meta' / 'core'
     assert (meta / '.entity_synced').exists()
-    assert (tmp_path / 'sessions' / 's1' / 'core' / 'system.md').read_text(encoding='utf-8') == 'sys'
-
-
-def test_init_session_raises_on_misaligned_meta(tmp_path):
-    entity_base = _seed_entity(tmp_path)
-    ms._SESSIONS_DIR = tmp_path / 'sessions'
-    ms.populate_meta_from_entity('demo', entity_base, tmp_path / 'sessions')
-    (tmp_path / 'sessions' / 'demo_meta' / 'core' / 'system.md').write_text('drift\n', encoding='utf-8')
-    with pytest.raises(MetaAlignmentError):
-        init_session('s1', 'demo', sessions_base=tmp_path / 'sessions', system_sessions_base=tmp_path / '_sessions', entity_base=entity_base)
+    assert (tmp_path / 'sessions' / 's1' / 'core' / 'system.md').read_text(encoding='utf-8').strip() == 'sys'

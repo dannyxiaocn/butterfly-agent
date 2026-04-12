@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from nutshell.core.agent import Agent
 from nutshell.runtime.ipc import FileIPC
-from nutshell.session_engine.entity_config import AgentConfig, _string_list
+from nutshell.session_engine.entity_config import AgentConfig
 from nutshell.session_engine.session_init import _load_entity_params, init_session
 from nutshell.session_engine.session_params import read_session_params, write_session_params
 from nutshell.session_engine.session import Session
@@ -19,24 +19,16 @@ from nutshell.session_engine.session_status import ensure_session_status, read_s
 
 
 class SessionEngineTest(unittest.TestCase):
-    def test_string_list_normalizes_scalars_and_lists(self) -> None:
-        self.assertEqual(_string_list(None), [])
-        self.assertEqual(_string_list("one"), ["one"])
-        self.assertEqual(_string_list(["one", 2, None]), ["one", "2"])
-
-    def test_agent_config_reads_inheritance_metadata(self) -> None:
+    def test_agent_config_reads_init_from_field(self) -> None:
         with TemporaryDirectory() as tmp:
             entity_dir = Path(tmp) / "demo"
             entity_dir.mkdir()
             (entity_dir / "agent.yaml").write_text(
-                "extends: agent\nlink: prompts\nown: memory\nappend:\n  - skills\n",
+                "name: demo\ninit_from: agent\nmodel: claude-sonnet-4-6\n",
                 encoding="utf-8",
             )
             config = AgentConfig.from_path(entity_dir)
-        self.assertEqual(config.extends, "agent")
-        self.assertEqual(config.inheritance.link, ["prompts"])
-        self.assertEqual(config.inheritance.own, ["memory"])
-        self.assertEqual(config.inheritance.append, ["skills"])
+        self.assertEqual(config.init_from, "agent")
 
     def test_load_entity_params_converts_legacy_persistent_flag(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -118,8 +110,8 @@ class SessionEngineTest(unittest.TestCase):
                 "nutshell.session_engine.session_init.ensure_meta_session",
                 side_effect=lambda *args, **kwargs: meta_dir,
             ), patch("nutshell.session_engine.session_init._meta_is_synced", return_value=True), patch(
-                "nutshell.session_engine.session_init.check_meta_alignment"
-            ), patch("nutshell.session_engine.session_init.ensure_gene_initialized"), patch(
+                "nutshell.session_engine.session_init.ensure_gene_initialized"
+            ), patch(
                 "nutshell.session_engine.session_init.start_meta_agent"
             ), patch("nutshell.session_engine.session_init.sync_from_entity"):
                 init_session(

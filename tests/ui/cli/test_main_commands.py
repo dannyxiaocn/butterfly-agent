@@ -292,7 +292,7 @@ def test_cmd_log_defaults_to_non_meta_session_when_meta_is_first(tmp_path, capsy
     assert "meta reply" not in out
 
 
-def test_cmd_entity_name_only_does_not_require_parent_prompt(tmp_path, capsys):
+def test_cmd_entity_name_only_does_not_require_init_from_prompt(tmp_path, capsys):
     from argparse import Namespace
     from unittest.mock import patch
 
@@ -300,19 +300,18 @@ def test_cmd_entity_name_only_does_not_require_parent_prompt(tmp_path, capsys):
     args = Namespace(
         entity_cmd="new",
         name="child",
-        extends=None,
-        standalone=False,
+        blank=False,
         entity_dir=str(tmp_path),
     )
 
-    with patch("ui.cli.new_agent._ask_parent", side_effect=AssertionError("interactive parent prompt should not be used")), patch(
+    with patch("ui.cli.new_agent._ask_init_from", side_effect=AssertionError("interactive prompt should not be used")), patch(
         "ui.cli.new_agent.create_entity",
         return_value=created,
-    ) as create_entity:
+    ) as mock_create:
         code = cmd_entity(args)
 
     assert code == 0
-    create_entity.assert_called_once()
+    mock_create.assert_called_once()
     assert "Created:" in capsys.readouterr().out
 
 

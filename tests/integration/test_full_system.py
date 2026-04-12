@@ -40,8 +40,8 @@ class FullSystemTest(unittest.TestCase):
                 "nutshell.session_engine.session_init.ensure_meta_session",
                 side_effect=lambda *args, **kwargs: meta_dir,
             ), patch("nutshell.session_engine.session_init._meta_is_synced", return_value=True), patch(
-                "nutshell.session_engine.session_init.check_meta_alignment"
-            ), patch("nutshell.session_engine.session_init.ensure_gene_initialized"), patch(
+                "nutshell.session_engine.session_init.ensure_gene_initialized"
+            ), patch(
                 "nutshell.session_engine.session_init.start_meta_agent"
             ), patch("nutshell.session_engine.session_init.sync_from_entity"):
                 init_session(

@@ -7,7 +7,7 @@ and belongs in the session engine, not the core pure-computation layer.
 from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any  # used in manifest type annotation
 
 
 @dataclass(frozen=True)
@@ -35,11 +35,3 @@ class AgentConfig:
 
         manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
         return cls(path=manifest_path.parent, manifest=manifest)
-
-
-def _string_list(value: Any) -> list[str]:
-    if value is None:
-        return []
-    if isinstance(value, list):
-        return [str(item) for item in value if item is not None]
-    return [str(value)]
