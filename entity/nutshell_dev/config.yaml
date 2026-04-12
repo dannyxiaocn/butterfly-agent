@@ -1,31 +1,23 @@
 name: nutshell_dev
 description: Development assistant with nutshell project context.
-version: 1.0.0
-init_from: agent
 model: gpt-5.4
 provider: codex-oauth
 fallback_model: kimi-for-coding
 fallback_provider: kimi-coding-plan
 max_iterations: 20
-
+thinking: true
+thinking_budget: 8000
+thinking_effort: high
+tool_providers:
+  web_search: brave
 prompts:
   system: prompts/system.md
   heartbeat: prompts/heartbeat.md
   session_context: prompts/session.md
-
 tools:
   - tools/bash.json
   - tools/skill.json
   - tools/web_search.json
-
 skills:
   - skills/nutshell
   - skills/creator-mode
-
-params:
-  thinking: true
-
-meta_session: >-
-  This entity instantiates child sessions via sessions/<entity>_meta/, which
-  holds the entity config plus mutable shared memory/playground state for
-  future sessions.

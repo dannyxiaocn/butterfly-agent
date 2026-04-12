@@ -12,7 +12,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from nutshell.session_engine.session_params import ensure_session_params, write_session_params
+from nutshell.session_engine.session_config import read_config, write_config, ensure_config
 from nutshell.session_engine.session_status import ensure_session_status, write_session_status
 from nutshell.session_engine.task_cards import ensure_heartbeat_card
 from nutshell.session_engine.entity_state import (
@@ -64,31 +64,24 @@ def _create_session_venv(session_dir: Path) -> Path:
     return venv_path
 
 
-def _load_entity_params(entity_dir: Path) -> dict:
-    """Read the ``params`` mapping from an entity's agent.yaml (if any).
+def _load_entity_overrides(entity_dir: Path) -> dict:
+    """Read runtime overrides from an entity's config.yaml.
 
-    Returns a dict of param overrides (e.g. session_type, heartbeat_task,
-    heartbeat_interval) that should be written into the session's params.json.
-    Converts legacy ``persistent: true`` to ``session_type: "persistent"``.
+    Returns a dict with heartbeat_interval, heartbeat_task, and session_type
+    if present in the entity config. These are the fields needed during session
+    creation that aren't simply copied with the config file.
     """
-    yaml_path = entity_dir / "agent.yaml"
-    if not yaml_path.exists():
-        return {}
-    try:
-        import yaml
-        manifest = yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
-    except Exception:
-        return {}
-    params = dict(manifest.get("params") or {})
-    # Backward compat: convert persistent bool → session_type
-    if "persistent" in params and "session_type" not in params:
-        if params.pop("persistent"):
-            params["session_type"] = "persistent"
-        else:
-            params.pop("persistent")
-    if "default_task" in params and "heartbeat_task" not in params:
-        params["heartbeat_task"] = params["default_task"]
-    return params
+    config = read_config(entity_dir)
+    overrides: dict = {}
+    if config.get("heartbeat_interval"):
+        overrides["heartbeat_interval"] = config["heartbeat_interval"]
+    if config.get("heartbeat_task"):
+        overrides["heartbeat_task"] = config["heartbeat_task"]
+    elif config.get("default_task"):
+        overrides["heartbeat_task"] = config["default_task"]
+    if config.get("session_type"):
+        overrides["session_type"] = config["session_type"]
+    return overrides
 
 def init_session(
     session_id: str,
@@ -149,11 +142,10 @@ def init_session(
 
     entity_dir = ent_base / entity_name
 
-    # Load entity-level param overrides (persistent, heartbeat task seed, etc.)
-    entity_params = _load_entity_params(entity_dir)
-    effective_heartbeat = entity_params.pop("heartbeat_interval", None) or heartbeat
-    heartbeat_task_content = entity_params.pop("heartbeat_task", None)
-    entity_params.pop("default_task", None)
+    # Load entity-level overrides (heartbeat, session_type, etc.)
+    entity_overrides = _load_entity_overrides(entity_dir)
+    effective_heartbeat = entity_overrides.pop("heartbeat_interval", None) or heartbeat
+    heartbeat_task_content = entity_overrides.pop("heartbeat_task", None)
 
     # Config always comes from meta session; meta is initially populated from entity.
     meta_dir = ensure_meta_session(entity_name, s_base=s_base)
@@ -187,26 +179,25 @@ def init_session(
                 if not dst.exists():
                     shutil.copy2(src, dst)
 
-    if not (core_dir / "params.json").exists():
-        try:
-            import yaml
-            manifest = yaml.safe_load((entity_dir / 'agent.yaml').read_text(encoding='utf-8')) if (entity_dir / 'agent.yaml').exists() else {}
-        except Exception:
-            manifest = {}
-        extra: dict = {}
-        if manifest.get('fallback_model'):
-            extra['fallback_model'] = manifest['fallback_model']
-        if manifest.get('fallback_provider'):
-            extra['fallback_provider'] = manifest['fallback_provider']
-        model = manifest.get('model')
-        provider = manifest.get('provider') or 'anthropic'
-        write_session_params(session_dir, heartbeat_interval=effective_heartbeat, model=model, provider=provider, **extra, **entity_params)
-    else:
-        write_session_params(session_dir, heartbeat_interval=effective_heartbeat, **entity_params)
-    # Record meta version in session params so staleness can be detected later.
-    meta_version = get_meta_version(entity_name, s_base=s_base)
+    # Copy config.yaml from meta (or entity) into session core/, then apply overrides.
+    meta_config_path = meta_core_dir / "config.yaml"
+    session_config_path = core_dir / "config.yaml"
+    if not session_config_path.exists():
+        if meta_config_path.exists():
+            shutil.copy2(meta_config_path, session_config_path)
+        else:
+            # No meta config yet — bootstrap from entity config.yaml
+            entity_config_path = entity_dir / "config.yaml"
+            if entity_config_path.exists():
+                shutil.copy2(entity_config_path, session_config_path)
+            else:
+                ensure_config(session_dir, heartbeat_interval=effective_heartbeat, **entity_overrides)
+    # Always apply heartbeat + any remaining overrides
+    write_config(session_dir, heartbeat_interval=effective_heartbeat, **entity_overrides)
+    # Record meta version in status.json so staleness can be detected later.
+    meta_version = get_meta_version(entity_name, sys_base=sys_base)
     if meta_version:
-        write_session_params(session_dir, agent_version=meta_version)
+        write_session_status(system_dir, agent_version=meta_version)
     # Seed mutable state from meta session, with entity memory as bootstrap fallback.
     sync_from_entity(entity_name, ent_base, s_base=s_base)
 
@@ -246,7 +237,7 @@ def init_session(
     # Create task cards directory; seed heartbeat card for persistent sessions
     tasks_dir = core_dir / "tasks"
     tasks_dir.mkdir(parents=True, exist_ok=True)
-    if entity_params.get("session_type") == "persistent":
+    if entity_overrides.get("session_type") == "persistent":
         ensure_heartbeat_card(
             tasks_dir,
             interval=effective_heartbeat,

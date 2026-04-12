@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
-from nutshell.session_engine.session_params import read_session_params, write_session_params
+from nutshell.session_engine.session_config import read_config, write_config
 from .sessions_service import _validate_session_id
 
 
@@ -38,7 +38,7 @@ def upsert_task(session_id: str, sessions_dir: Path, **task_fields) -> bool:
         starts_at = task_fields.get('starts_at', existing.starts_at if existing else None)
         ends_at = task_fields.get('ends_at', existing.ends_at if existing else None)
         if name == 'heartbeat' and interval is None:
-            interval = float(read_session_params(session_dir).get('heartbeat_interval') or 7200.0)
+            interval = float(read_config(session_dir).get('heartbeat_interval') or 7200.0)
         card = TaskCard(
             name=name,
             content=task_fields.get('content', existing.content if existing else ''),
@@ -55,7 +55,7 @@ def upsert_task(session_id: str, sessions_dir: Path, **task_fields) -> bool:
             delete_card(tasks_dir, previous_name)
         save_card(tasks_dir, card)
         if name == 'heartbeat' and card.interval is not None:
-            write_session_params(session_dir, heartbeat_interval=card.interval, default_task=None)
+            write_config(session_dir, heartbeat_interval=card.interval, default_task=None)
     elif 'content' in task_fields:
         from nutshell.session_engine.task_cards import TaskCard, save_card
         save_card(tasks_dir, TaskCard(name='task', content=task_fields['content']))

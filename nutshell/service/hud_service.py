@@ -5,7 +5,7 @@ import re
 import subprocess
 from pathlib import Path
 
-from nutshell.session_engine.session_params import read_session_params
+from nutshell.session_engine.session_config import read_config
 from .sessions_service import _validate_session_id
 
 
@@ -36,7 +36,7 @@ def get_hud(session_id: str, sessions_dir: Path, system_sessions_dir: Path) -> d
                 if m: git_deleted = int(m.group(1))
         except Exception:
             pass
-    params = read_session_params(session_dir) if session_dir.exists() else {}
+    params = read_config(session_dir) if session_dir.exists() else {}
     from nutshell.runtime.ipc import FileIPC
     ipc = FileIPC(system_dir)
     latest_usage = None

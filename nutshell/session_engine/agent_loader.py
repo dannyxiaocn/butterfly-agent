@@ -15,19 +15,17 @@ def _load_prompt(path: Path) -> str:
 
 
 class AgentLoader(BaseLoader[Agent]):
-    """Load a complete Agent from an entity directory containing agent.yaml.
+    """Load a complete Agent from an entity directory containing config.yaml.
 
     Each entity is fully self-contained — all prompts, tools, skills, model,
-    and provider are declared explicitly in agent.yaml. There is no inheritance
-    chain at load time. Use ``nutshell entity new --init-from <entity>`` to
-    create a new entity pre-populated from an existing one.
+    and provider are declared explicitly in config.yaml.
     """
 
     def __init__(self, impl_registry: dict[str, Callable] | None = None) -> None:
         self._impl_registry = impl_registry or {}
 
     def load(self, path: Path) -> Agent:
-        """Load agent from a directory containing agent.yaml."""
+        """Load agent from a directory containing config.yaml."""
         path = Path(path)
         config = AgentConfig.from_path(path)
         manifest = config.manifest
@@ -93,10 +91,10 @@ class AgentLoader(BaseLoader[Agent]):
         return agent
 
     def load_dir(self, directory: Path) -> list[Agent]:
-        """Load all agents from subdirectories that contain agent.yaml."""
+        """Load all agents from subdirectories that contain config.yaml."""
         directory = Path(directory)
         agents = []
         for subdir in sorted(directory.iterdir()):
-            if subdir.is_dir() and (subdir / "agent.yaml").exists():
+            if subdir.is_dir() and ((subdir / "config.yaml").exists() or (subdir / "agent.yaml").exists()):
                 agents.append(self.load(subdir))
         return agents

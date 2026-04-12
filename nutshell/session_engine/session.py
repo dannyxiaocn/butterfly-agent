@@ -11,7 +11,7 @@ from nutshell.core.agent import Agent
 from nutshell.core.hook import OnLoopEnd, OnLoopStart, OnTextChunk, OnToolCall, OnToolDone
 from nutshell.core.tool import Tool
 from nutshell.core.types import AgentResult
-from nutshell.session_engine.session_params import ensure_session_params, read_session_params
+from nutshell.session_engine.session_config import read_config, write_config, ensure_config
 from nutshell.session_engine.task_cards import (
     _DEFAULT_HEARTBEAT_CONTENT,
     TaskCard, clear_all_cards, ensure_heartbeat_card, has_pending_cards,
@@ -109,7 +109,7 @@ class Session:
         if not self._events_path.exists():
             self._events_path.touch()
         ensure_session_status(self.system_dir)
-        ensure_session_params(self.session_dir, heartbeat_interval=heartbeat)
+        ensure_config(self.session_dir)
 
     # ── Capability loading ─────────────────────────────────────────
 
@@ -126,25 +126,23 @@ class Session:
         from nutshell.skill_engine.loader import SkillLoader
         from nutshell.tool_engine.loader import ToolLoader
 
-        # 1. params → provider + model
-        params = read_session_params(self.session_dir)
+        # 1. config → provider + model
+        cfg = read_config(self.session_dir)
 
-        desired_provider = (params.get("provider") or "").lower()
+        desired_provider = (cfg.get("provider") or "").lower()
         if desired_provider and provider_name(self._agent._provider) != desired_provider:
             self._agent._provider = resolve_provider(desired_provider)
 
-        self._agent.model = params.get("model") or self._agent.model
-        self._agent.thinking = bool(params.get("thinking", self._agent.thinking))
-        self._agent.thinking_budget = int(params.get("thinking_budget", self._agent.thinking_budget))
-        if params.get("thinking_effort"):
-            self._agent.thinking_effort = str(params["thinking_effort"])
-        if params.get("fallback_model"):
-            self._agent.fallback_model = params["fallback_model"]
-        if params.get("fallback_provider"):
-            self._agent._fallback_provider_str = params["fallback_provider"]
+        self._agent.model = cfg.get("model") or self._agent.model
+        self._agent.thinking = bool(cfg.get("thinking", self._agent.thinking))
+        self._agent.thinking_budget = int(cfg.get("thinking_budget", self._agent.thinking_budget))
+        if cfg.get("thinking_effort"):
+            self._agent.thinking_effort = str(cfg["thinking_effort"])
+        if cfg.get("fallback_model"):
+            self._agent.fallback_model = cfg["fallback_model"]
+        if cfg.get("fallback_provider"):
+            self._agent._fallback_provider_str = cfg["fallback_provider"]
             self._agent._fallback_provider = None  # reset so it re-resolves on next use
-
-        write_session_status(self.system_dir, heartbeat_interval=params["heartbeat_interval"])
 
         # 2. prompts from core/
         system_md = self._read_core_text("system.md")
@@ -210,7 +208,7 @@ class Session:
             print(f"[session] Warning: failed to load tools: {e}")
             tools = []
 
-        tool_providers = params.get("tool_providers") or {}
+        tool_providers = cfg.get("tool_providers") or {}
         if tool_providers:
             from nutshell.tool_engine.registry import resolve_tool_impl
             for i, t in enumerate(tools):
@@ -367,12 +365,12 @@ class Session:
         For persistent sessions, a recurring "heartbeat" card is auto-created
         during session init and fires on its own interval.
         """
-        params = read_session_params(self.session_dir)
+        cfg = read_config(self.session_dir)
         migrate_legacy_task_sources(self.session_dir)
-        if self._resolve_session_type(params) == "persistent":
+        if self._resolve_session_type(cfg) == "persistent":
             ensure_heartbeat_card(
                 self.tasks_dir,
-                interval=float(params.get("heartbeat_interval") or self._heartbeat_interval),
+                interval=float(cfg.get("heartbeat_interval") or self._heartbeat_interval),
             )
         if card is None:
             due = load_due_cards(self.tasks_dir)
@@ -533,7 +531,7 @@ class Session:
         write_session_status(self.system_dir, model_state="idle", model_source="system")
 
         # Ensure persistent sessions have a heartbeat task card
-        params = read_session_params(self.session_dir)
+        params = read_config(self.session_dir)
         migrate_legacy_task_sources(self.session_dir)
         if self._resolve_session_type(params) == "persistent":
             ensure_heartbeat_card(
@@ -579,7 +577,7 @@ class Session:
                 # Ephemeral auto-stop: after processing inputs, if no pending
                 # task cards and no new messages, auto-stop.
                 if inputs and not self.is_stopped():
-                    session_type = self._resolve_session_type(read_session_params(self.session_dir))
+                    session_type = self._resolve_session_type(read_config(self.session_dir))
                     if session_type == "ephemeral":
                         _, next_offset = ipc.poll_inputs(input_offset)
                         no_pending = next_offset == input_offset
@@ -790,10 +788,10 @@ class Session:
             return
         try:
             from nutshell.session_engine.entity_state import get_meta_version
-            meta_version = get_meta_version(entity_name, s_base=self._base_dir)
+            meta_version = get_meta_version(entity_name)
         except Exception:
             return
-        session_version = read_session_params(self.session_dir).get("agent_version")
+        session_version = read_session_status(self.system_dir).get("agent_version")
         if meta_version and session_version and meta_version != session_version:
             self._append_event({
                 "type": "system_notice",

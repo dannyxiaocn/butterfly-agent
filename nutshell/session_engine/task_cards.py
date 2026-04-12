@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-from nutshell.session_engine.session_params import read_session_params, write_session_params
+from nutshell.session_engine.session_config import read_config, write_config
 
 
 @dataclass
@@ -251,7 +251,7 @@ def migrate_tasks_md(core_dir: Path) -> None:
 
 def migrate_legacy_default_task(session_dir: Path) -> None:
     """Move legacy params.default_task into the heartbeat task card."""
-    params = read_session_params(session_dir)
+    params = read_config(session_dir)
     legacy_default_task = params.get("default_task")
     if legacy_default_task in (None, ""):
         return
@@ -272,7 +272,7 @@ def migrate_legacy_default_task(session_dir: Path) -> None:
         if changed:
             save_card(tasks_dir, heartbeat)
 
-    write_session_params(session_dir, default_task=None)
+    write_config(session_dir, default_task=None)
 
 
 def migrate_legacy_task_sources(session_dir: Path) -> None:

@@ -1207,7 +1207,7 @@ def _read_meta_info(meta_dir: Path) -> dict:
         "memory_bytes": memory_path.stat().st_size if memory_path.exists() else 0,
         "memory_layers": sorted([p.stem for p in memory_dir.glob("*.md")]) if memory_dir.is_dir() else [],
         "playground_files": sorted([str(p.relative_to(playground_dir)) for p in playground_dir.rglob("*") if p.is_file()]) if playground_dir.is_dir() else [],
-        "params_exists": (meta_dir / "core" / "params.json").exists(),
+        "config_exists": (meta_dir / "core" / "config.yaml").exists() or (meta_dir / "core" / "params.json").exists(),
     }
 
 

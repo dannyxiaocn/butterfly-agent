@@ -15,7 +15,8 @@ DEFAULT_SESSION_STATUS: dict[str, Any] = {
     "last_run_at": None,          # ISO timestamp of last model run completion
     "pid": None,                  # Daemon process PID (int | None)
     "status": "active",           # "active" | "stopped"
-    "heartbeat_interval": None,   # Mirror of params.json heartbeat_interval (for UI/watcher)
+    "heartbeat_interval": None,   # Mirror of config heartbeat_interval (for UI/watcher)
+    "agent_version": None,        # Copied from meta session; used to detect stale sessions
 }
 
 

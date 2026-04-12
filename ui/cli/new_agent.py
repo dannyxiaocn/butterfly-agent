@@ -10,7 +10,7 @@ Usage (non-interactive / scripted):
 
 When run without --init-from, creates a blank entity with empty prompt files.
 With --init-from <source>, copies all files from the source entity and sets
-the new entity's name in agent.yaml. The copied entity is fully self-contained
+the new entity's name in config.yaml. The copied entity is fully self-contained
 and can be modified freely — there is no live inheritance link.
 """
 from __future__ import annotations
@@ -21,20 +21,22 @@ from pathlib import Path
 
 # ── YAML template ─────────────────────────────────────────────────────────────
 
-_AGENT_YAML_EMPTY = """\
+_CONFIG_YAML_EMPTY = """\
 name: {name}
 description: ""
 model: claude-sonnet-4-6
 provider: anthropic
 max_iterations: 20
-
+thinking: false
+thinking_budget: 8000
+thinking_effort: high
+tool_providers:
+  web_search: brave
 prompts:
   system: prompts/system.md
   heartbeat: prompts/heartbeat.md
   session_context: prompts/session.md
-
 tools: []
-
 skills: []
 """
 
@@ -42,12 +44,12 @@ skills: []
 # ── Entity detection ──────────────────────────────────────────────────────────
 
 def _list_entities(entity_dir: Path) -> list[str]:
-    """Return sorted list of entity names (dirs with agent.yaml) in entity_dir."""
+    """Return sorted list of entity names (dirs with config.yaml) in entity_dir."""
     if not entity_dir.is_dir():
         return []
     return sorted(
         d.name for d in entity_dir.iterdir()
-        if d.is_dir() and (d / "agent.yaml").exists()
+        if d.is_dir() and ((d / "config.yaml").exists() or (d / "agent.yaml").exists())
     )
 
 
@@ -90,12 +92,21 @@ def _ask_init_from(entity_dir: Path) -> str | None:
 
 # ── File scaffolding ──────────────────────────────────────────────────────────
 
+def _find_config_path(entity_dir: Path) -> Path | None:
+    """Find config.yaml or legacy agent.yaml in an entity directory."""
+    for fname in ("config.yaml", "agent.yaml"):
+        p = entity_dir / fname
+        if p.exists():
+            return p
+    return None
+
+
 def create_entity(name: str, base_dir: Path, init_from: str | None) -> Path:
     """Create a new entity directory.
 
     If init_from is given, copies all files from that entity and updates the
-    name in agent.yaml. Otherwise, creates a blank entity with empty prompt
-    files and a minimal agent.yaml.
+    name in config.yaml. Otherwise, creates a blank entity with empty prompt
+    files and a minimal config.yaml.
 
     Returns the path to the created entity directory.
     """
@@ -106,23 +117,25 @@ def create_entity(name: str, base_dir: Path, init_from: str | None) -> Path:
 
     if init_from is not None:
         src_dir = base_dir / init_from
-        if not (src_dir / "agent.yaml").exists():
+        if _find_config_path(src_dir) is None:
             raise ValueError(f"Source entity '{init_from}' not found in {base_dir}")
 
         # Copy entire source entity tree
         shutil.copytree(src_dir, entity_dir)
 
-        # Update agent.yaml: set new name and record init_from
-        yaml_path = entity_dir / "agent.yaml"
+        # Update config: set new name and record init_from
+        # Prefer config.yaml; rename legacy agent.yaml → config.yaml
+        yaml_path = entity_dir / "config.yaml"
+        legacy_path = entity_dir / "agent.yaml"
+        if not yaml_path.exists() and legacy_path.exists():
+            legacy_path.rename(yaml_path)
+
         import yaml as _yaml
         manifest = _yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
         manifest["name"] = name
         manifest["init_from"] = init_from
-        # Strip any old inheritance fields
-        for field in ("extends", "link", "own", "append"):
+        for field in ("extends", "link", "own", "append", "version", "meta_session"):
             manifest.pop(field, None)
-        # Note: yaml.dump discards inline comments and may reorder fields.
-        # Acceptable for a one-time scaffold — the entity is self-contained after creation.
         yaml_path.write_text(
             _yaml.dump(manifest, default_flow_style=False, allow_unicode=True, sort_keys=False),
             encoding="utf-8",
@@ -134,8 +147,8 @@ def create_entity(name: str, base_dir: Path, init_from: str | None) -> Path:
         (entity_dir / "skills").mkdir()
         (entity_dir / "tools").mkdir()
 
-        (entity_dir / "agent.yaml").write_text(
-            _AGENT_YAML_EMPTY.format(name=name),
+        (entity_dir / "config.yaml").write_text(
+            _CONFIG_YAML_EMPTY.format(name=name),
             encoding="utf-8",
         )
         (entity_dir / "prompts" / "system.md").write_text("", encoding="utf-8")

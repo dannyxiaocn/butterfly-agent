@@ -6,7 +6,7 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 
-from nutshell.session_engine.session_params import read_session_params
+from nutshell.session_engine.session_config import read_config
 from nutshell.session_engine.session_status import read_session_status, write_session_status, pid_alive as _pid_alive
 
 
@@ -51,7 +51,7 @@ def get_session(session_id: str, sessions_dir: Path, system_sessions_dir: Path) 
         from nutshell.session_engine.task_cards import migrate_legacy_task_sources
         migrate_legacy_task_sources(session_dir)
     status_payload = read_session_status(system_dir)
-    params = read_session_params(session_dir) if session_dir.exists() else {}
+    params = read_config(session_dir) if session_dir.exists() else {}
     from nutshell.session_engine.task_cards import has_pending_cards
     tasks_dir = session_dir / "core" / "tasks"
     has_tasks = has_pending_cards(tasks_dir)

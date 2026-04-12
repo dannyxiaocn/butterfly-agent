@@ -145,12 +145,12 @@ class SessionWatcher:
         from nutshell.session_engine.session import Session
         from nutshell.runtime.ipc import FileIPC
         from nutshell.session_engine.session_status import read_session_status
-        from nutshell.session_engine.session_params import read_session_params
+        from nutshell.session_engine.session_config import read_config
 
         session_dir = self.sessions_dir / session_id
 
-        # Read heartbeat_interval from core/params.json (source of truth).
-        heartbeat = float(read_session_params(session_dir).get("heartbeat_interval") or 7200.0)
+        # Read heartbeat_interval from core/config.yaml (source of truth).
+        heartbeat = float(read_config(session_dir).get("heartbeat_interval") or 7200.0)
 
         try:
             if self._agent_factory is not None:
@@ -159,7 +159,7 @@ class SessionWatcher:
                 from nutshell.core.agent import Agent
                 from nutshell.llm_engine.registry import resolve_provider
 
-                params = read_session_params(session_dir)
+                params = read_config(session_dir)
                 provider_str = (params.get("provider") or "anthropic").lower()
                 provider = resolve_provider(provider_str)
                 model = params.get("model") or None
