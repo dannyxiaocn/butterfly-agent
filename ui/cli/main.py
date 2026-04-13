@@ -15,7 +15,7 @@ Usage:
     nutshell repo-skill REPO_PATH           Generate codebase overview skill
     nutshell friends [--json]                IM-style session list with status
 
-    nutshell server                         Start the Nutshell server
+    nutshell server                         Start the Nutshell server (auto-daemonize)
     nutshell web                            Start the web UI (monitoring)
     nutshell dream ENTITY                    Trigger meta session dream cycle
 
@@ -36,6 +36,24 @@ from pathlib import Path
 _REPO_ROOT = Path(__file__).parent.parent.parent
 _DEFAULT_SESSIONS_BASE = _REPO_ROOT / "sessions"
 _DEFAULT_SYSTEM_BASE = _REPO_ROOT / "_sessions"
+
+
+# ── Server auto-start ─────────────────────────────────────────────────────────
+
+def _ensure_server_running(
+    sessions_dir: Path | None = None,
+    system_sessions_dir: Path | None = None,
+) -> None:
+    """Start nutshell-server in daemon mode if not already running."""
+    from nutshell.runtime.server import _is_server_running, _start_daemon
+    sys_dir = system_sessions_dir or _DEFAULT_SYSTEM_BASE
+    if _is_server_running(sys_dir):
+        return
+    print("Starting nutshell server...")
+    _start_daemon(
+        sessions_dir=sessions_dir or _DEFAULT_SESSIONS_BASE,
+        system_sessions_dir=sys_dir,
+    )
 
 
 # ── inject-memory helpers ─────────────────────────────────────────────────────
@@ -173,6 +191,7 @@ def _add_chat_parser(subparsers) -> None:
 
 
 def cmd_chat(args) -> int:
+    _ensure_server_running(args.sessions_base, args.system_base)
     from ui.cli.chat import _continue_session, _new_session
     inject = _parse_inject_memory(getattr(args, "inject_memory", None))
     if args.session:
@@ -283,6 +302,7 @@ def _add_new_parser(subparsers) -> None:
 
 
 def cmd_new(args) -> int:
+    _ensure_server_running(args.sessions_base, args.system_base)
     from nutshell.service import create_session
     session_id = args.session_id or (datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + "-" + uuid.uuid4().hex[:4])
     entity_dir = _REPO_ROOT / "entity" / args.entity

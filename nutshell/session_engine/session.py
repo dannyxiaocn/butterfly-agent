@@ -407,7 +407,7 @@ class Session:
                     on_loop_end=self._make_loop_end_callback(),
                 )
         except BaseException:
-            card.mark_paused()
+            card.mark_pending()
             save_card(self.tasks_dir, card)
             self._set_model_status("idle", triggered_by)
             raise

@@ -91,9 +91,9 @@ def _parse_task_timestamp(value, field_name: str) -> str | None:
     return value
 
 
-def _validate_task_schedule(starts_at: str | None, ends_at: str | None) -> None:
-    if starts_at and ends_at and datetime.fromisoformat(ends_at) < datetime.fromisoformat(starts_at):
-        raise HTTPException(400, "ends_at must be after starts_at")
+def _validate_task_schedule(start_at: str | None, end_at: str | None) -> None:
+    if start_at and end_at and datetime.fromisoformat(end_at) < datetime.fromisoformat(start_at):
+        raise HTTPException(400, "end_at must be after start_at")
 
 
 def _normalize_task_name(value, field_name: str = "Task name") -> str:
@@ -107,8 +107,11 @@ def _normalize_task_name(value, field_name: str = "Task name") -> str:
 
 def _parse_task_status(value) -> str:
     status = str(value or "").strip() or "pending"
-    if status not in {"pending", "running", "completed", "paused"}:
-        raise HTTPException(400, "Task status must be one of pending, running, completed, paused")
+    # Accept both canonical and legacy names
+    _NORMALIZE = {"running": "working", "completed": "finished"}
+    status = _NORMALIZE.get(status, status)
+    if status not in {"pending", "working", "finished", "paused"}:
+        raise HTTPException(400, "Task status must be one of pending, working, finished, paused")
     return status
 
 
@@ -279,11 +282,18 @@ def create_app(sessions_dir: Path, system_sessions_dir: Path | None = None) -> F
             payload["previous_name"] = _normalize_task_name(payload.get("previous_name") or payload["name"], "Previous task name")
             if "interval" in payload:
                 payload["interval"] = _parse_task_interval(payload.get("interval"))
+            # Normalize frontend field names → backend canonical names
             if "starts_at" in payload:
-                payload["starts_at"] = _parse_task_timestamp(payload.get("starts_at"), "starts_at")
+                payload["start_at"] = _parse_task_timestamp(payload.pop("starts_at"), "start_at")
+            elif "start_at" in payload:
+                payload["start_at"] = _parse_task_timestamp(payload.get("start_at"), "start_at")
             if "ends_at" in payload:
-                payload["ends_at"] = _parse_task_timestamp(payload.get("ends_at"), "ends_at")
-            _validate_task_schedule(payload.get("starts_at"), payload.get("ends_at"))
+                payload["end_at"] = _parse_task_timestamp(payload.pop("ends_at"), "end_at")
+            elif "end_at" in payload:
+                payload["end_at"] = _parse_task_timestamp(payload.get("end_at"), "end_at")
+            if "content" in payload:
+                payload["description"] = payload.pop("content")
+            _validate_task_schedule(payload.get("start_at"), payload.get("end_at"))
             if "status" in payload:
                 payload["status"] = _parse_task_status(payload.get("status"))
         try:

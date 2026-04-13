@@ -12,9 +12,9 @@ export function renderTaskEditor(card: TaskCard | null, sessionId: string, onDon
   el.className = 'task-editor';
 
   const intervalVal = card?.interval ?? (isNew ? '' : '');
-  const startsVal = card?.starts_at ? toDatetimeLocal(card.starts_at) : '';
-  const endsVal = card?.ends_at ? toDatetimeLocal(card.ends_at) : '';
-  const statusOptions = ['pending', 'paused', 'completed', 'running']
+  const startsVal = card?.start_at ? toDatetimeLocal(card.start_at) : '';
+  const endsVal = card?.end_at ? toDatetimeLocal(card.end_at) : '';
+  const statusOptions = ['pending', 'working', 'finished', 'paused']
     .map(s => `<option value="${s}"${(card?.status ?? 'pending') === s ? ' selected' : ''}>${s}</option>`)
     .join('');
 
@@ -46,7 +46,7 @@ export function renderTaskEditor(card: TaskCard | null, sessionId: string, onDon
     </div>
     <div class="form-field">
       <label>Content</label>
-      <textarea id="te-content" class="task-content-textarea" rows="10">${escapeHtml(card?.content ?? '')}</textarea>
+      <textarea id="te-content" class="task-content-textarea" rows="10">${escapeHtml(card?.description ?? '')}</textarea>
     </div>
     <div class="form-row task-editor-actions">
       <button class="btn-primary" id="te-save">Save</button>
@@ -84,16 +84,16 @@ export function renderTaskEditor(card: TaskCard | null, sessionId: string, onDon
       interval = sessionHeartbeatInterval;
     }
 
-    const startsAt = startsEl.value ? fromDatetimeLocal(startsEl.value) : null;
-    const endsAt = endsEl.value ? fromDatetimeLocal(endsEl.value) : null;
+    const startAt = startsEl.value ? fromDatetimeLocal(startsEl.value) : null;
+    const endAt = endsEl.value ? fromDatetimeLocal(endsEl.value) : null;
 
     const body: Partial<TaskCard> & { previous_name?: string } = {
       name,
       status: statusEl.value as TaskCard['status'],
       interval,
-      starts_at: startsAt,
-      ends_at: endsAt,
-      content: contentEl.value,
+      start_at: startAt,
+      end_at: endAt,
+      description: contentEl.value,
     };
     if (!isNew && card!.name !== name) {
       body.previous_name = card!.name;

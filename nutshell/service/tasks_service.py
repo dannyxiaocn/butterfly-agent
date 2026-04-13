@@ -14,12 +14,7 @@ def get_tasks(session_id: str, sessions_dir: Path) -> list[dict]:
         migrate_legacy_task_sources(session_dir)
     tasks_dir = session_dir / 'core' / 'tasks'
     cards = sorted(load_all_cards(tasks_dir), key=lambda c: (c.name != 'duty', c.name.lower()))
-    return [{
-        'name': c.name, 'description': c.description, 'interval': c.interval,
-        'status': c.status, 'last_finished_at': c.last_finished_at,
-        'last_started_at': c.last_started_at, 'created_at': c.created_at,
-        'comments': c.comments, 'progress': c.progress,
-    } for c in cards]
+    return [c.to_dict() for c in cards]
 
 
 def upsert_task(session_id: str, sessions_dir: Path, **task_fields) -> bool:
@@ -39,14 +34,16 @@ def upsert_task(session_id: str, sessions_dir: Path, **task_fields) -> bool:
         if name == 'duty' and interval is None:
             interval = 7200.0  # default interval for duty cards
         # Normalize legacy status values
-        _STATUS_MAP = {"pending": "paused", "running": "working", "completed": "finished"}
-        raw_status = task_fields.get('status', existing.status if existing else 'paused')
+        _STATUS_MAP = {"running": "working", "completed": "finished"}
+        raw_status = task_fields.get('status', existing.status if existing else 'pending')
         status = _STATUS_MAP.get(raw_status, raw_status)
 
         card = TaskCard(
             name=name,
             description=task_fields.get('description', existing.description if existing else ''),
             interval=interval,
+            start_at=task_fields.get('start_at', existing.start_at if existing else None),
+            end_at=task_fields.get('end_at', existing.end_at if existing else None),
             status=status,
             last_finished_at=task_fields.get('last_finished_at', existing.last_finished_at if existing else None),
             last_started_at=task_fields.get('last_started_at', existing.last_started_at if existing else None),

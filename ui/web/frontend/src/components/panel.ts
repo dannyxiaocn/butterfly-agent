@@ -89,11 +89,11 @@ export function createPanel(): HTMLElement {
     const isHb = card.name === 'heartbeat';
     const hbPill = isHb ? `<span class="hb-pill">heartbeat</span>` : '';
     const intervalStr = formatInterval(card.interval);
-    const lastRun = formatRelative(card.last_run_at);
+    const lastRun = formatRelative(card.last_finished_at);
     const statusClass = `task-status-${card.status}`;
 
     // Content preview: first 3 non-empty lines
-    const preview = card.content.split('\n').filter(l => l.trim()).slice(0, 3).join('\n');
+    const preview = card.description.split('\n').filter(l => l.trim()).slice(0, 3).join('\n');
 
     return `
       <div class="task-card" data-name="${escHtml(card.name)}">
@@ -104,7 +104,7 @@ export function createPanel(): HTMLElement {
         </div>
         <div class="task-card-meta">
           <span class="task-interval">${escHtml(intervalStr)}</span>
-          ${card.starts_at || card.ends_at ? `<span class="task-window">window: ${escHtml(card.starts_at ?? '∞')} → ${escHtml(card.ends_at ?? '∞')}</span>` : ''}
+          ${card.start_at || card.end_at ? `<span class="task-window">window: ${escHtml(card.start_at ?? '∞')} → ${escHtml(card.end_at ?? '∞')}</span>` : ''}
           <span class="task-last-run">last run: ${escHtml(lastRun)}</span>
         </div>
         ${preview ? `<div class="task-preview">${escHtml(preview)}</div>` : ''}

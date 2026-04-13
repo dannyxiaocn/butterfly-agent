@@ -166,7 +166,7 @@ rm -rf sessions/YOUR_ID/core/skills/my-skill
 {
   "name": "my-task",
   "description": "What this task does",
-  "status": "paused",
+  "status": "pending",
   "interval": 3600,
   "created_at": "2026-04-12T10:00:00",
   "last_started_at": null,
@@ -178,9 +178,10 @@ rm -rf sessions/YOUR_ID/core/skills/my-skill
 
 ### Status values
 
-- **paused** — task is idle, will be triggered when due (based on interval)
+- **pending** — task is waiting for next trigger (default state for new & recurring tasks)
 - **working** — task is currently being executed
 - **finished** — task completed (one-shot) or manually finished
+- **paused** — user-initiated pause; won't fire until user explicitly resumes
 
 ### Managing tasks
 

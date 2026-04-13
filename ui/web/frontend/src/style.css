@@ -1158,8 +1158,8 @@ button:disabled {
 }
 
 .task-status-pending { background: rgba(88,166,255,0.1); color: var(--accent); }
-.task-status-running { background: rgba(63,185,80,0.1); color: var(--green); }
-.task-status-completed { background: rgba(139,148,158,0.1); color: var(--muted); }
+.task-status-working { background: rgba(63,185,80,0.1); color: var(--green); }
+.task-status-finished { background: rgba(139,148,158,0.1); color: var(--muted); }
 .task-status-paused { background: rgba(210,153,34,0.1); color: var(--yellow); }
 
 .task-card-meta {

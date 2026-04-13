@@ -32,13 +32,16 @@ export interface Params {
 
 export interface TaskCard {
   name: string;
-  content: string;
+  description: string;
   interval: number | null;
-  starts_at: string | null;
-  ends_at: string | null;
-  status: 'pending' | 'running' | 'completed' | 'paused';
-  last_run_at: string | null;
+  start_at: string | null;
+  end_at: string | null;
+  status: 'pending' | 'working' | 'finished' | 'paused';
+  last_started_at: string | null;
+  last_finished_at: string | null;
   created_at: string;
+  comments: string;
+  progress: string;
 }
 
 export interface DisplayEvent {

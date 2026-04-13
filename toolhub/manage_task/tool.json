@@ -1,17 +1,17 @@
 {
   "name": "manage_task",
-  "description": "Create, update, pause, finish, or list task cards. Tasks are stored as JSON files in core/tasks/.",
+  "description": "Create, update, pause, resume, finish, or list task cards. Tasks are stored as JSON files in core/tasks/.",
   "input_schema": {
     "type": "object",
     "properties": {
       "action": {
         "type": "string",
-        "enum": ["create", "update", "pause", "finish", "list"],
-        "description": "The action to perform."
+        "enum": ["create", "update", "pause", "resume", "finish", "list"],
+        "description": "The action to perform. 'pause' = user-initiated stop; 'resume' = return to pending."
       },
       "name": {
         "type": "string",
-        "description": "Task name (required for create/update/pause/finish)."
+        "description": "Task name (required for create/update/pause/resume/finish)."
       },
       "description": {
         "type": "string",

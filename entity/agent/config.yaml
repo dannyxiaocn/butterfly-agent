@@ -1,4 +1,5 @@
 name: agent
+version: "1.0.0"
 description: A general-purpose assistant with basic capabilities.
 model: gpt-5.4
 provider: codex-oauth

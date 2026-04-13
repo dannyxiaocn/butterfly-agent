@@ -21,7 +21,7 @@ class ManageTaskExecutor:
         if action == "list":
             return self._list_tasks()
         if not name:
-            return "Error: 'name' is required for create/update/pause/finish"
+            return "Error: 'name' is required for create/update/pause/resume/finish"
         try:
             if action == "create":
                 return self._create_task(name, kwargs)
@@ -29,6 +29,8 @@ class ManageTaskExecutor:
                 return self._update_task(name, kwargs)
             elif action == "pause":
                 return self._set_status(name, "paused")
+            elif action == "resume":
+                return self._set_status(name, "pending")
             elif action == "finish":
                 return self._set_status(name, "finished")
         except ValueError as e:
@@ -87,7 +89,7 @@ class ManageTaskExecutor:
         data = {
             "name": name,
             "description": kwargs.get("description", ""),
-            "status": "paused",
+            "status": "pending",
             "interval": kwargs.get("interval"),
             "created_at": now,
             "last_started_at": None,
