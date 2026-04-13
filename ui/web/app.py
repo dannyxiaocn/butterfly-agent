@@ -320,9 +320,7 @@ def create_app(sessions_dir: Path, system_sessions_dir: Path | None = None) -> F
         params = body.get("params")
         if not isinstance(params, dict):
             raise HTTPException(400, "Body must include a JSON object in 'params'")
-        if "heartbeat_interval" in params:
-            params = dict(params)
-            params["heartbeat_interval"] = _parse_task_interval(params["heartbeat_interval"])
+        params.pop("heartbeat_interval", None)  # legacy field, no longer used
         try:
             saved = service_update_config(session_id, sessions_dir, system_sessions_dir, params)
         except (FileNotFoundError, ValueError) as exc:

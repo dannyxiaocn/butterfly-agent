@@ -66,7 +66,7 @@ class Session:
         session_id: str | None = None,
         base_dir: Path = SESSIONS_DIR,
         system_base: Path = _SYSTEM_SESSIONS_DIR,
-        heartbeat: float = 600.0,  # legacy param, ignored (task cards have own intervals)
+        heartbeat: float = 600.0,  # legacy param, ignored
         *,
         on_loop_start: OnLoopStart | None = None,
         on_loop_end: OnLoopEnd | None = None,
@@ -78,7 +78,7 @@ class Session:
         self._session_id = session_id or (datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + "-" + uuid.uuid4().hex[:4])
         self._base_dir = base_dir
         self._system_base = system_base
-        # heartbeat param accepted for backward compat but ignored (task cards have their own intervals)
+        # heartbeat param accepted for backward compat but ignored
         self._agent_lock: asyncio.Lock = asyncio.Lock()
         self._ipc: FileIPC | None = None
 
@@ -313,7 +313,7 @@ class Session:
         return message
 
     async def chat(self, message: str, *, user_input_id: str | None = None, caller_type: str = "human") -> AgentResult:
-        """Run agent with user message. Holds agent lock — blocks heartbeat tick.
+        """Run agent with user message. Holds agent lock — blocks task tick.
 
         Args:
             caller_type: "human" or "agent" — passed to Agent.run() for prompt adaptation.
@@ -754,8 +754,8 @@ class Session:
         """Clean up orphaned trailing user message before processing new user input.
 
         If the agent history ends with an unresponded user message (e.g., a
-        heartbeat prompt interrupted mid-run), we either drop it (if it was a
-        heartbeat prompt) or merge it with the new message (if it was a real
+        task prompt interrupted mid-run), we either drop it (if it was a
+        task prompt) or merge it with the new message (if it was a real
         user message), to prevent consecutive user messages which the API rejects.
         """
         if not self._agent._history or self._agent._history[-1].role != "user":

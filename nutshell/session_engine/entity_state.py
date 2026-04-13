@@ -497,7 +497,7 @@ def start_meta_agent(
             encoding="utf-8",
         )
 
-    # Ensure basic config exists (no legacy session_type/heartbeat_interval defaults)
+    # Ensure basic config exists
     ensure_config(meta_dir)
 
     # Create meta task card (6-hour recurring cycle)
