@@ -11,9 +11,7 @@ Usage:
     nutshell entity new [options]           Scaffold a new entity directory
 
     nutshell prompt-stats [SESSION_ID]      Show prompt space breakdown for a session
-    nutshell token-report [SESSION_ID]      Show per-turn token usage breakdown
     nutshell repo-skill REPO_PATH           Generate codebase overview skill
-    nutshell friends [--json]                IM-style session list with status
 
     nutshell server                         Start the Nutshell server (auto-daemonize)
     nutshell web                            Start the web UI (monitoring)
@@ -611,138 +609,6 @@ def _print_turns(turns: list[dict], inputs_by_id: dict[str, dict]) -> None:
         print()
 
 
-# ── Subcommand: token-report ──────────────────────────────────────────────────
-
-def _add_token_report_parser(subparsers) -> None:
-    p = subparsers.add_parser(
-        "token-report",
-        allow_abbrev=False,
-        help="Show per-turn token usage breakdown for a session.",
-        description=(
-            "Display token costs per turn with totals and cache efficiency.\n\n"
-            "Examples:\n"
-            "  nutshell token-report                       Latest session\n"
-            "  nutshell token-report 2026-03-25_10-00-00   Specific session\n"
-        ),
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    p.add_argument("session_id", nargs="?", default=argparse.SUPPRESS,
-                   help="Session ID (default: most recently active session)")
-    p.add_argument("--session", dest="session_id", metavar="ID", default=None,
-                   help="Session ID (alias for positional session_id)")
-    p.add_argument("--system-base", type=Path, default=_DEFAULT_SYSTEM_BASE,
-                   help=argparse.SUPPRESS)
-    p.add_argument("--sessions-base", type=Path, default=_DEFAULT_SESSIONS_BASE,
-                   help=argparse.SUPPRESS)
-    p.set_defaults(func=cmd_token_report)
-
-
-def cmd_token_report(args) -> int:
-    session_id = args.session_id
-    if not session_id:
-        sessions = _read_all_sessions(args.sessions_base, args.system_base, exclude_meta=True)
-        if not sessions:
-            print("No sessions found.", file=sys.stderr)
-            return 1
-        session_id = sessions[0]["id"]
-
-    context_path = args.system_base / session_id / "context.jsonl"
-    if not context_path.exists():
-        if not (args.system_base / session_id / "manifest.json").exists():
-            print(f"Error: session '{session_id}' not found", file=sys.stderr)
-            return 1
-        print(f"[{session_id}] No conversation history yet.")
-        return 0
-
-    lines = [l for l in context_path.read_text(encoding="utf-8").splitlines() if l.strip()]
-    events = []
-    for line in lines:
-        try:
-            events.append(json.loads(line))
-        except json.JSONDecodeError:
-            pass
-
-    inputs_by_id: dict[str, dict] = {}
-    turns: list[dict] = []
-    for ev in events:
-        if ev.get("type") == "user_input":
-            inputs_by_id[ev["id"]] = ev
-        elif ev.get("type") == "turn":
-            turns.append(ev)
-
-    if not turns:
-        print(f"[{session_id}] No turns with token data yet.")
-        return 0
-
-    # Collect per-turn data
-    rows = []
-    for i, turn in enumerate(turns, 1):
-        usage = turn.get("usage") or {}
-        inp = usage.get("input", 0) or 0
-        out = usage.get("output", 0) or 0
-        cr = usage.get("cache_read", 0) or 0
-        cw = usage.get("cache_write", 0) or 0
-        uid = turn.get("user_input_id")
-        user_ev = inputs_by_id.get(uid) if uid else None
-        ts = (user_ev or turn).get("ts", "")[:16].replace("T", " ")
-        trigger = ""
-        if user_ev:
-            raw = user_ev.get("content", "")
-            trigger = (raw[:40] + "…") if len(raw) > 40 else raw
-        elif turn.get("pre_triggered"):
-            trigger = "[heartbeat]"
-        rows.append((i, ts, trigger, inp, out, cr, cw))
-
-    # Column widths
-    W = (4, 16, 42, 8, 8, 8, 8)
-    header = (
-        f"{'#':>{W[0]}}  {'Time':<{W[1]}}  {'Trigger':<{W[2]}}"
-        f"  {'Input':>{W[3]}}  {'Output':>{W[4]}}  {'CacheR':>{W[5]}}  {'CacheW':>{W[6]}}"
-    )
-    sep = "─" * (sum(W) + 2 * 6)
-
-    print(f"[{session_id}] token-report  ({len(rows)} turns)")
-    print(sep)
-    print(header)
-    print(sep)
-    for idx, ts, trigger, inp, out, cr, cw in rows:
-        print(
-            f"{idx:>{W[0]}}  {ts:<{W[1]}}  {trigger:<{W[2]}}"
-            f"  {inp:>{W[3]}}  {out:>{W[4]}}  {cr:>{W[5]}}  {cw:>{W[6]}}"
-        )
-    print(sep)
-
-    # Totals
-    total_inp = sum(r[3] for r in rows)
-    total_out = sum(r[4] for r in rows)
-    total_cr  = sum(r[5] for r in rows)
-    total_cw  = sum(r[6] for r in rows)
-    print(
-        f"{'TOT':>{W[0]}}  {'':>{W[1]}}  {'':>{W[2]}}"
-        f"  {total_inp:>{W[3]}}  {total_out:>{W[4]}}  {total_cr:>{W[5]}}  {total_cw:>{W[6]}}"
-    )
-
-    # Cache efficiency
-    total_billed = total_inp + total_out
-    if total_billed > 0:
-        cache_pct = total_cr * 100 // (total_inp + total_cr) if (total_inp + total_cr) > 0 else 0
-        print()
-        print(f"  Cache hit rate : {cache_pct}%  ({total_cr:,} read / {total_inp + total_cr:,} total input)")
-        print(f"  Billed tokens  : {total_billed:,}  (input {total_inp:,} + output {total_out:,})")
-
-        # Highlight the most expensive turns (top 3 by input)
-        ranked = sorted(rows, key=lambda r: r[3] + r[4], reverse=True)[:3]
-        if ranked and ranked[0][3] + ranked[0][4] > 0:
-            print()
-            print("  Most expensive turns (by input+output):")
-            for idx, ts, trigger, inp, out, cr, cw in ranked:
-                total = inp + out
-                if total > 0:
-                    print(f"    #{idx:>3}  {ts}  {inp+out:>8} tok  {trigger}")
-
-    return 0
-
-
 # ── Subcommand: tasks ─────────────────────────────────────────────────────────
 
 def _add_tasks_parser(subparsers) -> None:
@@ -1002,94 +868,6 @@ def _exec_entrypoint(name: str) -> int:
 
 
 
-
-
-
-
-# ── Subcommand: kanban ────────────────────────────────────────────────────────
-
-def _add_kanban_parser(subparsers) -> None:
-    p = subparsers.add_parser(
-        "kanban",
-        allow_abbrev=False,
-        help="Unified task board — show task cards for all sessions.",
-        description=(
-            "Display every session's task board in one view.\n\n"
-            "Examples:\n"
-            "  nutshell kanban                      # all sessions\n"
-            "  nutshell kanban --session ID          # single session\n"
-            "  nutshell kanban --json                # JSON for agents\n"
-        ),
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    p.add_argument("--session", metavar="ID", default=None,
-                   help="Show only this session")
-    p.add_argument("--json", action="store_true", dest="as_json",
-                   help="Output as JSON array")
-    p.add_argument("--system-base", type=Path, default=_DEFAULT_SYSTEM_BASE,
-                   help=argparse.SUPPRESS)
-    p.add_argument("--sessions-base", type=Path, default=_DEFAULT_SESSIONS_BASE,
-                   help=argparse.SUPPRESS)
-    p.set_defaults(func=cmd_kanban)
-
-
-def cmd_kanban(args) -> int:
-    from ui.cli.kanban import build_kanban, format_kanban_table, format_kanban_json
-    sessions = _read_all_sessions(
-        sessions_base=args.sessions_base,
-        system_base=args.system_base,
-    )
-    if args.session:
-        sessions = [s for s in sessions if s.get("id") == args.session]
-        if not sessions:
-            print(f"Error: session '{args.session}' not found", file=sys.stderr)
-            return 1
-    entries = build_kanban(sessions, sessions_base=args.sessions_base)
-    if args.as_json:
-        print(format_kanban_json(entries))
-    else:
-        print(format_kanban_table(entries))
-    return 0
-
-
-# ── Subcommand: friends ───────────────────────────────────────────────────────
-
-def _add_friends_parser(subparsers) -> None:
-    p = subparsers.add_parser(
-        "friends",
-        allow_abbrev=False,
-        help="IM-style session list with online/idle/offline status.",
-        description=(
-            "Show all sessions as a contact list with live status indicators.\n\n"
-            "Examples:\n"
-            "  nutshell friends                     # pretty table\n"
-            "  nutshell friends --json              # JSON for agents\n"
-        ),
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    p.add_argument("--json", action="store_true", dest="as_json",
-                   help="Output as JSON array")
-    p.add_argument("--system-base", type=Path, default=_DEFAULT_SYSTEM_BASE,
-                   help=argparse.SUPPRESS)
-    p.add_argument("--sessions-base", type=Path, default=_DEFAULT_SESSIONS_BASE,
-                   help=argparse.SUPPRESS)
-    p.set_defaults(func=cmd_friends)
-
-
-def cmd_friends(args) -> int:
-    from ui.cli.friends import build_friends_list, format_friends_table, format_friends_json
-    sessions = _read_all_sessions(
-        sessions_base=args.sessions_base,
-        system_base=args.system_base,
-    )
-    friends = build_friends_list(sessions)
-    if args.as_json:
-        print(format_friends_json(friends))
-    else:
-        print(format_friends_table(friends))
-    return 0
-
-
 # ── Subcommand: repo-skill ────────────────────────────────────────────────────
 
 def _add_repo_skill_parser(subparsers) -> None:
@@ -1145,41 +923,6 @@ def _cmd_repo_dev(args) -> int:
     from ui.cli.repo_skill import cmd_repo_dev
     return cmd_repo_dev(args)
 
-
-
-# ── Subcommand: visit ─────────────────────────────────────────────────────────
-
-def _add_visit_parser(subparsers) -> None:
-    p = subparsers.add_parser(
-        "visit",
-        allow_abbrev=False,
-        help="Agent room view — detailed status of a single session.",
-        description=(
-            "Show an agent's room: identity, status, recent activity,\n"
-            "task board, and app notifications.\n\n"
-            "Examples:\n"
-            "  nutshell visit                       # latest session\n"
-            "  nutshell visit 2026-03-25_11-06-53   # specific session\n"
-            "  nutshell visit --json                # JSON output\n"
-        ),
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    p.add_argument("session_id", nargs="?", default=argparse.SUPPRESS, metavar="SESSION_ID",
-                   help="Session ID (default: latest session)")
-    p.add_argument("--session", dest="session_id", metavar="ID", default=None,
-                   help="Session ID (alias for positional session_id)")
-    p.add_argument("--json", action="store_true", dest="as_json",
-                   help="Output as JSON")
-    p.add_argument("--system-base", type=Path, default=_DEFAULT_SYSTEM_BASE,
-                   help=argparse.SUPPRESS)
-    p.add_argument("--sessions-base", type=Path, default=_DEFAULT_SESSIONS_BASE,
-                   help=argparse.SUPPRESS)
-    p.set_defaults(func=_cmd_visit)
-
-
-def _cmd_visit(args) -> int:
-    from ui.cli.visit import cmd_visit
-    return cmd_visit(args)
 
 # ── Subcommand: dream ─────────────────────────────────────────────────────────
 
@@ -1344,16 +1087,12 @@ def main() -> None:
             "  nutshell stop SESSION_ID            Stop heartbeat\n"
             "  nutshell start SESSION_ID           Resume heartbeat\n"
             "  nutshell log [SESSION_ID] [-n N]    Show conversation history\n"
-            "  nutshell tasks [SESSION_ID]         Show session task board\n"
-            "  nutshell friends [--json]           IM-style contact list\n  nutshell kanban                     Unified task board (all sessions)\n  nutshell kanban --session ID        Single session task board\n\n"
+            "  nutshell tasks [SESSION_ID]         Show session task board\n\n"
             "Entity management:\n"
             "  nutshell entity new                 Scaffold entity interactively\n"
-            "  nutshell entity new -n NAME         Scaffold entity by name\n"
-
-
+            "  nutshell entity new -n NAME         Scaffold entity by name\n\n"
             "Diagnostics:\n"
-            "  nutshell prompt-stats [SESSION_ID]  Show prompt space breakdown\n"
-            "  nutshell token-report [SESSION_ID]  Show per-turn token costs\n\n"
+            "  nutshell prompt-stats [SESSION_ID]  Show prompt space breakdown\n\n"
             "Repo skills:\n"
             "  nutshell repo-skill PATH            Generate codebase overview SKILL.md\n"
             "  nutshell repo-skill PATH -n NAME     Custom skill name\n"
@@ -1379,13 +1118,9 @@ def main() -> None:
     _add_tasks_parser(subparsers)
     _add_entity_parser(subparsers)
     _add_prompt_stats_parser(subparsers)
-    _add_token_report_parser(subparsers)
 
-    _add_friends_parser(subparsers)
-    _add_kanban_parser(subparsers)
     _add_repo_skill_parser(subparsers)
     _add_repo_dev_parser(subparsers)
-    _add_visit_parser(subparsers)
     _add_dream_parser(subparsers)
     _add_meta_parser(subparsers)
     _add_exec_parser(subparsers, "server", "Start the Nutshell server daemon.")

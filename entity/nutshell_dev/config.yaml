@@ -15,10 +15,3 @@ prompts:
   system: prompts/system.md
   task: prompts/task.md
   env: prompts/env.md
-tools:
-  - tools/bash.json
-  - tools/skill.json
-  - tools/web_search.json
-skills:
-  - skills/nutshell
-  - skills/creator-mode

@@ -15,13 +15,11 @@ def _seed_entity(tmp_path: Path):
     entity_base = tmp_path / 'entity'
     ent = entity_base / 'demo'
     (ent / 'prompts').mkdir(parents=True)
-    (ent / 'tools').mkdir()
-    (ent / 'skills' / 'alpha').mkdir(parents=True)
     (ent / 'prompts' / 'system.md').write_text('sys v1\n', encoding='utf-8')
     (ent / 'prompts' / 'task.md').write_text('task\n', encoding='utf-8')
     (ent / 'prompts' / 'env.md').write_text('env\n', encoding='utf-8')
-    (ent / 'tools' / 'bash.json').write_text('{"name":"bash","description":"x","input_schema":{"type":"object"}}\n', encoding='utf-8')
-    (ent / 'skills' / 'alpha' / 'SKILL.md').write_text('# alpha\n', encoding='utf-8')
+    (ent / 'tools.md').write_text('bash\n', encoding='utf-8')
+    (ent / 'skills.md').write_text('alpha\n', encoding='utf-8')
     (ent / 'config.yaml').write_text('name: demo\nmodel: m1\nprovider: p1\n', encoding='utf-8')
     return entity_base
 
@@ -59,8 +57,8 @@ def test_populate_meta_copies_entity_content(tmp_path, monkeypatch):
     # config.yaml should be copied (replaces .entity_synced mechanism)
     assert (meta_dir / 'core' / 'config.yaml').exists()
     assert (meta_dir / 'core' / 'system.md').read_text(encoding='utf-8') == 'sys v1\n'
-    assert (meta_dir / 'core' / 'tools' / 'bash.json').exists()
-    assert (meta_dir / 'core' / 'skills' / 'alpha' / 'SKILL.md').exists()
+    assert (meta_dir / 'core' / 'tools.md').read_text(encoding='utf-8') == 'bash\n'
+    assert (meta_dir / 'core' / 'skills.md').read_text(encoding='utf-8') == 'alpha\n'
 
 
 def test_sync_from_entity_bootstraps_playground_when_empty(tmp_path, monkeypatch):

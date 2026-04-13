@@ -1,7 +1,7 @@
 """ToolLoader — discovers and loads tools from toolhub/ and session-local tools.
 
 Tool discovery:
-  1. Read tool.md (list of enabled tool names, one per line)
+  1. Read tools.md (list of enabled tool names, one per line)
   2. For each name, load schema from toolhub/<name>/tool.json
   3. Dynamically import executor from toolhub/<name>/executor.py
   4. Also load agent-created tools from core/tools/ (.json + .sh pairs)
@@ -58,7 +58,7 @@ def _load_tool_schema(tool_name: str, toolhub_dir: Path | None = None) -> dict |
 
 
 def _read_tool_md(path: Path) -> list[str]:
-    """Read tool.md and return list of tool names (one per line, stripped, no blanks)."""
+    """Read tools.md and return list of tool names (one per line, stripped, no blanks)."""
     if not path.exists():
         return []
     return [
@@ -182,7 +182,7 @@ class ToolLoader:
         return Tool(name=name, description=description, func=impl, schema=input_schema)
 
     def load_from_tool_md(self, tool_md_path: Path) -> list[Tool]:
-        """Load all tools listed in a tool.md file."""
+        """Load all tools listed in a tools.md file."""
         names = _read_tool_md(tool_md_path)
         tools = []
         for name in names:

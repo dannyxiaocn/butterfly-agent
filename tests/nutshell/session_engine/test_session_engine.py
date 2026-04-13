@@ -102,8 +102,6 @@ class SessionEngineTest(unittest.TestCase):
             (entity_dir / "prompts" / "task.md").write_text("task", encoding="utf-8")
             (entity_dir / "prompts" / "env.md").write_text("env", encoding="utf-8")
 
-            (meta_dir / "core" / "tools").mkdir(parents=True)
-            (meta_dir / "core" / "skills" / "alpha").mkdir(parents=True)
             (meta_dir / "core" / "memory").mkdir(parents=True)
             (meta_dir / "playground").mkdir(parents=True)
             (meta_dir / "core" / "system.md").write_text("sys", encoding="utf-8")
@@ -114,11 +112,8 @@ class SessionEngineTest(unittest.TestCase):
             )
             (meta_dir / "core" / "memory.md").write_text("meta memory", encoding="utf-8")
             (meta_dir / "core" / "memory" / "layer.md").write_text("layer", encoding="utf-8")
-            (meta_dir / "core" / "tools" / "bash.json").write_text(
-                json.dumps({"name": "bash", "input_schema": {"type": "object"}}),
-                encoding="utf-8",
-            )
-            (meta_dir / "core" / "skills" / "alpha" / "SKILL.md").write_text("# alpha", encoding="utf-8")
+            (meta_dir / "core" / "tools.md").write_text("bash\n", encoding="utf-8")
+            (meta_dir / "core" / "skills.md").write_text("dev-nutshell\n", encoding="utf-8")
             (meta_dir / "playground" / "seed.txt").write_text("seed", encoding="utf-8")
 
             def fake_create_session_venv(session_dir: Path) -> Path:
@@ -148,8 +143,8 @@ class SessionEngineTest(unittest.TestCase):
             self.assertEqual((core_dir / "env.md").read_text(encoding="utf-8"), "env")
             self.assertEqual((core_dir / "memory.md").read_text(encoding="utf-8"), "meta memory")
             self.assertTrue((core_dir / "memory" / "layer.md").exists())
-            self.assertTrue((core_dir / "tools" / "bash.json").exists())
-            self.assertTrue((core_dir / "skills" / "alpha" / "SKILL.md").exists())
+            self.assertTrue((core_dir / "tools.md").exists())
+            self.assertTrue((core_dir / "skills.md").exists())
             self.assertTrue((sessions_base / "s1" / "playground" / "seed.txt").exists())
             # Config should be copied
             self.assertTrue((core_dir / "config.yaml").exists())
