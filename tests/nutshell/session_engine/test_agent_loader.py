@@ -17,9 +17,11 @@ class AgentLoaderUnitTests(unittest.TestCase):
             (entity_dir / "prompts" / "system.md").write_text("system prompt", encoding="utf-8")
             # Use config.yaml (new name)
             (entity_dir / "config.yaml").write_text(
-                "name: myagent\nmodel: claude-sonnet-4-6\nprovider: anthropic\nprompts:\n  system: prompts/system.md\ntools: []\nskills: []\n",
+                "name: myagent\nmodel: claude-sonnet-4-6\nprovider: anthropic\nprompts:\n  system: prompts/system.md\n",
                 encoding="utf-8",
             )
+            (entity_dir / "tools.md").write_text("", encoding="utf-8")
+            (entity_dir / "skills.md").write_text("", encoding="utf-8")
             agent = AgentLoader().load(entity_dir)
         self.assertEqual(agent.system_prompt, "system prompt")
         self.assertEqual(agent.model, "claude-sonnet-4-6")
@@ -45,10 +47,11 @@ class AgentLoaderUnitTests(unittest.TestCase):
             (entity_dir / "prompts" / "env.md").write_text("env template", encoding="utf-8")
             (entity_dir / "config.yaml").write_text(
                 "name: full\nmodel: claude-sonnet-4-6\nprovider: anthropic\n"
-                "prompts:\n  system: prompts/system.md\n  task: prompts/task.md\n  env: prompts/env.md\n"
-                "tools: []\nskills: []\n",
+                "prompts:\n  system: prompts/system.md\n  task: prompts/task.md\n  env: prompts/env.md\n",
                 encoding="utf-8",
             )
+            (entity_dir / "tools.md").write_text("", encoding="utf-8")
+            (entity_dir / "skills.md").write_text("", encoding="utf-8")
             agent = AgentLoader().load(entity_dir)
         self.assertEqual(agent.task_prompt, "task prompt")
         self.assertEqual(agent.env_template, "env template")

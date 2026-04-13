@@ -1,5 +1,5 @@
 ---
-name: creator-mode
+name: nutshell_dev:creator-mode
 description: >
   Create or modify tools (.json + .sh pairs) and skills (SKILL.md files) and
   hot-reload them into the active conversation using reload_capabilities. Use when

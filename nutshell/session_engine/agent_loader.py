@@ -6,7 +6,6 @@ from nutshell.core.loader import BaseLoader
 from nutshell.session_engine.entity_config import AgentConfig
 from nutshell.core.agent import Agent
 from nutshell.skill_engine.loader import SkillLoader
-from nutshell.tool_engine.executor.skill.skill_tool import create_skill_tool
 from nutshell.tool_engine.loader import ToolLoader
 
 
@@ -17,8 +16,8 @@ def _load_prompt(path: Path) -> str:
 class AgentLoader(BaseLoader[Agent]):
     """Load a complete Agent from an entity directory containing config.yaml.
 
-    Each entity is fully self-contained — all prompts, tools, skills, model,
-    and provider are declared explicitly in config.yaml.
+    Each entity is fully self-contained — prompts in config.yaml, tools in
+    tools.md, skills in skills.md.
     """
 
     def __init__(self, impl_registry: dict[str, Callable] | None = None) -> None:
@@ -29,10 +28,6 @@ class AgentLoader(BaseLoader[Agent]):
         path = Path(path)
         config = AgentConfig.from_path(path)
         manifest = config.manifest
-
-        def resolve_file(rel: str) -> Path | None:
-            p = path / rel
-            return p if p.exists() else None
 
         child_prompts = manifest.get("prompts") or {}
 
@@ -48,23 +43,21 @@ class AgentLoader(BaseLoader[Agent]):
         task_prompt      = load_prompt_key("task") or load_prompt_key("heartbeat")
         env_template     = load_prompt_key("env") or load_prompt_key("session_context")
 
-        raw_skills = manifest.get("skills") or []
-        skills = [
-            SkillLoader().load(resolved)
-            for s in raw_skills
-            if (resolved := resolve_file(s)) is not None
-        ]
+        # Skills from skills.md (skillhub)
+        skill_loader = SkillLoader()
+        skills_md = path / "skills.md"
+        if skills_md.exists():
+            skills = skill_loader.load_from_skills_md(skills_md)
+        else:
+            skills = []
 
-        raw_tools = manifest.get("tools") or []
+        # Tools from tools.md (toolhub)
         tool_loader = ToolLoader(impl_registry=self._impl_registry, skills=skills)
-        tools = [
-            tool_loader.load(resolved)
-            for t in raw_tools
-            if (resolved := resolve_file(t)) is not None
-        ]
-
-        if any(t.name == "skill" for t in tools):
-            tools = [create_skill_tool(skills) if t.name == "skill" else t for t in tools]
+        tools_md = path / "tools.md"
+        if tools_md.exists():
+            tools = tool_loader.load_from_tool_md(tools_md)
+        else:
+            tools = []
 
         model = manifest.get("model") or "claude-sonnet-4-6"
         provider_str = manifest.get("provider") or "anthropic"

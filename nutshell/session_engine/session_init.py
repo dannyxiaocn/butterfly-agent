@@ -148,31 +148,17 @@ def init_session(
             src = meta_core_dir / old_name
         _write_if_absent(core_dir / new_name, src.read_text(encoding="utf-8") if src.exists() else "")
 
-    # Copy tool.md from meta or entity (toolhub-based tool list)
-    for tool_md_src in (meta_core_dir / "tool.md", entity_dir / "tool.md"):
-        if tool_md_src.exists():
-            _write_if_absent(core_dir / "tool.md", tool_md_src.read_text(encoding="utf-8"))
+    # Copy tools.md from meta or entity (toolhub-based tool list)
+    for tools_md_src in (meta_core_dir / "tools.md", entity_dir / "tools.md"):
+        if tools_md_src.exists():
+            _write_if_absent(core_dir / "tools.md", tools_md_src.read_text(encoding="utf-8"))
             break
 
-    # Legacy: copy tool JSON files from meta for backward compat
-    meta_tools_dir = meta_core_dir / "tools"
-    if meta_tools_dir.is_dir():
-        for src in sorted(meta_tools_dir.glob('*.json')):
-            dst = core_dir / "tools" / src.name
-            if not dst.exists():
-                shutil.copy2(src, dst)
-
-    meta_skills_dir = meta_core_dir / "skills"
-    if meta_skills_dir.is_dir():
-        for src in sorted(meta_skills_dir.rglob('*')):
-            rel = src.relative_to(meta_skills_dir)
-            dst = core_dir / "skills" / rel
-            if src.is_dir():
-                dst.mkdir(parents=True, exist_ok=True)
-            else:
-                dst.parent.mkdir(parents=True, exist_ok=True)
-                if not dst.exists():
-                    shutil.copy2(src, dst)
+    # Copy skills.md from meta or entity (skillhub-based skill list)
+    for skills_md_src in (meta_core_dir / "skills.md", entity_dir / "skills.md"):
+        if skills_md_src.exists():
+            _write_if_absent(core_dir / "skills.md", skills_md_src.read_text(encoding="utf-8"))
+            break
 
     # Copy config.yaml from meta (or entity) into session core/.
     meta_config_path = meta_core_dir / "config.yaml"

@@ -40,8 +40,10 @@ class Session:
             memory.md               ← persistent memory (auto-injected each activation)
             tasks/*.md              ← task cards (YAML frontmatter + content)
             params.json             ← runtime config
-            tools/                  ← tool definitions: .json + .sh
-            skills/                 ← skill dirs
+            tools.md                ← enabled toolhub tools (one name per line)
+            skills.md               ← enabled skillhub skills (one name per line)
+            tools/                  ← agent-created tools: .json + .sh
+            skills/                 ← agent-created skills
           docs/                     ← user-uploaded files
           playground/               ← agent's free workspace
 
@@ -174,9 +176,19 @@ class Session:
                     app_notifications.append((md_file.stem, content))
         self._agent.app_notifications = app_notifications
 
-        # 3. skills from core/skills/
+        # 3. skills from skills.md (skillhub) + local skills from core/skills/
         try:
-            skills = SkillLoader().load_dir(self.core_dir / "skills")
+            loader = SkillLoader()
+            skills_md_path = self.core_dir / "skills.md"
+            if skills_md_path.exists():
+                skills = loader.load_from_skills_md(skills_md_path)
+                # Also load agent-created skills from core/skills/
+                skills_dir = self.core_dir / "skills"
+                if skills_dir.is_dir():
+                    skills.extend(loader.load_dir(skills_dir))
+            else:
+                # Fallback: load all from core/skills/ directory
+                skills = loader.load_dir(self.core_dir / "skills")
         except (FileNotFoundError, PermissionError):
             skills = []
         except Exception as e:
@@ -184,7 +196,7 @@ class Session:
             skills = []
         self._agent.skills = skills
 
-        # 4. tools from tool.md (toolhub) + local tools from core/tools/
+        # 4. tools from tools.md (toolhub) + local tools from core/tools/
         # default_workdir: bash and shell tools run from the session directory so
         # agents use short relative paths (core/tasks/) instead of full session paths.
         try:
@@ -194,10 +206,10 @@ class Session:
                 tasks_dir=self.tasks_dir,
                 memory_dir=self.core_dir / "memory",
             )
-            # Load tools from tool.md (toolhub)
-            tool_md_path = self.core_dir / "tool.md"
-            if tool_md_path.exists():
-                tools = loader.load_from_tool_md(tool_md_path)
+            # Load tools from tools.md (toolhub)
+            tools_md_path = self.core_dir / "tools.md"
+            if tools_md_path.exists():
+                tools = loader.load_from_tool_md(tools_md_path)
                 # Also load agent-created tools from core/tools/ (.json+.sh pairs)
                 tools.extend(loader.load_local_tools(self.core_dir / "tools"))
             else:

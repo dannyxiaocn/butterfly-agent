@@ -5,6 +5,21 @@ from nutshell.core.loader import BaseLoader
 from nutshell.core.skill import Skill
 
 
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+_SKILLHUB_DIR = _REPO_ROOT / "skillhub"
+
+
+def _read_skills_md(path: Path) -> list[str]:
+    """Read skills.md and return list of skill names (one per line, stripped, no blanks)."""
+    if not path.exists():
+        return []
+    return [
+        line.strip()
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+
+
 def _parse_frontmatter(text: str) -> tuple[dict, str]:
     """Split YAML frontmatter from body. Returns (metadata_dict, body_str)."""
     if not text.startswith("---"):
@@ -91,4 +106,27 @@ class SkillLoader(BaseLoader[Skill]):
                 skills.append(self.load(p))
             elif p.is_file() and p.suffix == ".md" and p.name.upper() != "README.MD":
                 skills.append(self.load(p))
+        return skills
+
+    def load_from_skillhub(self, name: str) -> Skill | None:
+        """Load a single skill from skillhub by name.
+
+        Looks for ``skillhub/<name>/SKILL.md``. Returns ``None`` if
+        the directory or file does not exist.
+        """
+        skill_md = _SKILLHUB_DIR / name / "SKILL.md"
+        if not skill_md.exists():
+            return None
+        return _load_skill_file(skill_md)
+
+    def load_from_skills_md(self, skills_md_path: Path) -> list[Skill]:
+        """Load all skills listed in a skills.md file."""
+        names = _read_skills_md(skills_md_path)
+        skills: list[Skill] = []
+        for name in names:
+            skill = self.load_from_skillhub(name)
+            if skill is not None:
+                skills.append(skill)
+            else:
+                print(f"[skill_engine] Warning: skill '{name}' not found in skillhub")
         return skills

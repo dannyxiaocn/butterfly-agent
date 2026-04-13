@@ -181,7 +181,7 @@ def test_session_init_creates_duty_card_from_config(tmp_path):
         '  description: "Check mail"\n',
         encoding="utf-8",
     )
-    (entity_dir / "tool.md").write_text("bash\n", encoding="utf-8")
+    (entity_dir / "tools.md").write_text("bash\n", encoding="utf-8")
     (entity_dir / "prompts").mkdir()
     (entity_dir / "prompts" / "system.md").write_text("sys", encoding="utf-8")
     (entity_dir / "prompts" / "task.md").write_text("task", encoding="utf-8")

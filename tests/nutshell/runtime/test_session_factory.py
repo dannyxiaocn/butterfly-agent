@@ -8,14 +8,12 @@ def _seed_entity(tmp_path):
     entity_base = tmp_path / 'entity'
     ent = entity_base / 'demo'
     (ent / 'prompts').mkdir(parents=True)
-    (ent / 'tools').mkdir()
-    (ent / 'skills' / 'alpha').mkdir(parents=True)
     (ent / 'prompts' / 'system.md').write_text('sys\n', encoding='utf-8')
     (ent / 'prompts' / 'task.md').write_text('task\n', encoding='utf-8')
     (ent / 'prompts' / 'env.md').write_text('env\n', encoding='utf-8')
-    (ent / 'tools' / 'bash.json').write_text('{"name":"bash","description":"x","input_schema":{"type":"object"}}', encoding='utf-8')
-    (ent / 'skills' / 'alpha' / 'SKILL.md').write_text('# alpha\n', encoding='utf-8')
-    (ent / 'config.yaml').write_text('name: demo\nmodel: claude-sonnet-4-6\nprovider: anthropic\ntools: []\nskills: []\n', encoding='utf-8')
+    (ent / 'tools.md').write_text('bash\n', encoding='utf-8')
+    (ent / 'skills.md').write_text('', encoding='utf-8')
+    (ent / 'config.yaml').write_text('name: demo\nmodel: claude-sonnet-4-6\nprovider: anthropic\n', encoding='utf-8')
     return entity_base
 
 

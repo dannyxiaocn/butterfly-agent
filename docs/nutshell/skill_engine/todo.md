@@ -12,9 +12,14 @@
 - [ ] Skill observability: load/use events to runtime stats
 - [ ] Skill engine e2e tests: provider interaction simulation
 
+## Pending
+
+- [ ] Update creator-mode skills (`agent:creator-mode`, `nutshell_dev:creator-mode`) to reflect hub-based architecture: agent-created tools/skills should integrate with toolhub/skillhub rather than only living in session-local `core/tools/` and `core/skills/`
+
 ## Completed
 
 - [x] Progressive disclosure: catalog in prompt, body loaded on demand
 - [x] Skills loading from entity directories
 - [x] Memory layer 60-line truncation with bash hint (3c12fce)
 - [x] Creator-mode skill for self-extending agents
+- [x] Skillhub: centralized skill definitions in `skillhub/`, loaded via `skills.md` (mirrors toolhub pattern)

@@ -37,8 +37,8 @@ class SessionInitUnitTests(unittest.TestCase):
                 system_base = root / "_sessions"
                 entity_dir = entity_base / unique_entity
                 (entity_dir / "prompts").mkdir(parents=True)
-                (entity_dir / "tools").mkdir()
-                (entity_dir / "skills").mkdir()
+                (entity_dir / "tools.md").write_text("", encoding="utf-8")
+                (entity_dir / "skills.md").write_text("", encoding="utf-8")
                 (entity_dir / "prompts" / "system.md").write_text("system", encoding="utf-8")
                 (entity_dir / "prompts" / "heartbeat.md").write_text("heartbeat", encoding="utf-8")
                 (entity_dir / "prompts" / "session.md").write_text("session", encoding="utf-8")

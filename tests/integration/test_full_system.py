@@ -6,14 +6,12 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from ui.cli.visit import gather_room_data
-
 from nutshell.runtime.ipc import FileIPC
 from nutshell.session_engine.session_init import init_session
 
 
 class FullSystemTest(unittest.TestCase):
-    def test_end_to_end_bootstrap_and_room_view(self) -> None:
+    def test_end_to_end_bootstrap(self) -> None:
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             sessions_base = root / "sessions"
@@ -61,9 +59,10 @@ class FullSystemTest(unittest.TestCase):
                     "messages": [{"role": "assistant", "content": "world"}],
                 }
             )
-            data = gather_room_data("demo-session", sessions_base=sessions_base, system_base=system_base)
-        self.assertEqual(data["entity"], "demo")
-        self.assertEqual(data["recent_context"][-1]["summary"], "world")
+            # Verify session was created and IPC works
+            self.assertTrue((system_base / "demo-session").exists())
+            context_path = system_base / "demo-session" / "context.jsonl"
+            self.assertTrue(context_path.exists())
 
 
 

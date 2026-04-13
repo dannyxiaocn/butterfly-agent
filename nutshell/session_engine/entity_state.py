@@ -43,7 +43,7 @@ def ensure_meta_session(entity_name: str, s_base: Path | None = None) -> Path:
     (core_dir / 'memory').mkdir(exist_ok=True)
     (session_dir / 'docs').mkdir(exist_ok=True)
     (session_dir / 'playground').mkdir(exist_ok=True)
-    for fname in ('system.md', 'task.md', 'env.md', 'memory.md', 'config.yaml'):
+    for fname in ('system.md', 'task.md', 'env.md', 'memory.md', 'config.yaml', 'tools.md', 'skills.md'):
         (core_dir / fname).touch(exist_ok=True)
     (core_dir / 'tasks').mkdir(exist_ok=True)
     _create_meta_venv(session_dir)
@@ -216,35 +216,18 @@ def populate_meta_from_entity(
         if src.exists():
             (core_dir / dst_name).write_text(src.read_text(encoding='utf-8'), encoding='utf-8')
 
-    # Copy tool.md (toolhub-based tool list)
-    tool_md = entity_dir / 'tool.md'
-    if tool_md.exists():
-        (core_dir / 'tool.md').write_text(tool_md.read_text(encoding='utf-8'), encoding='utf-8')
+    # Copy tools.md (toolhub-based tool list)
+    tools_md = entity_dir / 'tools.md'
+    if tools_md.exists():
+        (core_dir / 'tools.md').write_text(tools_md.read_text(encoding='utf-8'), encoding='utf-8')
 
-    # Copy tools (legacy JSON + agent-created shell tools)
-    dst_tools = core_dir / 'tools'
-    _clear_dir_contents(dst_tools)
-    src_tools = entity_dir / 'tools'
-    if src_tools.is_dir():
-        for src in sorted(src_tools.glob('*.json')):
-            shutil.copy2(src, dst_tools / src.name)
-
-    # Copy skills
-    dst_skills = core_dir / 'skills'
-    _clear_dir_contents(dst_skills)
-    src_skills = entity_dir / 'skills'
-    if src_skills.is_dir():
-        for src in sorted(src_skills.rglob('*')):
-            rel = src.relative_to(src_skills)
-            dst = dst_skills / rel
-            if src.is_dir():
-                dst.mkdir(parents=True, exist_ok=True)
-            else:
-                dst.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(src, dst)
+    # Copy skills.md (skillhub-based skill list)
+    skills_md = entity_dir / 'skills.md'
+    if skills_md.exists():
+        (core_dir / 'skills.md').write_text(skills_md.read_text(encoding='utf-8'), encoding='utf-8')
 
     # Copy entity's config.yaml into meta session core/.
-    # config.yaml already contains everything (model, provider, thinking, tools, skills, prompts).
+    # config.yaml contains model, provider, thinking, prompts.
     # start_meta_agent() ensures basic config exists after this call.
     entity_config = entity_dir / 'config.yaml'
     if entity_config.exists():
@@ -419,7 +402,7 @@ Keep core/memory.md accurate:
 - Key learnings from archived sessions
 
 ## 3. Sync core updates back to entity (if you improved anything)
-If you updated core/ files (system.md, task.md, tools/, skills/):
+If you updated core/ files (system.md, task.md, tools.md, skills.md):
 a. Bump version — update "agent_version" in _sessions/{entity}_meta/status.json
 b. Record — append to _sessions/{entity}_meta/version_history.json:
    {{"version":"X.Y.Z","ts":"<ISO>","note":"<what changed>"}}
@@ -430,7 +413,8 @@ c. Create PR to mecam/entity-update branch:
    cp sessions/{entity}_meta/core/system.md entity/{entity}/prompts/system.md
    cp sessions/{entity}_meta/core/task.md entity/{entity}/prompts/task.md
    cp sessions/{entity}_meta/core/env.md entity/{entity}/prompts/env.md
-   cp sessions/{entity}_meta/core/tools/*.json entity/{entity}/tools/
+   cp sessions/{entity}_meta/core/tools.md entity/{entity}/tools.md
+   cp sessions/{entity}_meta/core/skills.md entity/{entity}/skills.md
    # Update version in entity/{entity}/config.yaml
    git add entity/{entity}/
    git commit -m "meta: update entity {entity} vX.Y.Z"
