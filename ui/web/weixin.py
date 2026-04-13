@@ -6,7 +6,7 @@ Runs as an asyncio background task alongside the FastAPI web server.
 
 Supported WeChat commands (send as message text):
   /new [entity]   — create a new session and make it active
-  /stop           — stop current session heartbeat
+  /stop           — stop current session
   /start          — resume current session
   /switch <id>    — switch active session
   /sessions       — list all sessions
@@ -219,7 +219,7 @@ class WeixinBridge:
     # ── Agent reply waiting ───────────────────────────────────────────────────
     # Delegated to BridgeSession.async_wait_for_reply() which uses
     # user_input_id matching (more reliable than watching for 'agent' event
-    # type, which could be from a concurrent heartbeat turn).
+    # type, which could be from a concurrent task turn).
 
     # ── Command handling ──────────────────────────────────────────────────────
 

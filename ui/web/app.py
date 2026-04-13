@@ -188,7 +188,7 @@ def create_app(sessions_dir: Path, system_sessions_dir: Path | None = None) -> F
     async def interrupt_session_handler(session_id: str):
         """Send a soft interrupt to the session.
 
-        Drains any pending queued inputs and defers the next heartbeat tick.
+        Drains any pending queued inputs and defers the next task tick.
         In-progress turns run to completion.
         """
         try:

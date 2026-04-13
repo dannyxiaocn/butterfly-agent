@@ -47,7 +47,7 @@ Detailed documentation for every subsystem lives in `docs/` — see [Documentati
 
 1. An entity in `entity/<name>/` defines prompts, tools, skills, defaults, and optional memory.
 2. `session_engine` creates `sessions/<id>/` and `_sessions/<id>/` from that entity.
-3. `runtime` watches `_sessions/`, starts daemons, and drives heartbeat execution.
+3. `runtime` watches `_sessions/`, starts daemons, and drives task execution.
 4. `Session` reloads prompts, memory, tools, and skills from `core/` before each activation.
 5. CLI and Web clients communicate with the daemon by appending JSONL events to session files.
 

@@ -614,7 +614,7 @@ button:disabled {
   animation: none;
 }
 
-.msg-heartbeat-trigger {
+.msg-task-wakeup {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -629,7 +629,7 @@ button:disabled {
   animation: none;
 }
 
-.msg-heartbeat-finished {
+.msg-task-finished {
   text-align: center;
   color: var(--dimmed);
   font-style: italic;

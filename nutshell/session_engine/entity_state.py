@@ -369,14 +369,14 @@ When you make meaningful improvements to core/:
 1. Use the CLI or bump the version in _sessions/{entity}_meta/status.json (e.g. "1.0.0" → "1.0.1")
 2. Append to _sessions/{entity}_meta/version_history.json:
    {{"version": "X.Y.Z", "ts": "<ISO timestamp>", "note": "what changed"}}
-3. Open a PR to sync changes back to entity/{entity}/ (see heartbeat for steps)
+3. Open a PR to sync changes back to entity/{entity}/
 
 ## Updating Entity Definition
 All entity updates go through the single branch `mecam/entity-update`.
 This keeps the entity/ directory as a stable, reviewable snapshot of your current state.
 
 You have access to bash to inspect sessions, read their content, and manage child sessions.
-Meta-session memory is system-managed; keep it current through your heartbeat cycle.
+Meta-session memory is system-managed; keep it current through your task cycles.
 
 # TODO: more efficient tools for learning what to update (e.g. session diff summaries, structured change detection)
 """

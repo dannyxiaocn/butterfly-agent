@@ -38,8 +38,8 @@ class Session:
             task.md                 ← task wakeup prompt
             env.md                  ← session paths + operational guide
             memory.md               ← persistent memory (auto-injected each activation)
-            tasks/*.md              ← task cards (YAML frontmatter + content)
-            params.json             ← runtime config
+            tasks/*.json            ← task cards (JSON with scheduling + status)
+            config.yaml             ← runtime config
             tools.md                ← enabled toolhub tools (one name per line)
             skills.md               ← enabled skillhub skills (one name per line)
             tools/                  ← agent-created tools: .json + .sh

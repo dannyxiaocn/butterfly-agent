@@ -16,7 +16,7 @@ Borrows key patterns from claude-code's replBridge architecture:
 
   interrupt flow  — Frontend writes {"type":"interrupt"} to events.jsonl via
                     send_interrupt(). The session's run_daemon_loop drains any
-                    pending inputs and skips the next heartbeat tick. A "soft
+                    pending inputs and skips the next task tick. A "soft
                     interrupt" — in-progress turns complete; queued work is
                     cleared.
 
@@ -115,7 +115,7 @@ class BridgeSession:
 
         The session's run_daemon_loop sees this and:
           1. Drains (discards) pending queued user_input events.
-          2. Skips the next scheduled heartbeat tick.
+          2. Skips the next scheduled task tick.
           3. Emits {"type": "interrupted"} back to events.jsonl so the
              frontend knows the interrupt was acknowledged.
 

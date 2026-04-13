@@ -11,7 +11,6 @@ export interface Session {
   stopped_at: string | null;
   persistent: boolean;
   has_tasks: boolean;
-  heartbeat_interval: number;
   params?: Params;
 }
 
@@ -61,6 +60,8 @@ export interface DisplayEvent {
   result_len?: number;
   iterations?: number;
   id?: string;
+  card?: string;
+  message?: string;
 }
 
 export type SessionTone = 'running' | 'napping' | 'persistent' | 'stopped' | 'idle' | 'meta';

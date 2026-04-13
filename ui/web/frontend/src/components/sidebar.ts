@@ -48,8 +48,8 @@ export function createSidebar(): HTMLElement {
         ${listHtml || '<div style="padding:12px 8px;font-size:12px;color:var(--dimmed)">No sessions</div>'}
       </div>
       <div class="sidebar-footer">
-        <button class="btn-sm btn-start" id="btn-start" title="Resume heartbeat">▶ Start</button>
-        <button class="btn-sm btn-stop" id="btn-stop" title="Pause heartbeat">⏸ Stop</button>
+        <button class="btn-sm btn-start" id="btn-start" title="Resume session">▶ Start</button>
+        <button class="btn-sm btn-stop" id="btn-stop" title="Pause session">⏸ Stop</button>
         <button class="btn-sm btn-danger" id="btn-delete" title="Delete session">🗑</button>
       </div>
       <div id="new-session-form" class="new-session-form${formVisible ? '' : ' hidden'}">

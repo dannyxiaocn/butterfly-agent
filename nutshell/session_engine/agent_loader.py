@@ -39,9 +39,8 @@ class AgentLoader(BaseLoader[Agent]):
             return ""
 
         system_prompt    = load_prompt_key("system")
-        # New keys with fallback to old keys for backward compat
-        task_prompt      = load_prompt_key("task") or load_prompt_key("heartbeat")
-        env_template     = load_prompt_key("env") or load_prompt_key("session_context")
+        task_prompt      = load_prompt_key("task")
+        env_template     = load_prompt_key("env")
 
         # Skills from skills.md (skillhub)
         skill_loader = SkillLoader()
@@ -89,6 +88,6 @@ class AgentLoader(BaseLoader[Agent]):
         directory = Path(directory)
         agents = []
         for subdir in sorted(directory.iterdir()):
-            if subdir.is_dir() and ((subdir / "config.yaml").exists() or (subdir / "agent.yaml").exists()):
+            if subdir.is_dir() and (subdir / "config.yaml").exists():
                 agents.append(self.load(subdir))
         return agents

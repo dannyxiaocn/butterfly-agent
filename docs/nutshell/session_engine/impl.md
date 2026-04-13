@@ -8,7 +8,7 @@
 | `agent_loader.py` | `AgentLoader` — builds `Agent` from a fully self-contained entity dir |
 | `entity_state.py` | Meta session lifecycle, version management, gene commands, entity→meta bootstrap |
 | `session_init.py` | `init_session()` — creates full session directory structure from meta session |
-| `session_params.py` | Reads/writes `core/config.yaml` with defaults |
+| `session_config.py` | Reads/writes `core/config.yaml` with defaults |
 | `session_status.py` | Reads/writes `_sessions/<id>/status.json` |
 | `task_cards.py` | Per-task `.json` files in `core/tasks/` with scheduling and status management |
 | `session.py` | `Session` class — wraps Agent with persistent file-backed behavior |
@@ -66,8 +66,8 @@ Each entity is fully self-contained — no inheritance chain:
 | Type | Behavior |
 |------|----------|
 | `ephemeral` | Auto-stops after processing inputs with no pending cards |
-| `default` | Standard session, no autonomous heartbeat |
-| `persistent` | Has recurring heartbeat task card at `heartbeat_interval` |
+| `default` | Standard session, no autonomous tasks |
+| `persistent` | Has recurring task card (e.g. duty) with configured interval |
 
 ## Task Card System
 
@@ -106,16 +106,8 @@ Each task card is a `.json` file in `core/tasks/`:
 - A task with `status=pending` fires when: `now >= start_at AND now < end_at AND (never finished OR interval elapsed)`.
 - Past `end_at` → auto-marked `finished` and persisted to disk by `load_due_cards()`.
 
-### Legacy compatibility
-
-- Legacy `.md` cards with YAML frontmatter are still loaded (JSON takes precedence if both exist)
-- Legacy status values normalized on load: `running` → `working`, `completed` → `finished`
-- `paused` is preserved as-is (valid user-initiated state)
-- `migrate_legacy_task_sources()` converts old `tasks.md` to one-shot card
-
 ## Important Behaviors
 
 - Every session gets its own `.venv` under `sessions/<id>/.venv`
 - `reload_capabilities` tool is always injected at runtime
-- Legacy `tasks.md` files are migrated into task cards; `default_task` param is dropped on config write
 - `system_notice` events are passed through IPC and rendered in both web UI and SSE stream

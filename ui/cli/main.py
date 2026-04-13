@@ -4,7 +4,7 @@ Usage:
     nutshell chat MESSAGE [options]          Send a message / create a session
     nutshell sessions [--json]              List all sessions
     nutshell new [SESSION_ID] [options]     Create a new session (no message)
-    nutshell stop SESSION_ID                Stop a session's heartbeat
+    nutshell stop SESSION_ID                Stop a session
     nutshell start SESSION_ID               Resume a stopped session
     nutshell log [SESSION_ID] [-n N] [--since T] [--watch]  Show conversation history
     nutshell tasks [SESSION_ID]             Show a session's task board
@@ -287,8 +287,6 @@ def _add_new_parser(subparsers) -> None:
                    help="Session ID (default: current timestamp)")
     p.add_argument("--entity", default="agent", metavar="NAME",
                    help="Entity to initialise from (default: agent)")
-    p.add_argument("--heartbeat", type=float, default=7200.0,
-                   help="Heartbeat interval in seconds (default: 7200)")
     p.add_argument("--system-base", type=Path, default=_DEFAULT_SYSTEM_BASE,
                    help=argparse.SUPPRESS)
     p.add_argument("--sessions-base", type=Path, default=_DEFAULT_SESSIONS_BASE,
@@ -324,7 +322,7 @@ def cmd_new(args) -> int:
 def _add_stop_parser(subparsers) -> None:
     p = subparsers.add_parser(
         "stop",
-        help="Stop a session's heartbeat.",
+        help="Stop a session.",
     )
     p.add_argument("session_id", help="Session ID to stop")
     p.add_argument("--system-base", type=Path, default=_DEFAULT_SYSTEM_BASE,
@@ -762,7 +760,7 @@ def cmd_prompt_stats(args) -> int:
 
     print(sep)
 
-    # Totals (static + dynamic, excluding heartbeat)
+    # Totals (static + dynamic, excluding task prompt)
     chat_rows = rows[:-1]
     total_chars = sum(r[2] for r in chat_rows)
     total_tokens = sum(r[3] for r in chat_rows)
@@ -772,7 +770,7 @@ def cmd_prompt_stats(args) -> int:
     dynamic_tokens = sum(r[3] for r in dynamic_rows)
     print(f"  {'TOTAL (chat)':<{COL[0]}}  {'':>{COL[1]}}  {total_chars:>{COL[2]}}  {total_tokens:>{COL[3]}}  static {static_tokens} + dynamic {dynamic_tokens}")
     print()
-    print("  * task.md is injected during autonomous task activations, not regular chat.")
+    print("  * task.md is injected during autonomous task ticks, not regular chat.")
     return 0
 
 
@@ -971,7 +969,7 @@ def _read_meta_info(meta_dir: Path) -> dict:
         "memory_bytes": memory_path.stat().st_size if memory_path.exists() else 0,
         "memory_layers": sorted([p.stem for p in memory_dir.glob("*.md")]) if memory_dir.is_dir() else [],
         "playground_files": sorted([str(p.relative_to(playground_dir)) for p in playground_dir.rglob("*") if p.is_file()]) if playground_dir.is_dir() else [],
-        "config_exists": (meta_dir / "core" / "config.yaml").exists() or (meta_dir / "core" / "params.json").exists(),
+        "config_exists": (meta_dir / "core" / "config.yaml").exists(),
     }
 
 
@@ -1084,8 +1082,8 @@ def main() -> None:
             "  nutshell new [ID] [--entity NAME]   Create a session\n"
             "  nutshell chat MESSAGE               New session + send message\n"
             "  nutshell chat --session ID MSG      Send to existing session\n"
-            "  nutshell stop SESSION_ID            Stop heartbeat\n"
-            "  nutshell start SESSION_ID           Resume heartbeat\n"
+            "  nutshell stop SESSION_ID            Stop a session\n"
+            "  nutshell start SESSION_ID           Resume a session\n"
             "  nutshell log [SESSION_ID] [-n N]    Show conversation history\n"
             "  nutshell tasks [SESSION_ID]         Show session task board\n\n"
             "Entity management:\n"

@@ -8,7 +8,6 @@
 | `watcher.py` | Polls `_sessions/` for manifests, starts/stops session asyncio tasks |
 | `ipc.py` | `FileIPC` — file-based IPC using two JSONL files per session |
 | `bridge.py` | `BridgeSession` — frontend-friendly wrapper with dedup (wraps FileIPC) |
-| `cap.py` | File-backed coordination primitives: handshake, lock, broadcast, heartbeat-sync |
 | `git_coordinator.py` | Master/sub role assignment for shared git repos |
 | `env.py` | Best-effort `.env` loader |
 

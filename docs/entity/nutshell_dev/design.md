@@ -1,6 +1,6 @@
 # nutshell_dev — Design
 
-Project-development entity for this repository. Extends `agent` with nutshell-specific memory, a project skill, and a task-picking heartbeat.
+Project-development entity for this repository. Extends `agent` with nutshell-specific memory, a project skill, and autonomous task execution.
 
 ## Purpose
 

@@ -28,7 +28,7 @@ entity/<name>/          ← static template, version-controlled
 Each entity has a meta session (`<entity>_meta`) that:
 - Holds the canonical, evolving config for all future child sessions of that entity
 - Acts as shared mutable state store (memory, playground)
-- Runs as a real persistent agent with "dream cycle" heartbeat
+- Runs as a real persistent agent with "dream cycle" task schedule
 - Maintains `agent_version` in `core/config.yaml`; version history in `_sessions/<entity>_meta/version_history.json`
 - Syncs improvements back to `entity/` via PRs on the `mecam/entity-update` branch
 

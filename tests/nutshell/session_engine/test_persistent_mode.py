@@ -218,7 +218,7 @@ def test_session_init_creates_duty_card_from_config(tmp_path):
 
 
 def test_session_init_no_duty_keeps_empty_tasks(tmp_path):
-    """init_session without duty in config keeps tasks dir empty (no heartbeat card)."""
+    """init_session without duty in config keeps tasks dir empty (no task card)."""
     from nutshell.session_engine.session_init import init_session
     from unittest.mock import patch
 

@@ -51,8 +51,8 @@ def _context_event_to_display(event: dict, *, for_history: bool = False) -> list
     """Convert a context.jsonl event (user_input or turn) to display events.
 
     Args:
-        for_history: When True (history endpoint), always emit tools and
-                     heartbeat_trigger from turn content — the streaming events
+        for_history: When True (history endpoint), always emit tools
+                     from turn content — the streaming events
                      in events.jsonl are not available for history replay.
                      When False (SSE live tail), respect has_streaming_tools /
                      pre_triggered flags to avoid duplicating live-streamed items.
@@ -201,7 +201,7 @@ class FileIPC:
 
         The session's run_daemon_loop polls for this via poll_interrupt() and
         responds with a soft interrupt: drains pending inputs and skips the
-        next heartbeat tick.
+        next task tick.
         """
         self.append_event({"type": "interrupt"})
 
@@ -211,7 +211,7 @@ class FileIPC:
         """Read events.jsonl for an 'interrupt' event at or after offset.
 
         Returns (found, new_offset). The daemon calls this each cycle; when
-        found=True it should drain pending inputs, skip the next heartbeat,
+        found=True it should drain pending inputs, skip the next task tick,
         and emit {"type": "interrupted"} back to events.jsonl.
         """
         if not self.events_path.exists():
@@ -283,7 +283,7 @@ class FileIPC:
     def tail_history(self, offset: int = 0) -> Iterator[tuple[dict, int]]:
         """Yield display events from context.jsonl for the history endpoint.
 
-        Always emits tools and heartbeat markers from turn content (for_history=True),
+        Always emits tools from turn content (for_history=True),
         since events.jsonl is not consulted for history replay.
         """
         yield from self._readline_loop(
