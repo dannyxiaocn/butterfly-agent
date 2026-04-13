@@ -766,6 +766,7 @@ class Session:
         if (
             "Task activation:" in last_content
             or last_content.startswith("[Task:")
+            or last_content.startswith("Task wakeup:")
             or "Heartbeat activation:" in last_content
             or last_content.startswith("[Heartbeat ")
         ):

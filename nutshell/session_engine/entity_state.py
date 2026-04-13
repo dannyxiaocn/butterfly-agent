@@ -187,6 +187,7 @@ def populate_meta_from_entity(
     entity_name: str,
     entity_base: Path | None = None,
     s_base: Path | None = None,
+    sys_base: Path | None = None,
 ) -> None:
     """Copy entity content into meta session core. Called once at meta creation.
 
@@ -250,7 +251,7 @@ def populate_meta_from_entity(
         shutil.copy2(entity_config, core_dir / 'config.yaml')
 
     # Seed version from entity (writes to _sessions/<entity>_meta/status.json)
-    _init_meta_version(entity_name, entity_base)
+    _init_meta_version(entity_name, entity_base, sys_base=sys_base)
 
 
 def sync_from_entity(entity_name: str, entity_base: Path | None = None, s_base: Path | None = None) -> None:

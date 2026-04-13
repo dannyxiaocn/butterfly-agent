@@ -90,24 +90,27 @@ def _run_pty_sync(command: str, timeout: float, workdir: str | None, max_output:
         while True:
             try:
                 data = os.read(master_fd, 4096)
-                if data:
-                    chunks.append(data)
+                if not data:
+                    break
+                chunks.append(data)
             except OSError:
                 break  # EIO after slave closed, or master_fd was force-closed
         read_done.set()
 
     env = _venv_env()
     try:
-        proc = subprocess.Popen(
-            ["bash", "-c", command],
-            stdin=slave_fd,
-            stdout=slave_fd,
-            stderr=slave_fd,
-            close_fds=True,
-            cwd=workdir,
-            env=env,
-        )
-        os.close(slave_fd)
+        try:
+            proc = subprocess.Popen(
+                ["bash", "-c", command],
+                stdin=slave_fd,
+                stdout=slave_fd,
+                stderr=slave_fd,
+                close_fds=True,
+                cwd=workdir,
+                env=env,
+            )
+        finally:
+            os.close(slave_fd)
 
         reader_thread = threading.Thread(target=_reader, daemon=True)
         reader_thread.start()

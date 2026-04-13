@@ -19,7 +19,7 @@
       },
       "interval": {
         "type": "number",
-        "description": "Recurring interval in seconds. Null for one-shot tasks (used with create)."
+        "description": "Recurring interval in seconds. Omit or set to null for one-shot tasks (used with create/update)."
       },
       "comments": {
         "type": "string",

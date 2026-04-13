@@ -22,17 +22,26 @@ class ManageTaskExecutor:
             return self._list_tasks()
         if not name:
             return "Error: 'name' is required for create/update/pause/finish"
-        if action == "create":
-            return self._create_task(name, kwargs)
-        elif action == "update":
-            return self._update_task(name, kwargs)
-        elif action == "pause":
-            return self._set_status(name, "paused")
-        elif action == "finish":
-            return self._set_status(name, "finished")
+        try:
+            if action == "create":
+                return self._create_task(name, kwargs)
+            elif action == "update":
+                return self._update_task(name, kwargs)
+            elif action == "pause":
+                return self._set_status(name, "paused")
+            elif action == "finish":
+                return self._set_status(name, "finished")
+        except ValueError as e:
+            return f"Error: {e}"
         return f"Error: unknown action '{action}'"
 
     def _task_path(self, name: str) -> Path:
+        # Reject names that could escape the tasks directory
+        if not name or "/" in name or "\\" in name or ".." in name:
+            raise ValueError(f"Invalid task name: {name!r}")
+        resolved = (self._tasks_dir / f"{name}.json").resolve()
+        if not str(resolved).startswith(str(self._tasks_dir.resolve())):
+            raise ValueError(f"Invalid task name: {name!r}")
         return self._tasks_dir / f"{name}.json"
 
     def _load_task(self, name: str) -> dict | None:

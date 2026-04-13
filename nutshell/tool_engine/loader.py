@@ -98,6 +98,10 @@ class ToolLoader:
 
     def _create_executor(self, tool_name: str) -> Callable | None:
         """Create an executor callable for a toolhub tool."""
+        # Check impl_registry first (allows callers to override toolhub executors)
+        if tool_name in self._impl_registry:
+            return self._impl_registry[tool_name]
+
         mod = _load_executor_module(tool_name, self._toolhub_dir)
         if mod is None:
             return None

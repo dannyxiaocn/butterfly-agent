@@ -781,7 +781,7 @@ def cmd_tasks(args) -> int:
             print(f"  [{card['status']}] {card['name']}  ({interval_str})")
             if card.get('last_finished_at'):
                 print(f"          last finished: {card['last_finished_at']}")
-            desc = card.get('description', '')
+            desc = card.get('description') or ''
             for line in desc.splitlines()[:3]:
                 print(f"          {line}")
             if len(desc.splitlines()) > 3:
@@ -1301,7 +1301,7 @@ def cmd_meta(args) -> int:
         print(f"MEMORY: {info['memory_bytes']} bytes")
         print(f"LAYERS: {', '.join(info['memory_layers']) if info['memory_layers'] else '—'}")
         print(f"PLAYGROUND FILES: {len(info['playground_files'])}")
-        print(f"PARAMS: {'yes' if info['params_exists'] else 'no'}")
+        print(f"PARAMS: {'yes' if info['config_exists'] else 'no'}")
         if idx != len(infos) - 1:
             print()
     return 0

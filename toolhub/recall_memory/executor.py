@@ -13,7 +13,7 @@ class RecallMemoryExecutor:
         if self._memory_dir is None:
             return "Error: memory directory not configured"
 
-        name = kwargs.get("name", "").strip()
+        name = str(kwargs.get("name", "")).strip()
         if not name:
             # List available memory layers
             if not self._memory_dir.is_dir():

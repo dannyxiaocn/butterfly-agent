@@ -112,13 +112,14 @@ def _tavily_search_sync(
 
 async def _tavily_search(
     query: str,
-    count: int = 5,
+    count: int | float = 5,
     country: Optional[str] = None,
     language: Optional[str] = None,
     freshness: Optional[str] = None,
     date_after: Optional[str] = None,
     date_before: Optional[str] = None,
 ) -> str:
+    count = int(count)
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(
         None,
@@ -131,7 +132,7 @@ _SCHEMA = {
     "type": "object",
     "properties": {
         "query": {"type": "string", "description": "Search query string."},
-        "count": {"type": "number", "description": "Number of results (1-10). Default: 5.", "minimum": 1, "maximum": 10},
+        "count": {"type": "integer", "description": "Number of results (1-10). Default: 5.", "minimum": 1, "maximum": 10},
         "country": {"type": "string", "description": "2-letter country code (e.g. 'US', 'CN', 'DE')."},
         "language": {"type": "string", "description": "ISO 639-1 language code (e.g. 'en', 'zh-hans')."},
         "freshness": {"type": "string", "description": "Time filter: 'day', 'week', 'month', or 'year'."},

@@ -156,15 +156,19 @@ def load_all_cards(tasks_dir: Path) -> list[TaskCard]:
     if not tasks_dir.is_dir():
         return []
     cards = []
-    # Load JSON cards (new format)
+    json_names: set[str] = set()
+    # Load JSON cards (new format) first
     for path in sorted(tasks_dir.glob("*.json")):
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
             cards.append(TaskCard.from_dict(data, name=path.stem))
+            json_names.add(path.stem)
         except Exception:
             continue
-    # Legacy: also load .md cards for backward compat
+    # Legacy: also load .md cards for backward compat, but skip duplicates
     for path in sorted(tasks_dir.glob("*.md")):
+        if path.stem in json_names:
+            continue  # JSON version takes precedence
         try:
             cards.append(_parse_legacy_md_card(path))
         except Exception:

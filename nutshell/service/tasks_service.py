@@ -38,11 +38,16 @@ def upsert_task(session_id: str, sessions_dir: Path, **task_fields) -> bool:
         interval = task_fields.get('interval', existing.interval if existing else None)
         if name == 'duty' and interval is None:
             interval = 7200.0  # default interval for duty cards
+        # Normalize legacy status values
+        _STATUS_MAP = {"pending": "paused", "running": "working", "completed": "finished"}
+        raw_status = task_fields.get('status', existing.status if existing else 'paused')
+        status = _STATUS_MAP.get(raw_status, raw_status)
+
         card = TaskCard(
             name=name,
             description=task_fields.get('description', existing.description if existing else ''),
             interval=interval,
-            status=task_fields.get('status', existing.status if existing else 'paused'),
+            status=status,
             last_finished_at=task_fields.get('last_finished_at', existing.last_finished_at if existing else None),
             last_started_at=task_fields.get('last_started_at', existing.last_started_at if existing else None),
             created_at=task_fields.get('created_at', existing.created_at if existing else datetime.now().isoformat()),

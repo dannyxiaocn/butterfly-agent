@@ -154,5 +154,6 @@ def create_entity(name: str, base_dir: Path, init_from: str | None) -> Path:
         (entity_dir / "prompts" / "system.md").write_text("", encoding="utf-8")
         (entity_dir / "prompts" / "task.md").write_text("", encoding="utf-8")
         (entity_dir / "prompts" / "env.md").write_text("", encoding="utf-8")
+        (entity_dir / "tool.md").write_text("bash\nweb_search\nskill\nmanage_task\nrecall_memory\n", encoding="utf-8")
 
     return entity_dir

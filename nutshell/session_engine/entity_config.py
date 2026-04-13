@@ -24,7 +24,7 @@ class AgentConfig:
 
         path = Path(path)
         # Support both config.yaml (new) and agent.yaml (legacy)
-        config_path = path if path.name == "config.yaml" else path / "config.yaml"
+        config_path = path if path.name in ("config.yaml", "agent.yaml") else path / "config.yaml"
         if not config_path.exists():
             legacy_path = path / "agent.yaml"
             if legacy_path.exists():
