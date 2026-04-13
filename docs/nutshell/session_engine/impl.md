@@ -117,5 +117,5 @@ Each task card is a `.json` file in `core/tasks/`:
 
 - Every session gets its own `.venv` under `sessions/<id>/.venv`
 - `reload_capabilities` tool is always injected at runtime
-- Legacy `default_task` values are migrated into task cards
+- Legacy `tasks.md` files are migrated into task cards; `default_task` param is dropped on config write
 - `system_notice` events are passed through IPC and rendered in both web UI and SSE stream
