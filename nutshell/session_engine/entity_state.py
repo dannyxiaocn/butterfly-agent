@@ -43,7 +43,7 @@ def ensure_meta_session(entity_name: str, s_base: Path | None = None) -> Path:
     (core_dir / 'memory').mkdir(exist_ok=True)
     (session_dir / 'docs').mkdir(exist_ok=True)
     (session_dir / 'playground').mkdir(exist_ok=True)
-    for fname in ('system.md', 'task.md', 'env.md', 'memory.md', 'config.yaml', 'tools.md', 'skills.md'):
+    for fname in ('system.md', 'task.md', 'env.md', 'memory.md', 'config.yaml'):
         (core_dir / fname).touch(exist_ok=True)
     (core_dir / 'tasks').mkdir(exist_ok=True)
     _create_meta_venv(session_dir)
@@ -216,10 +216,12 @@ def populate_meta_from_entity(
         if src.exists():
             (core_dir / dst_name).write_text(src.read_text(encoding='utf-8'), encoding='utf-8')
 
-    # Copy tools.md (toolhub-based tool list)
+    # Copy tools.md (toolhub-based tool list), fallback to legacy tool.md
     tools_md = entity_dir / 'tools.md'
-    if tools_md.exists():
-        (core_dir / 'tools.md').write_text(tools_md.read_text(encoding='utf-8'), encoding='utf-8')
+    legacy_tool_md = entity_dir / 'tool.md'
+    src_tools_md = tools_md if tools_md.exists() else legacy_tool_md
+    if src_tools_md.exists():
+        (core_dir / 'tools.md').write_text(src_tools_md.read_text(encoding='utf-8'), encoding='utf-8')
 
     # Copy skills.md (skillhub-based skill list)
     skills_md = entity_dir / 'skills.md'

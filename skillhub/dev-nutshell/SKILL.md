@@ -54,7 +54,7 @@ docs/               documentation and task boards
 UI → runtime → session_engine → core
 ```
 - `session_engine` never imports `runtime` (except `git_coordinator`)
-- `core` has zero internal dependencies
+- `core` should stay low-dependency, but currently depends on `llm_engine` and `skill_engine` in a few places
 
 ## Package Boundaries
 

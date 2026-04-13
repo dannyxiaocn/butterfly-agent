@@ -66,11 +66,7 @@ nutshell chat --session 2026-04-13_10-00-00-a1b2 "What's the status?"
 | `nutshell sessions` | List all sessions with status |
 | `nutshell log [SESSION_ID]` | Show conversation history |
 | `nutshell tasks [SESSION_ID]` | Show task cards |
-| `nutshell visit [SESSION_ID]` | Detailed agent room view |
-| `nutshell friends` | IM-style contact list (online/idle/offline) |
-| `nutshell kanban` | Unified task board across sessions |
 | `nutshell prompt-stats [SESSION_ID]` | System prompt size breakdown |
-| `nutshell token-report [SESSION_ID]` | Per-turn token usage table |
 
 **`log` flags:**
 - `-n N` — number of turns (default: 5)
@@ -151,6 +147,6 @@ nutshell repo-dev ~/projects/my-app -m "Add unit tests for the parser"
 
 **Check all agent activity:**
 ```bash
-nutshell friends     # who's online?
-nutshell kanban      # what's everyone working on?
+nutshell sessions    # list all sessions with status
+nutshell tasks       # show task board for latest session
 ```

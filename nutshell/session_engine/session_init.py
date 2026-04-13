@@ -148,8 +148,9 @@ def init_session(
             src = meta_core_dir / old_name
         _write_if_absent(core_dir / new_name, src.read_text(encoding="utf-8") if src.exists() else "")
 
-    # Copy tools.md from meta or entity (toolhub-based tool list)
-    for tools_md_src in (meta_core_dir / "tools.md", entity_dir / "tools.md"):
+    # Copy tools.md from meta or entity (toolhub-based tool list), fallback to legacy tool.md
+    for tools_md_src in (meta_core_dir / "tools.md", entity_dir / "tools.md",
+                         meta_core_dir / "tool.md", entity_dir / "tool.md"):
         if tools_md_src.exists():
             _write_if_absent(core_dir / "tools.md", tools_md_src.read_text(encoding="utf-8"))
             break

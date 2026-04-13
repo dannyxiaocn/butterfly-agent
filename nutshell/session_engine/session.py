@@ -206,10 +206,12 @@ class Session:
                 tasks_dir=self.tasks_dir,
                 memory_dir=self.core_dir / "memory",
             )
-            # Load tools from tools.md (toolhub)
+            # Load tools from tools.md (toolhub), fallback to legacy tool.md
             tools_md_path = self.core_dir / "tools.md"
-            if tools_md_path.exists():
-                tools = loader.load_from_tool_md(tools_md_path)
+            legacy_tool_md = self.core_dir / "tool.md"
+            selected_tools_md = tools_md_path if tools_md_path.exists() else legacy_tool_md
+            if selected_tools_md.exists():
+                tools = loader.load_from_tool_md(selected_tools_md)
                 # Also load agent-created tools from core/tools/ (.json+.sh pairs)
                 tools.extend(loader.load_local_tools(self.core_dir / "tools"))
             else:
