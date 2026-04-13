@@ -121,7 +121,7 @@ async def _tavily_search(
     date_after: Optional[str] = None,
     date_before: Optional[str] = None,
 ) -> str:
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     return await loop.run_in_executor(
         None,
         _tavily_search_sync,

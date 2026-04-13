@@ -93,7 +93,7 @@ async def _brave_search(
     date_after: Optional[str] = None,
     date_before: Optional[str] = None,
 ) -> str:
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     return await loop.run_in_executor(
         None,
         _brave_search_sync,

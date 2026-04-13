@@ -81,7 +81,7 @@ async def _run(sessions_dir: Path, system_sessions_dir: Path) -> None:
     watcher = SessionWatcher(sessions_dir, system_sessions_dir)
     stop_event = asyncio.Event()
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     loop.add_signal_handler(signal.SIGINT, stop_event.set)
     loop.add_signal_handler(signal.SIGTERM, stop_event.set)
 

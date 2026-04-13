@@ -149,7 +149,7 @@ async def _run_pty(
     workdir: str | None,
     max_output: int,
 ) -> str:
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     return await loop.run_in_executor(
         None, _run_pty_sync, command, timeout, workdir, max_output
     )

@@ -9,6 +9,6 @@
         "description": "Name of the memory layer file (without .md extension)."
       }
     },
-    "required": ["name"]
+    "required": []
   }
 }

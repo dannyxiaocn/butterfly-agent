@@ -39,6 +39,4 @@ class Skill:
         """Return the skill directory when this skill is file-backed."""
         if self.location is None:
             return None
-        if self.location.name == "SKILL.md":
-            return self.location.parent
         return self.location.parent

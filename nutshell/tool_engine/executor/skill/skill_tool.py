@@ -40,6 +40,9 @@ def _substitute_skill_vars(text: str, skill: Skill, args: str | None) -> str:
         arg_names = [arg_names]
     if isinstance(arg_names, list):
         values = _split_args(args)
+        # Build pairs and sort by name length descending so $topic is replaced
+        # before $to, preventing substring collisions.
+        pairs: list[tuple[str, str]] = []
         for idx, raw_name in enumerate(arg_names):
             if not isinstance(raw_name, str):
                 continue
@@ -47,8 +50,11 @@ def _substitute_skill_vars(text: str, skill: Skill, args: str | None) -> str:
             if not name:
                 continue
             value = values[idx] if idx < len(values) else ""
-            text = text.replace(f"${name}", value)
+            pairs.append((name, value))
+        pairs.sort(key=lambda p: len(p[0]), reverse=True)
+        for name, value in pairs:
             text = text.replace(f"${{{name}}}", value)
+            text = text.replace(f"${name}", value)
 
     return text
 

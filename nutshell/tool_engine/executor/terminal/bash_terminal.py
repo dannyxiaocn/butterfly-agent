@@ -94,8 +94,9 @@ def _run_pty_sync(command: str, timeout: float, workdir: str | None, max_output:
         while True:
             try:
                 data = os.read(master_fd, 4096)
-                if data:
-                    chunks.append(data)
+                if not data:
+                    break  # EOF — Linux returns empty instead of OSError
+                chunks.append(data)
             except OSError:
                 break  # EIO after slave closed, or master_fd was force-closed
         read_done.set()
@@ -150,7 +151,7 @@ async def _run_pty(
     workdir: str | None,
     max_output: int,
 ) -> str:
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     return await loop.run_in_executor(
         None, _run_pty_sync, command, timeout, workdir, max_output
     )
