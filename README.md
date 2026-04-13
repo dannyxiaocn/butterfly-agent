@@ -1,4 +1,4 @@
-# Nutshell `v1.3.84`
+# Nutshell `v1.3.86`
 
 Nutshell is a file-backed Python agent runtime. Sessions, prompts, tools, skills, state, and UI traffic all live on disk, so the server, CLI, Web UI, and agents share the same source of truth.
 
@@ -16,8 +16,8 @@ export OPENAI_API_KEY=...
 export KIMI_FOR_CODING_API_KEY=...
 export BRAVE_API_KEY=...
 
-nutshell server
-nutshell chat "Plan a data pipeline"
+nutshell-server              # auto-daemonizes; or nutshell-server --foreground
+nutshell chat "Plan a data pipeline"   # auto-starts server if not running
 ```
 
 The default `entity/agent` template uses `codex-oauth` with `gpt-5.4`. Other entities or sessions can switch provider and model in `core/params.json`.
@@ -62,7 +62,7 @@ sessions/<id>/                  agent-visible
     memory.md
     memory/*.md
     apps/*.md
-    tasks/*.md
+    tasks/*.json
     params.json
     tools/*.json + *.sh
     skills/<name>/SKILL.md
@@ -90,6 +90,12 @@ nutshell stop <id>
 nutshell start <id>
 nutshell meta nutshell_dev
 nutshell web
+
+nutshell-server                # start server (auto-daemonize)
+nutshell-server stop           # stop running server
+nutshell-server status         # check if server is running
+nutshell-server update         # reinstall package + restart
+nutshell-server --foreground   # run in foreground (no daemonize)
 ```
 
 ## Documentation

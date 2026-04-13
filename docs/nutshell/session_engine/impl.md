@@ -10,7 +10,7 @@
 | `session_init.py` | `init_session()` — creates full session directory structure from meta session |
 | `session_params.py` | Reads/writes `core/params.json` with defaults |
 | `session_status.py` | Reads/writes `_sessions/<id>/status.json` |
-| `task_cards.py` | Per-task `.md` files in `core/tasks/` with YAML frontmatter |
+| `task_cards.py` | Per-task `.json` files in `core/tasks/` with scheduling and status management |
 | `session.py` | `Session` class — wraps Agent with persistent file-backed behavior |
 
 ## Session.run_daemon_loop()
@@ -30,7 +30,8 @@ chat(message):
 tick(card):
   1. Build prompt from card + heartbeat.md
   2. agent.run(...)
-  3. Mark card done (recurring → pending with updated last_run_at)
+  3. Mark card done (recurring → pending with updated last_finished_at)
+  4. On error: mark_pending() (not paused) so task retries next cycle
 ```
 
 ## init_session() Flow
@@ -68,9 +69,53 @@ Each entity is fully self-contained — no inheritance chain:
 | `default` | Standard session, no autonomous heartbeat |
 | `persistent` | Has recurring heartbeat task card at `heartbeat_interval` |
 
+## Task Card System
+
+Each task card is a `.json` file in `core/tasks/`:
+
+```json
+{
+  "name": "duty",
+  "description": "Review and process child sessions",
+  "status": "pending",
+  "interval": 3600,
+  "start_at": "2026-04-12T11:00:00",
+  "end_at": "2026-04-19T10:00:00",
+  "created_at": "2026-04-12T10:00:00",
+  "last_started_at": null,
+  "last_finished_at": null,
+  "comments": "",
+  "progress": ""
+}
+```
+
+### Status values
+
+| Status | Meaning |
+|--------|---------|
+| `pending` | Waiting for next trigger (default state for new and recurring tasks) |
+| `working` | Currently being executed |
+| `finished` | Completed (one-shot) or manually finished |
+| `paused` | User-initiated pause; won't fire until explicitly resumed |
+
+### Scheduling (`start_at` / `end_at`)
+
+- `start_at`: earliest time a task can fire. Default for recurring = `ceil(created_at + interval)`; for one-shot = `floor(created_at)`.
+- `end_at`: auto-expire time. Default = `ceil(created_at + 7 days)`; if interval > 7 days then `ceil(created_at + 10 * interval)`.
+- Hour-level granularity: `_ceil_to_hour()` rounds up, `_floor_to_hour()` truncates down.
+- A task with `status=pending` fires when: `now >= start_at AND now < end_at AND (never finished OR interval elapsed)`.
+- Past `end_at` → auto-marked `finished` and persisted to disk by `load_due_cards()`.
+
+### Legacy compatibility
+
+- Legacy `.md` cards with YAML frontmatter are still loaded (JSON takes precedence if both exist)
+- Legacy status values normalized on load: `running` → `working`, `completed` → `finished`
+- `paused` is preserved as-is (valid user-initiated state)
+- `migrate_legacy_task_sources()` converts old `tasks.md` to one-shot card
+
 ## Important Behaviors
 
 - Every session gets its own `.venv` under `sessions/<id>/.venv`
 - `reload_capabilities` tool is always injected at runtime
-- Legacy `default_task` values are migrated into `core/tasks/heartbeat.md` card
+- Legacy `tasks.md` files are migrated into task cards; `default_task` param is dropped on config write
 - `system_notice` events are passed through IPC and rendered in both web UI and SSE stream

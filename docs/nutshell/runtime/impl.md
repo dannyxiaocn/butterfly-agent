@@ -4,13 +4,31 @@
 
 | File | Purpose |
 |------|---------|
-| `server.py` | `nutshell server` entrypoint; creates `SessionWatcher` and runs it |
+| `server.py` | `nutshell-server` entrypoint; auto-daemonizes with PID file, provides `start`/`stop`/`status`/`update` subcommands |
 | `watcher.py` | Polls `_sessions/` for manifests, starts/stops session asyncio tasks |
 | `ipc.py` | `FileIPC` — file-based IPC using two JSONL files per session |
 | `bridge.py` | `BridgeSession` — frontend-friendly wrapper with dedup (wraps FileIPC) |
 | `cap.py` | File-backed coordination primitives: handshake, lock, broadcast, heartbeat-sync |
 | `git_coordinator.py` | Master/sub role assignment for shared git repos |
 | `env.py` | Best-effort `.env` loader |
+
+## Server Lifecycle
+
+`nutshell-server` auto-daemonizes by default. The daemon's PID is written to `_sessions/server.pid`; logs go to `_sessions/server.log`.
+
+| Command | Behavior |
+|---------|----------|
+| `nutshell-server` / `nutshell-server start` | Start server in daemon mode (auto-backgrounds) |
+| `nutshell-server --foreground` | Run in foreground (no daemonize) |
+| `nutshell-server stop` | Send SIGTERM, wait up to 10s, then SIGKILL |
+| `nutshell-server status` | Report running/stopped + PID |
+| `nutshell-server update` | Stop → `pip install -e .` → restart |
+
+All flags (`--foreground`, `--sessions-dir`, `--system-sessions-dir`) work at top level and on every subcommand via a shared parent parser.
+
+PID file helpers (`_write_pid`, `_read_pid`, `_clear_pid`, `_is_server_running`) are parametric — they accept `system_dir` to support custom paths.
+
+`nutshell chat` and `nutshell new` auto-start the server if it is not already running.
 
 ## SessionWatcher
 

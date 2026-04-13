@@ -17,7 +17,7 @@ toolhub/
 ├── bash/          — BashExecutor (subprocess + PTY modes)
 ├── web_search/    — WebSearchExecutor → delegates to brave.py or tavily.py
 ├── skill/         — SkillExecutor (load + render SKILL.md)
-├── manage_task/   — ManageTaskExecutor (CRUD on task card JSON files)
+├── manage_task/   — ManageTaskExecutor (create/update/pause/resume/finish/list task cards)
 └── recall_memory/ — RecallMemoryExecutor (read memory layer files)
 ```
 
@@ -68,4 +68,5 @@ tools = loader.load_from_tool_md(Path("core/tool.md"))
 - `bash` runs from the session directory by default; agent can override with `workdir`
 - `bash` auto-activates session `.venv` when `NUTSHELL_SESSION_ID` is set
 - `web_search` backend switchable via `config.yaml` → `tool_providers.web_search`
+- `manage_task` actions: `create`, `update`, `pause`, `resume`, `finish`, `list`; `pause` is user-initiated stop, `resume` returns to `pending`
 - `manage_task` and `recall_memory` have path traversal protection
