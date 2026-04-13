@@ -118,9 +118,9 @@ def _fmt_ago(ts: str | None) -> str:
     try:
         dt = datetime.fromisoformat(ts)
         if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        now = datetime.now(tz=timezone.utc)
-        secs = int((now - dt).total_seconds())
+            secs = int((datetime.now() - dt).total_seconds())
+        else:
+            secs = int((datetime.now(tz=timezone.utc) - dt).total_seconds())
         if secs < 60:
             return f"{secs}s ago"
         if secs < 3600:
@@ -890,7 +890,7 @@ def cmd_prompt_stats(args) -> int:
         print(f"  {label:<{COL[0]}}  {lines:>{COL[1]}}  {chars:>{COL[2]}}  {tokens:>{COL[3]}}  {note}")
 
     # Group: Heartbeat
-    print("  HEARTBEAT")
+    print("  TASK")
     label, lines, chars, tokens, note = rows[-1]
     print(f"  {label:<{COL[0]}}  {lines:>{COL[1]}}  {chars:>{COL[2]}}  {tokens:>{COL[3]}}  {note}")
 
@@ -906,7 +906,7 @@ def cmd_prompt_stats(args) -> int:
     dynamic_tokens = sum(r[3] for r in dynamic_rows)
     print(f"  {'TOTAL (chat)':<{COL[0]}}  {'':>{COL[1]}}  {total_chars:>{COL[2]}}  {total_tokens:>{COL[3]}}  static {static_tokens} + dynamic {dynamic_tokens}")
     print()
-    print("  * heartbeat.md is injected during autonomous heartbeat ticks, not regular chat.")
+    print("  * task.md is injected during autonomous task activations, not regular chat.")
     return 0
 
 
@@ -1279,7 +1279,7 @@ def cmd_meta(args) -> int:
         # Derive _sessions/ sibling from the sessions_base argument
         sys_base = args.sessions_base.parent / "_sessions"
         history = get_version_history(args.entity, sys_base=sys_base)
-        current = get_meta_version(args.entity, s_base=base)
+        current = get_meta_version(args.entity, sys_base=sys_base)
         if args.as_json:
             print(json.dumps({"current": current, "history": history}, ensure_ascii=False, indent=2))
             return 0

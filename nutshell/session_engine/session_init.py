@@ -35,6 +35,16 @@ def _write_if_absent(path: Path, content: str) -> None:
         path.write_text(content, encoding="utf-8")
 
 
+def _is_real_memory(content: str) -> bool:
+    """Return True if content has meaningful memory, not just a seed placeholder."""
+    stripped = content.strip()
+    if not stripped:
+        return False
+    # Filter out placeholder-only content: lines that are headings or "(empty..." markers
+    lines = [ln.strip() for ln in stripped.splitlines() if ln.strip()]
+    return any(not ln.startswith("#") and not ln.startswith("(empty") for ln in lines)
+
+
 def _create_session_venv(session_dir: Path) -> Path:
     """Create a Python venv at session_dir/.venv (idempotent).
 
@@ -186,9 +196,9 @@ def init_session(
 
     meta_memory = meta_dir / "core" / "memory.md"
     entity_memory = (ent_base / entity_name / "memory.md") if entity_dir.exists() else None
-    if meta_memory.exists() and meta_memory.read_text(encoding="utf-8"):
+    if meta_memory.exists() and _is_real_memory(meta_memory.read_text(encoding="utf-8")):
         _write_if_absent(core_dir / "memory.md", meta_memory.read_text(encoding="utf-8"))
-    elif entity_memory and entity_memory.exists():
+    elif entity_memory and entity_memory.exists() and _is_real_memory(entity_memory.read_text(encoding="utf-8")):
         _write_if_absent(core_dir / "memory.md", entity_memory.read_text(encoding="utf-8"))
     else:
         _write_if_absent(core_dir / "memory.md", "")

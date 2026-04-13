@@ -35,8 +35,9 @@ def classify_status(info: dict[str, Any]) -> str:
     try:
         dt = datetime.fromisoformat(last_run)
         if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        age_secs = (datetime.now(tz=timezone.utc) - dt).total_seconds()
+            age_secs = (datetime.now() - dt).total_seconds()
+        else:
+            age_secs = (datetime.now(tz=timezone.utc) - dt).total_seconds()
     except Exception:
         return "offline"
 
@@ -56,10 +57,9 @@ def _fmt_last(ts: str | None) -> str:
     try:
         dt = datetime.fromisoformat(ts)
         if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        secs = int((datetime.now(tz=timezone.utc) - dt).total_seconds())
-        if secs < 0:
-            return "just now"
+            secs = int((datetime.now() - dt).total_seconds())
+        else:
+            secs = int((datetime.now(tz=timezone.utc) - dt).total_seconds())
         if secs < 60:
             return f"{secs}s ago"
         if secs < 3600:

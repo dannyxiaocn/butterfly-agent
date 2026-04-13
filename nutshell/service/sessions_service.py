@@ -82,9 +82,9 @@ def _session_priority(info: dict) -> int:
         return 0
     if info.get("has_tasks") and info.get("pid_alive") and info.get("status") != "stopped":
         return 1
-    if info.get("status") == "stopped":
-        return 3 if _is_stale_stopped(info) else 2
-    return 3
+    if info.get("status") != "stopped":
+        return 2
+    return 4 if _is_stale_stopped(info) else 3
 
 
 def sort_sessions(sessions: list[dict]) -> list[dict]:
