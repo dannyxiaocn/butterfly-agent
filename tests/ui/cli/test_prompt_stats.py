@@ -149,8 +149,8 @@ def test_prompt_stats_heartbeat_section(tmp_path, capsys):
     rc = cmd_prompt_stats(args)
     assert rc == 0
     out = capsys.readouterr().out
-    assert "heartbeat.md" in out
-    assert "HEARTBEAT" in out
+    assert "task.md" in out
+    assert "TASK" in out
 
 
 def test_prompt_stats_tokens_approximate(tmp_path, capsys):

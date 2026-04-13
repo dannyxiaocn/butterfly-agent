@@ -211,7 +211,7 @@ def init_session(
         session_memory_dir.mkdir(exist_ok=True)
         for src_file in seed_files:
             dst_file = session_memory_dir / src_file.name
-            if not dst_file.exists():
+            if not dst_file.exists() and _is_real_memory(src_file.read_text(encoding="utf-8")):
                 shutil.copy2(src_file, dst_file)
 
     # Seed shared playground files from meta-session without overwriting session-local files.
