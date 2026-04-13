@@ -12,7 +12,6 @@ from nutshell.session_engine.task_cards import (
     _default_end_at,
     _ceil_to_hour,
     _floor_to_hour,
-    _LEGACY_STATUS_MAP,
     ensure_card,
     has_pending_cards,
     load_all_cards,
@@ -303,34 +302,6 @@ def test_roundtrip_preserves_start_end(tmp_path):
     assert loaded is not None
     assert loaded.start_at == "2026-04-12T11:00:00"
     assert loaded.end_at == "2026-04-19T10:00:00"
-
-
-# ── Legacy status mapping ───────────────────────────────────────────────────
-
-
-def test_legacy_status_map_running():
-    assert _LEGACY_STATUS_MAP["running"] == "working"
-
-
-def test_legacy_status_map_completed():
-    assert _LEGACY_STATUS_MAP["completed"] == "finished"
-
-
-def test_legacy_pending_not_mapped():
-    """'pending' is a valid status now, NOT mapped to 'paused'."""
-    assert "pending" not in _LEGACY_STATUS_MAP
-
-
-def test_from_dict_maps_legacy_running():
-    d = {"name": "old", "status": "running"}
-    card = TaskCard.from_dict(d)
-    assert card.status == "working"
-
-
-def test_from_dict_maps_legacy_completed():
-    d = {"name": "old", "status": "completed"}
-    card = TaskCard.from_dict(d)
-    assert card.status == "finished"
 
 
 def test_from_dict_keeps_paused():

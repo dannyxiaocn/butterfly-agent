@@ -6,4 +6,4 @@
 - `skill.json`: load a skill body on demand
 - `web_search.json`: web search through configured backend
 
-Edit the JSON here when changing description or schema. Add to `agent.yaml` for new defaults.
+Edit the JSON here when changing description or schema. Add to `config.yaml` for new defaults.

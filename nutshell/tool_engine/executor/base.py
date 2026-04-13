@@ -9,9 +9,3 @@ class BaseExecutor(ABC):
 
     @abstractmethod
     async def execute(self, **kwargs: Any) -> str: ...
-
-    @classmethod
-    @abstractmethod
-    def can_handle(cls, tool_name: str, tool_path: Path | None) -> bool:
-        """Return True if this executor handles the given tool."""
-        ...

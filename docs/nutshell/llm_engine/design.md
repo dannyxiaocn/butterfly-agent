@@ -5,7 +5,7 @@ The LLM engine provides **provider adapters** that normalize different vendor AP
 ## Responsibilities
 
 - Adapt external model APIs (Anthropic, OpenAI, Kimi, Codex) to a uniform interface
-- Registry maps string keys (from `params.json` / `agent.yaml`) to concrete provider classes
+- Registry maps string keys (from `config.yaml`) to concrete provider classes
 - Handle vendor-specific features (thinking, streaming, prompt caching) transparently
 
 ## Design Constraints

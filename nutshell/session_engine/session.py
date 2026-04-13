@@ -14,7 +14,7 @@ from nutshell.core.types import AgentResult
 from nutshell.session_engine.session_config import read_config, ensure_config
 from nutshell.session_engine.task_cards import (
     TaskCard, clear_all_cards,
-    load_due_cards, migrate_legacy_task_sources, save_card,
+    load_due_cards, save_card,
 )
 from nutshell.llm_engine.registry import provider_name, resolve_provider
 from nutshell.session_engine.session_status import ensure_session_status, read_session_status, write_session_status
@@ -35,11 +35,11 @@ class Session:
         sessions/<id>/                ← agent-visible
           core/
             system.md               ← system prompt (copied from entity at creation)
-            task.md                 ← task wakeup prompt (fallback: heartbeat.md)
-            env.md                  ← session paths + operational guide (fallback: session.md)
+            task.md                 ← task wakeup prompt
+            env.md                  ← session paths + operational guide
             memory.md               ← persistent memory (auto-injected each activation)
-            tasks/*.md              ← task cards (YAML frontmatter + content)
-            params.json             ← runtime config
+            tasks/*.json            ← task cards (JSON with scheduling + status)
+            config.yaml             ← runtime config
             tools.md                ← enabled toolhub tools (one name per line)
             skills.md               ← enabled skillhub skills (one name per line)
             tools/                  ← agent-created tools: .json + .sh
@@ -68,7 +68,6 @@ class Session:
         session_id: str | None = None,
         base_dir: Path = SESSIONS_DIR,
         system_base: Path = _SYSTEM_SESSIONS_DIR,
-        heartbeat: float = 600.0,  # legacy param, ignored
         *,
         on_loop_start: OnLoopStart | None = None,
         on_loop_end: OnLoopEnd | None = None,
@@ -80,7 +79,6 @@ class Session:
         self._session_id = session_id or (datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + "-" + uuid.uuid4().hex[:4])
         self._base_dir = base_dir
         self._system_base = system_base
-        # heartbeat param accepted for backward compat but ignored
         self._agent_lock: asyncio.Lock = asyncio.Lock()
         self._ipc: FileIPC | None = None
 
@@ -99,8 +97,6 @@ class Session:
         self.docs_dir.mkdir(exist_ok=True)
         self.playground_dir.mkdir(exist_ok=True)
         self.system_dir.mkdir(parents=True, exist_ok=True)
-        # Migrate legacy task sources into core/tasks/
-        migrate_legacy_task_sources(self.session_dir)
         self.tasks_dir.mkdir(parents=True, exist_ok=True)
         if not self.memory_path.exists():
             self.memory_path.write_text("", encoding="utf-8")
@@ -145,15 +141,13 @@ class Session:
 
         # 2. prompts from core/
         system_md = self._read_core_text("system.md")
-        # env.md is the canonical name; fall back to session.md / session_context.md for old sessions
-        env_md = self._read_core_text("env.md") or self._read_core_text("session.md") or self._read_core_text("session_context.md")
+        env_md = self._read_core_text("env.md")
 
         self._agent.system_prompt = system_md
         self._agent.env_context = (
             env_md.replace("{session_id}", self._session_id) if env_md else ""
         )
-        # task.md is the canonical name; fall back to heartbeat.md for old sessions
-        self._agent.task_prompt = self._read_core_text("task.md") or self._read_core_text("heartbeat.md")
+        self._agent.task_prompt = self._read_core_text("task.md")
         self._agent.memory = self.memory_path.read_text(encoding="utf-8").strip()
 
         # Extra named memory layers from core/memory/*.md (sorted, non-empty only)
@@ -378,7 +372,6 @@ class Session:
         If no card is provided, picks the first due card from core/tasks/.
         Returns None if no card is due.
         """
-        migrate_legacy_task_sources(self.session_dir)
         if card is None:
             due = load_due_cards(self.tasks_dir)
             if due:
@@ -509,8 +502,6 @@ class Session:
         # Reset stale "running" state from a previous crash
         write_session_status(self.system_dir, model_state="idle", model_source="system")
 
-        migrate_legacy_task_sources(self.session_dir)
-
         # Notify if meta session has a newer version than this session.
         self._emit_version_notice_if_stale()
 
@@ -616,10 +607,6 @@ class Session:
     @property
     def tasks_dir(self) -> Path:
         return self.core_dir / "tasks"
-
-    @property
-    def tasks_path(self) -> Path:
-        return self.core_dir / "tasks.md"
 
     @property
     def _context_path(self) -> Path:

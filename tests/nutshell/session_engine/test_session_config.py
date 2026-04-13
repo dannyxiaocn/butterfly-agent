@@ -51,18 +51,6 @@ def test_read_config_reads_yaml(tmp_path):
     assert cfg["duty"] is None
 
 
-def test_read_config_fallback_to_legacy_params_json(tmp_path):
-    """read_config falls back to params.json when config.yaml is absent."""
-    core = tmp_path / "core"
-    core.mkdir()
-    (core / "params.json").write_text(
-        json.dumps({"model": "gpt-3.5", "provider": "openai"}),
-        encoding="utf-8",
-    )
-    cfg = read_config(tmp_path)
-    assert cfg["model"] == "gpt-3.5"
-    assert cfg["provider"] == "openai"
-
 
 def test_read_config_corrupt_yaml_returns_defaults(tmp_path):
     """read_config returns defaults when config.yaml is corrupt."""
@@ -72,14 +60,6 @@ def test_read_config_corrupt_yaml_returns_defaults(tmp_path):
     # Should still have defaults
     assert cfg["duty"] is None
 
-
-def test_read_config_corrupt_legacy_params_returns_defaults(tmp_path):
-    """read_config returns defaults when legacy params.json is corrupt."""
-    core = tmp_path / "core"
-    core.mkdir()
-    (core / "params.json").write_text("{bad json", encoding="utf-8")
-    cfg = read_config(tmp_path)
-    assert cfg == DEFAULT_CONFIG
 
 
 # ── write_config ─────────────────────────────────────────────────────────────

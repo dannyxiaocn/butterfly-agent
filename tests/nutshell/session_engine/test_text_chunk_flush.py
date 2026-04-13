@@ -39,10 +39,8 @@ def make_session(tmp_path, agent, session_id="demo"):
                       base_dir=tmp_path, system_base=system_base)
     (session.core_dir / "system.md").write_text(
         agent.system_prompt or "", encoding="utf-8")
-    (session.core_dir / "heartbeat.md").write_text(
-        getattr(agent, "heartbeat_prompt", "") or "", encoding="utf-8")
-    (session.core_dir / "session.md").write_text(
-        getattr(agent, "session_context_template", "") or "", encoding="utf-8")
+    (session.core_dir / "task.md").write_text("", encoding="utf-8")
+    (session.core_dir / "env.md").write_text("", encoding="utf-8")
     return session
 
 
@@ -134,13 +132,15 @@ class TestTickFlush:
     def test_tick_flushes_remaining_text(self, tmp_path):
         """tick() must flush remaining buffered text after agent.run()."""
         from nutshell.session_engine.task_cards import TaskCard, save_card
+        from datetime import datetime, timedelta
         short_text = "y" * 50
         provider = MockProvider([(short_text, [])])
         agent = Agent(provider=provider, model="test",
                       task_prompt="do stuff\n{task}")
         session = make_session(tmp_path, agent)
         # Write a task card so tick() actually runs
-        save_card(session.tasks_dir, TaskCard(name="test", description="test task", interval=600))
+        past = (datetime.now() - timedelta(hours=1)).isoformat()
+        save_card(session.tasks_dir, TaskCard(name="test", description="test task", interval=600, start_at=past))
         asyncio.run(session.tick())
         events = [e for e in read_events(session) if e["type"] == "partial_text"]
         assert len(events) >= 1

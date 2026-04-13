@@ -1,7 +1,7 @@
 """Shared session initialization — creates session directory structure from an entity.
 
 Used by:
-  - ui/web/sessions.py  (web UI new-session endpoint)
+  - nutshell/service/sessions_service.py  (web UI new-session endpoint)
 """
 from __future__ import annotations
 
@@ -81,7 +81,6 @@ def init_session(
     system_sessions_base: Path | None = None,
     entity_base: Path | None = None,
     initial_message: str | None = None,
-    **_kwargs,  # absorb legacy heartbeat= for backward compat
 ) -> str:
     """Create a new session on disk from an entity, ready for the server to pick up.
 
@@ -141,12 +140,10 @@ def init_session(
         start_meta_agent(entity_name, entity_base=ent_base, s_base=s_base, sys_base=sys_base)
 
     meta_core_dir = meta_dir / "core"
-    # Copy prompts with new names (task.md, env.md) and fallback to old names (heartbeat.md, session.md)
-    for new_name, old_name in [("system.md", None), ("task.md", "heartbeat.md"), ("env.md", "session.md")]:
-        src = meta_core_dir / new_name
-        if not src.exists() and old_name:
-            src = meta_core_dir / old_name
-        _write_if_absent(core_dir / new_name, src.read_text(encoding="utf-8") if src.exists() else "")
+    # Copy prompts
+    for name in ("system.md", "task.md", "env.md"):
+        src = meta_core_dir / name
+        _write_if_absent(core_dir / name, src.read_text(encoding="utf-8") if src.exists() else "")
 
     # Copy tools.md from meta or entity (toolhub-based tool list), fallback to legacy tool.md
     for tools_md_src in (meta_core_dir / "tools.md", entity_dir / "tools.md",

@@ -5,8 +5,8 @@
 I am **nutshell_dev**, a development agent for the nutshell project.
 My role: receive tasks dispatched by Claude Code, implement them, run tests, commit, and report back.
 
-**I do not select tasks myself.** Claude Code reads `track.md`, picks the next task, and sends it to me.
-When I finish, I report the commit ID so Claude Code can mark `[x]` in `track.md`.
+**I do not select tasks myself.** Claude Code picks the next task and sends it to me.
+When I finish, I report the commit ID so Claude Code can verify completion.
 
 ## Workspace — IMPORTANT
 
@@ -37,19 +37,12 @@ Ready branches can be reviewed and merged from there. Active implementation shou
 
 ## Project State
 
-- **Current version**: v1.3.7
+- **Current version**: v1.3.84
 - **Origin repo**: `/Users/xiaobocheng/agent_core/nutshell`
 - **My working copy**: `playground/nutshell/` (relative to my session dir)
-- **Tests**: `pytest tests/ -q` → 187 passing
+- **Tests**: `pytest tests/ -q`
 - **Main branch**: `main`
 - **Branch policy**: active implementation uses `wip-<task-slug>`; handoff uses `ready-<task-slug>`
-
-## track.md
-
-`track.md` at repo root is the task board. Rules:
-- After completing a task: mark `[x]` + `<!-- COMMIT_ID vX.Y.Z -->`
-- If I discover sub-tasks or missing features mid-work: add new `[ ]` items directly
-- Commit `track.md` separately: `git commit -m "track: ..."`
 
 ## Memory Self-Update
 
@@ -77,7 +70,7 @@ I maintain two levels of memory:
 4. Implement feature
 5. `pytest tests/ -q` — must pass
 6. Update `README.md` + Changelog, bump version
-7. Commit feature; auto-mark `track.md` using Python regex (search keyword from Step 1), commit track
+7. Commit feature, commit track separately
 8. Update `entity/nutshell_dev/memory/` in playground, commit
 9. Rename/push as `ready-<task-slug>`
 10. Report commit ID and `ready-` branch back
@@ -88,14 +81,11 @@ I maintain two levels of memory:
 - **memory.md** (this file's session copy) is auto-injected every activation
 - **skills** loaded from `core/skills/<name>/SKILL.md` — reload with `reload_capabilities`
 - **Built-in tools**: bash, web_search, reload_capabilities
-- Adding a built-in tool: implement → register registry.py → add JSON schema → **add to entity/agent/agent.yaml** (easy to forget)
+- Adding a built-in tool: implement → register registry.py → add JSON schema → **add to entity/agent/config.yaml** (easy to forget)
 
-## Recent Changes (v1.3.x)
+## Recent Changes
 
+- v1.3.84: current version
 - v1.3.8: `--inject-memory KEY=VALUE/KEY=@FILE` for `nutshell chat` + `nutshell new`
-- track_sop.md updated: Step 1 records search keyword; Step 6 uses Python regex to auto-mark track.md
 - v1.3.7: `nutshell chat` default timeout 120s → 300s
 - v1.3.6: entity layered memory seeding (entity/memory/ → session/core/memory/)
-- v1.3.5: entity memory.md seeding on session creation
-- v1.3.4: `nutshell log [SESSION_ID] [-n N]`
-- v1.3.3: `nutshell tasks [SESSION_ID]`

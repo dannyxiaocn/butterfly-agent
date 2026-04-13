@@ -180,31 +180,20 @@ class TaskCard:
 
     @classmethod
     def from_dict(cls, data: dict, name: str | None = None) -> "TaskCard":
-        # Normalize legacy status values on load
-        raw_status = data.get("status", "pending")
-        status = _LEGACY_STATUS_MAP.get(raw_status, raw_status)
         return cls(
             name=name or data.get("name", "unknown"),
             description=data.get("description", ""),
-            status=status,
+            status=data.get("status", "pending"),
             interval=data.get("interval"),
             start_at=data.get("start_at"),
             end_at=data.get("end_at"),
             created_at=data.get("created_at", datetime.now().isoformat()),
             last_started_at=data.get("last_started_at"),
-            last_finished_at=data.get("last_finished_at") or data.get("last_run_at"),
+            last_finished_at=data.get("last_finished_at"),
             comments=data.get("comments", ""),
             progress=data.get("progress", ""),
         )
 
-
-# Legacy status value mapping (from older API/frontend naming)
-_LEGACY_STATUS_MAP: dict[str, str] = {
-    "running": "working",     # legacy alias
-    "completed": "finished",  # legacy alias
-}
-# Note: "paused" is NOT mapped — it remains a valid status (user-initiated pause).
-# Old cards with status="paused" will stay paused; users can resume them via manage_task.
 
 
 # ── File operations ──────────────────────────────────────────────────────────
@@ -255,21 +244,10 @@ def load_all_cards(tasks_dir: Path) -> list[TaskCard]:
     if not tasks_dir.is_dir():
         return []
     cards = []
-    json_names: set[str] = set()
-    # Load JSON cards (new format) first
     for path in sorted(tasks_dir.glob("*.json")):
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
             cards.append(TaskCard.from_dict(data, name=path.stem))
-            json_names.add(path.stem)
-        except Exception:
-            continue
-    # Legacy: also load .md cards for backward compat, but skip duplicates
-    for path in sorted(tasks_dir.glob("*.md")):
-        if path.stem in json_names:
-            continue  # JSON version takes precedence
-        try:
-            cards.append(_parse_legacy_md_card(path))
         except Exception:
             continue
     return cards
@@ -328,54 +306,3 @@ def ensure_card(
     save_card(tasks_dir, card)
     return card
 
-
-# ── Legacy compatibility ─────────────────────────────────────────────────────
-
-def _parse_legacy_md_card(path: Path) -> TaskCard:
-    """Parse a legacy .md task card with YAML frontmatter."""
-    import re
-    raw = path.read_text(encoding="utf-8")
-    meta: dict = {}
-    body = raw
-
-    m = re.match(r"^---\s*\n(.*?)\n---\s*\n?", raw, re.DOTALL)
-    if m:
-        body = raw[m.end():]
-        try:
-            import yaml
-            parsed = yaml.safe_load(m.group(1))
-            meta = parsed if isinstance(parsed, dict) else {}
-        except Exception:
-            meta = {}
-
-    # Map old status values
-    old_status = meta.get("status", "pending")
-    status = _LEGACY_STATUS_MAP.get(old_status, old_status)
-
-    return TaskCard(
-        name=path.stem,
-        description=body.strip(),
-        status=status,
-        interval=meta.get("interval"),
-        created_at=meta.get("created_at", datetime.now().isoformat()),
-        last_finished_at=meta.get("last_run_at"),
-        comments="",
-        progress="",
-    )
-
-
-def migrate_legacy_task_sources(session_dir: Path) -> None:
-    """Migrate legacy task sources (tasks.md, default_task) into task cards."""
-    core_dir = session_dir / "core"
-    if not core_dir.exists():
-        return
-    # Migrate legacy tasks.md
-    tasks_md = core_dir / "tasks.md"
-    if tasks_md.exists():
-        content = tasks_md.read_text(encoding="utf-8").strip()
-        tasks_dir = core_dir / "tasks"
-        tasks_dir.mkdir(parents=True, exist_ok=True)
-        if content and not any(tasks_dir.glob("*.json")):
-            card = TaskCard(name="migrated_task", description=content)
-            save_card(tasks_dir, card)
-        tasks_md.unlink()

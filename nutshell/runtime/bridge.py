@@ -16,7 +16,7 @@ Borrows key patterns from claude-code's replBridge architecture:
 
   interrupt flow  — Frontend writes {"type":"interrupt"} to events.jsonl via
                     send_interrupt(). The session's run_daemon_loop drains any
-                    pending inputs and skips the next heartbeat tick. A "soft
+                    pending inputs and skips the next task tick. A "soft
                     interrupt" — in-progress turns complete; queued work is
                     cleared.
 
@@ -72,10 +72,6 @@ class BoundedIDSet:
     def has(self, event_id: str) -> bool:
         return event_id in self._set
 
-    def clear(self) -> None:
-        self._set.clear()
-        self._ring = [None] * self._capacity
-        self._write_idx = 0
 
 
 # ── BridgeSession ─────────────────────────────────────────────────────────────
@@ -95,7 +91,6 @@ class BridgeSession:
         from nutshell.runtime.ipc import FileIPC
         self._ipc = FileIPC(system_dir)
         self._seen_ids = BoundedIDSet()   # inbound dedup
-        self._posted_ids = BoundedIDSet() # echo dedup
 
     # ── Write ────────────────────────────────────────────────────────────────
 
@@ -113,7 +108,6 @@ class BridgeSession:
             "id": msg_id,
             "caller": caller,
         })
-        self._posted_ids.add(msg_id)
         return msg_id
 
     def send_interrupt(self) -> None:
@@ -121,7 +115,7 @@ class BridgeSession:
 
         The session's run_daemon_loop sees this and:
           1. Drains (discards) pending queued user_input events.
-          2. Skips the next scheduled heartbeat tick.
+          2. Skips the next scheduled task tick.
           3. Emits {"type": "interrupted"} back to events.jsonl so the
              frontend knows the interrupt was acknowledged.
 

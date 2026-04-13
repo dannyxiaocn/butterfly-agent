@@ -78,10 +78,6 @@ class SkillExecutor(BaseExecutor):
     def __init__(self, skills: Iterable[Skill] | None = None) -> None:
         self._skills = list(skills or [])
 
-    @classmethod
-    def can_handle(cls, tool_name: str, tool_path: Path | None) -> bool:
-        return tool_name == "skill"
-
     def _find_skill(self, name: str) -> Skill | None:
         normalized = _normalize_skill_name(name)
         for skill in self._skills:

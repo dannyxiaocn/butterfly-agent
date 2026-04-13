@@ -6,7 +6,7 @@
 
 - [ ] **`ui/cli/chat.py:173,206`** — `cmd_chat` 还在 `FileIPC(session.system_dir)` 直接写入。交互命令，改造需要小心
 - [ ] **`ui/web/app.py:222-223`** — `/api/sessions/{id}/events` SSE generator 直接 `BridgeSession(system_dir).async_iter_events(...)`，需要定义 streaming service 接口
-- [ ] **`ui/web/weixin.py:252-270,377-378`** — 三处直接 `FileIPC(...).append_event()` + `write_session_status(...)` + `BridgeSession(sys_dir)`，事件文案 `"heartbeat paused"` / `"heartbeat resumed"` 和 service 层的 `"heartbeat paused — use ▶ Start to resume"` 不一致
+- [ ] **`ui/web/weixin.py:252-270,377-378`** — 三处直接 `FileIPC(...).append_event()` + `write_session_status(...)` + `BridgeSession(sys_dir)`，事件文案和 service 层不一致
 
 ## Active — 架构 Gap
 

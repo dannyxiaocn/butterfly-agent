@@ -170,10 +170,6 @@ class BashExecutor(BaseExecutor):
         self._workdir = workdir
         self._max_output = max_output
 
-    @classmethod
-    def can_handle(cls, tool_name: str, tool_path: Path | None) -> bool:
-        return tool_name == "bash"
-
     async def execute(self, **kwargs: Any) -> str:
         command: str = kwargs["command"]
         timeout = float(kwargs.get("timeout") or self._timeout)

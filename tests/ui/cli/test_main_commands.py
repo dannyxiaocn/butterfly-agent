@@ -68,7 +68,7 @@ def _seed_session(
     )
     (system_dir / "status.json").write_text(
         json.dumps({"status": status, "model_state": model_state, "pid": None,
-                    "last_run_at": None, "heartbeat_interval": 600}),
+                    "last_run_at": None}),
         encoding="utf-8",
     )
     return sessions, system
@@ -157,14 +157,13 @@ def test_cmd_new_creates_session(tmp_path, capsys):
     args = argparse.Namespace(
         session_id="my-test-session",
         entity="agent",
-        heartbeat=600.0,
         sessions_base=tmp_path / "sessions",
         system_base=tmp_path / "_sessions",
     )
     code = cmd_new(args)
     assert code == 0
     out = capsys.readouterr().out.strip()
-    assert out == "my-test-session"
+    assert "my-test-session" in out
     assert (tmp_path / "_sessions" / "my-test-session" / "manifest.json").exists()
     assert (tmp_path / "sessions" / "my-test-session" / "core").is_dir()
 
@@ -173,22 +172,22 @@ def test_cmd_new_generates_id(tmp_path, capsys):
     args = argparse.Namespace(
         session_id=None,  # auto-generate
         entity="agent",
-        heartbeat=600.0,
         sessions_base=tmp_path / "sessions",
         system_base=tmp_path / "_sessions",
     )
     code = cmd_new(args)
     assert code == 0
     out = capsys.readouterr().out.strip()
-    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}-[0-9a-f]{4}", out)
-    assert (tmp_path / "_sessions" / out / "manifest.json").exists()
+    # Extract the last line (session ID) — server startup messages may precede it
+    session_id = out.strip().split("\n")[-1]
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}-[0-9a-f]{4}", session_id)
+    assert (tmp_path / "_sessions" / session_id / "manifest.json").exists()
 
 
 def test_cmd_new_bad_entity(tmp_path, capsys):
     args = argparse.Namespace(
         session_id="x",
         entity="nonexistent_entity_xyz",
-        heartbeat=600.0,
         sessions_base=tmp_path / "sessions",
         system_base=tmp_path / "_sessions",
     )
@@ -360,17 +359,24 @@ def test_cmd_start_not_found(tmp_path, capsys):
 
 # ── cmd_tasks ─────────────────────────────────────────────────────────────────
 
-def _seed_tasks(tmp_path: Path, session_id: str, content: str = "") -> tuple[Path, Path]:
-    """Seed a session with a tasks.md file."""
+def _seed_tasks(tmp_path: Path, session_id: str, cards: list[dict] | None = None) -> tuple[Path, Path]:
+    """Seed a session with task card JSON files."""
     sessions, system = _seed_session(tmp_path, session_id)
-    tasks_path = sessions / session_id / "core" / "tasks.md"
-    tasks_path.write_text(content, encoding="utf-8")
+    tasks_dir = sessions / session_id / "core" / "tasks"
+    tasks_dir.mkdir(parents=True, exist_ok=True)
+    for card in (cards or []):
+        (tasks_dir / f"{card['name']}.json").write_text(
+            json.dumps(card), encoding="utf-8"
+        )
     return sessions, system
 
 
 def test_cmd_tasks_shows_content(tmp_path, capsys):
     import argparse
-    sessions, system = _seed_tasks(tmp_path, "task-session", "- [ ] Write tests\n- [x] Write code")
+    sessions, system = _seed_tasks(tmp_path, "task-session", [
+        {"name": "write-tests", "description": "Write tests", "status": "pending"},
+        {"name": "write-code", "description": "Write code", "status": "finished"},
+    ])
     args = argparse.Namespace(
         session_id="task-session",
         sessions_base=sessions,
@@ -386,7 +392,7 @@ def test_cmd_tasks_shows_content(tmp_path, capsys):
 
 def test_cmd_tasks_empty(tmp_path, capsys):
     import argparse
-    sessions, system = _seed_tasks(tmp_path, "empty-session", "")
+    sessions, system = _seed_tasks(tmp_path, "empty-session")
     args = argparse.Namespace(
         session_id="empty-session",
         sessions_base=sessions,
@@ -427,7 +433,9 @@ def test_cmd_tasks_defaults_to_latest(tmp_path, capsys):
     """With no session_id given, picks the most recently active session."""
     import argparse
     # Create two sessions; _read_all_sessions returns most-recent first
-    sessions, system = _seed_tasks(tmp_path, "latest-session", "- [ ] Top priority task")
+    sessions, system = _seed_tasks(tmp_path, "latest-session", [
+        {"name": "top-priority", "description": "Top priority task", "status": "pending"},
+    ])
     _seed_session(tmp_path, "older-session")
     args = argparse.Namespace(
         session_id=None,
@@ -453,8 +461,10 @@ def test_cmd_tasks_defaults_to_non_meta_session(tmp_path, capsys):
     (system / "chat-session").mkdir(parents=True)
     (system / "agent_meta" / "manifest.json").write_text(json.dumps({"entity": "agent"}), encoding="utf-8")
     (system / "chat-session" / "manifest.json").write_text(json.dumps({"entity": "agent"}), encoding="utf-8")
-    (sessions / "agent_meta" / "core" / "tasks" / "heartbeat.md").write_text("meta task", encoding="utf-8")
-    (sessions / "chat-session" / "core" / "tasks" / "real.md").write_text("chat task", encoding="utf-8")
+    (sessions / "agent_meta" / "core" / "tasks" / "default.json").write_text(
+        json.dumps({"name": "default", "description": "meta task", "status": "pending"}), encoding="utf-8")
+    (sessions / "chat-session" / "core" / "tasks" / "real.json").write_text(
+        json.dumps({"name": "real", "description": "chat task", "status": "pending"}), encoding="utf-8")
 
     args = argparse.Namespace(
         session_id=None,
@@ -695,7 +705,6 @@ def test_cmd_new_inject_memory(tmp_path):
     args = argparse.Namespace(
         session_id="inject-test",
         entity="agent",
-        heartbeat=600.0,
         sessions_base=sessions,
         system_base=system,
         inject_memory=["mykey=myvalue", "other=content here"],

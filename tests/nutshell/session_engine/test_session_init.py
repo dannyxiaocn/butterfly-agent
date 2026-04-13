@@ -40,15 +40,15 @@ class SessionInitUnitTests(unittest.TestCase):
                 (entity_dir / "tools.md").write_text("", encoding="utf-8")
                 (entity_dir / "skills.md").write_text("", encoding="utf-8")
                 (entity_dir / "prompts" / "system.md").write_text("system", encoding="utf-8")
-                (entity_dir / "prompts" / "heartbeat.md").write_text("heartbeat", encoding="utf-8")
-                (entity_dir / "prompts" / "session.md").write_text("session", encoding="utf-8")
-                (entity_dir / "agent.yaml").write_text(
+                (entity_dir / "prompts" / "task.md").write_text("task", encoding="utf-8")
+                (entity_dir / "prompts" / "env.md").write_text("env", encoding="utf-8")
+                (entity_dir / "config.yaml").write_text(
                     "\n".join(
                         [
                             "prompts:",
                             "  system: prompts/system.md",
-                            "  heartbeat: prompts/heartbeat.md",
-                            "  session_context: prompts/session.md",
+                            "  task: prompts/task.md",
+                            "  env: prompts/env.md",
                             "provider: anthropic",
                             "model: demo",
                         ]

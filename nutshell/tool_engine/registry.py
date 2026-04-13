@@ -53,6 +53,3 @@ def resolve_tool_impl(tool_name: str, provider_name: str) -> Callable | None:
 def list_providers(tool_name: str) -> list[str]:
     return list(_PROVIDER_REGISTRY.get(tool_name, {}).keys())
 
-
-def registered_tools() -> list[str]:
-    return list(_PROVIDER_REGISTRY.keys())

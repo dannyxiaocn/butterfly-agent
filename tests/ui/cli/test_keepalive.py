@@ -191,12 +191,12 @@ class TestKeepAliveBranching:
     def test_keep_alive_true_prints_message(self):
         """keep_alive=True should print the background server message."""
         code, _, stdout, stderr = self._run_new_session(keep_alive=True)
-        assert "[heartbeat active — server running in background]" in stdout
+        assert "[active — server running in background]" in stdout
 
     def test_keep_alive_false_no_message(self):
         """keep_alive=False should NOT print the background server message."""
         code, _, stdout, stderr = self._run_new_session(keep_alive=False)
-        assert "[heartbeat active" not in stdout
+        assert "[active — server" not in stdout
 
     def test_keep_alive_timeout_still_launches_server(self):
         """keep_alive=True with timeout (reply=None) should still call Popen."""
@@ -204,4 +204,4 @@ class TestKeepAliveBranching:
         assert code == 1
         popen_mock.assert_called_once()
         combined = stdout + stderr
-        assert "[heartbeat active — server running in background]" in combined
+        assert "[active — server running in background]" in combined

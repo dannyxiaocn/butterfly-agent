@@ -37,10 +37,10 @@ nutshell/
 ```
 sessions/<id>/              (agent-visible)
   core/
-    system.md, heartbeat.md, session.md
+    system.md, task.md, env.md
     memory.md, memory/*.md
     apps/*.md
-    params.json
+    config.yaml
     tools/*.json + *.sh
     skills/*, tasks/*.md
   docs/, playground/, .venv/

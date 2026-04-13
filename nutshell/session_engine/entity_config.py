@@ -23,14 +23,9 @@ class AgentConfig:
             raise ImportError("Install pyyaml to use AgentConfig: pip install pyyaml") from exc
 
         path = Path(path)
-        # Support both config.yaml (new) and agent.yaml (legacy)
-        config_path = path if path.name in ("config.yaml", "agent.yaml") else path / "config.yaml"
+        config_path = path if path.name == "config.yaml" else path / "config.yaml"
         if not config_path.exists():
-            legacy_path = path / "agent.yaml"
-            if legacy_path.exists():
-                config_path = legacy_path
-            else:
-                raise FileNotFoundError(f"config.yaml not found: {config_path}")
+            raise FileNotFoundError(f"config.yaml not found: {config_path}")
 
         manifest = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
         return cls(path=config_path.parent, manifest=manifest)

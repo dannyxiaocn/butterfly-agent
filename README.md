@@ -20,7 +20,7 @@ nutshell-server              # auto-daemonizes; or nutshell-server --foreground
 nutshell chat "Plan a data pipeline"   # auto-starts server if not running
 ```
 
-The default `entity/agent` template uses `codex-oauth` with `gpt-5.4`. Other entities or sessions can switch provider and model in `core/params.json`.
+The default `entity/agent` template uses `codex-oauth` with `gpt-5.4`. Other entities or sessions can switch provider and model in `core/config.yaml`.
 
 ## What The Repo Contains
 
@@ -47,7 +47,7 @@ Detailed documentation for every subsystem lives in `docs/` — see [Documentati
 
 1. An entity in `entity/<name>/` defines prompts, tools, skills, defaults, and optional memory.
 2. `session_engine` creates `sessions/<id>/` and `_sessions/<id>/` from that entity.
-3. `runtime` watches `_sessions/`, starts daemons, and drives heartbeat execution.
+3. `runtime` watches `_sessions/`, starts daemons, and drives task execution.
 4. `Session` reloads prompts, memory, tools, and skills from `core/` before each activation.
 5. CLI and Web clients communicate with the daemon by appending JSONL events to session files.
 
@@ -57,13 +57,13 @@ Detailed documentation for every subsystem lives in `docs/` — see [Documentati
 sessions/<id>/                  agent-visible
   core/
     system.md
-    heartbeat.md
-    session.md
+    task.md
+    env.md
     memory.md
     memory/*.md
     apps/*.md
     tasks/*.json
-    params.json
+    config.yaml
     tools/*.json + *.sh
     skills/<name>/SKILL.md
   docs/
@@ -128,8 +128,7 @@ docs/
       prompts/ tools/ skills/
     nutshell_dev/                project dev entity
       prompts/ memory/ skills/
-    nutshell_dev_codex/          Codex variant
-      memory/
+
   ui/                            user interfaces
     cli/                         command-line interface
     web/                         web UI + API

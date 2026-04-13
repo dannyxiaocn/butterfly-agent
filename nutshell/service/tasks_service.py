@@ -8,10 +8,8 @@ from .sessions_service import _validate_session_id
 
 def get_tasks(session_id: str, sessions_dir: Path) -> list[dict]:
     _validate_session_id(session_id)
-    from nutshell.session_engine.task_cards import load_all_cards, migrate_legacy_task_sources
+    from nutshell.session_engine.task_cards import load_all_cards
     session_dir = sessions_dir / session_id
-    if session_dir.exists():
-        migrate_legacy_task_sources(session_dir)
     tasks_dir = session_dir / 'core' / 'tasks'
     cards = sorted(load_all_cards(tasks_dir), key=lambda c: (c.name != 'duty', c.name.lower()))
     return [c.to_dict() for c in cards]
@@ -19,11 +17,10 @@ def get_tasks(session_id: str, sessions_dir: Path) -> list[dict]:
 
 def upsert_task(session_id: str, sessions_dir: Path, **task_fields) -> bool:
     _validate_session_id(session_id)
-    from nutshell.session_engine.task_cards import TaskCard, delete_card, load_card, migrate_legacy_task_sources, save_card
+    from nutshell.session_engine.task_cards import TaskCard, delete_card, load_card, save_card
     session_dir = sessions_dir / session_id
     if not session_dir.exists():
         return False
-    migrate_legacy_task_sources(session_dir)
     tasks_dir = session_dir / 'core' / 'tasks'
     tasks_dir.mkdir(parents=True, exist_ok=True)
     if 'name' in task_fields:
@@ -33,10 +30,7 @@ def upsert_task(session_id: str, sessions_dir: Path, **task_fields) -> bool:
         interval = task_fields.get('interval', existing.interval if existing else None)
         if name == 'duty' and interval is None:
             interval = 7200.0  # default interval for duty cards
-        # Normalize legacy status values
-        _STATUS_MAP = {"running": "working", "completed": "finished"}
-        raw_status = task_fields.get('status', existing.status if existing else 'pending')
-        status = _STATUS_MAP.get(raw_status, raw_status)
+        status = task_fields.get('status', existing.status if existing else 'pending')
 
         card = TaskCard(
             name=name,
@@ -64,9 +58,8 @@ def upsert_task(session_id: str, sessions_dir: Path, **task_fields) -> bool:
 
 def delete_task(session_id: str, task_name: str, sessions_dir: Path) -> bool:
     _validate_session_id(session_id)
-    from nutshell.session_engine.task_cards import delete_card, migrate_legacy_task_sources
+    from nutshell.session_engine.task_cards import delete_card
     session_dir = sessions_dir / session_id
     if not session_dir.exists():
         return False
-    migrate_legacy_task_sources(session_dir)
     return delete_card(session_dir / 'core' / 'tasks', task_name)

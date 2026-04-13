@@ -7,5 +7,5 @@
 ## Adding a New Skill
 
 1. Create a directory here with `SKILL.md`
-2. List it in `entity/agent/agent.yaml` under `skills:`
+2. List it in `entity/agent/config.yaml` under `skills:`
 3. All inheriting entities will receive it

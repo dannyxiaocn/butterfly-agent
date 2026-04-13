@@ -332,9 +332,9 @@ function renderEvent(event: DisplayEvent): HTMLElement | null {
 
     case 'agent': {
       if (!event.content) return null;
-      const isHb = event.triggered_by === 'heartbeat';
+      const isTask = event.triggered_by?.startsWith('task:');
       div.className = 'msg msg-agent';
-      const label = isHb ? '⏱ agent' : 'agent';
+      const label = isTask ? '⏱ agent' : 'agent';
       let usageHtml = '';
       if (event.usage) {
         const u = event.usage;
@@ -406,15 +406,15 @@ function renderEvent(event: DisplayEvent): HTMLElement | null {
       break;
     }
 
-    case 'heartbeat_trigger': {
-      div.className = 'msg msg-heartbeat-trigger';
-      div.innerHTML = `<span>⏱ heartbeat triggered</span><span class="msg-ts">${formatTs(event.ts)}</span>`;
+    case 'task_wakeup': {
+      div.className = 'msg msg-task-wakeup';
+      div.innerHTML = `<span>⏱ task wakeup${event.card ? `: ${escapeHtml(event.card)}` : ''}</span><span class="msg-ts">${formatTs(event.ts)}</span>`;
       break;
     }
 
-    case 'heartbeat_finished': {
-      div.className = 'msg msg-heartbeat-finished';
-      div.innerHTML = `<em>[session finished]</em>`;
+    case 'task_finished': {
+      div.className = 'msg msg-task-finished';
+      div.innerHTML = `<em>[task finished${event.card ? `: ${escapeHtml(event.card)}` : ''}]</em>`;
       break;
     }
 

@@ -9,10 +9,10 @@ from nutshell.runtime.ipc import FileIPC, _context_event_to_display, _runtime_ev
 
 
 class IPCUnitTests(unittest.TestCase):
-    def test_history_replay_emits_heartbeat_and_tool_calls(self) -> None:
+    def test_history_replay_emits_tool_calls_and_agent(self) -> None:
         event = {
             "type": "turn",
-            "triggered_by": "heartbeat",
+            "triggered_by": "task:default",
             "messages": [
                 {
                     "role": "assistant",
@@ -26,14 +26,13 @@ class IPCUnitTests(unittest.TestCase):
         }
 
         display = _context_event_to_display(event, for_history=True)
-        self.assertEqual(display[0]["type"], "heartbeat_trigger")
-        self.assertEqual(display[1]["type"], "tool")
-        self.assertEqual(display[2]["type"], "agent")
+        self.assertEqual(display[0]["type"], "tool")
+        self.assertEqual(display[1]["type"], "agent")
 
     def test_live_stream_skips_pre_streamed_items(self) -> None:
         event = {
             "type": "turn",
-            "triggered_by": "heartbeat",
+            "triggered_by": "task:default",
             "pre_triggered": True,
             "has_streaming_tools": True,
             "messages": [{"role": "assistant", "content": "done"}],
@@ -48,7 +47,6 @@ class IPCUnitTests(unittest.TestCase):
                 "content": "done",
                 "ts": "2026-01-01T00:00:00",
                 "id": "turn:2026-01-01T00:00:00",
-                "triggered_by": "heartbeat",
             }],
         )
 

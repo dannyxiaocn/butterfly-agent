@@ -7,7 +7,6 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from nutshell.runtime.bridge import BoundedIDSet, BridgeSession
-from nutshell.runtime.cap import CAP
 from nutshell.runtime.env import load_dotenv
 from nutshell.runtime.ipc import FileIPC
 
@@ -50,20 +49,6 @@ class RuntimeTest(unittest.TestCase):
         ids.add("c")
         self.assertFalse(ids.has("a"))
         self.assertTrue(ids.has("c"))
-
-    def test_cap_primitives_persist_state(self) -> None:
-        with TemporaryDirectory() as tmp:
-            cap = CAP(system_base=Path(tmp) / "_sessions")
-            handshake = cap.handshake("git", "a", "b", metadata={"role": "sub"})
-            lock = cap.acquire_lock("repo", "a")
-            busy = cap.acquire_lock("repo", "b")
-            broadcast = cap.broadcast("updates", "a", "hello")
-            heartbeat = cap.sync_heartbeat("a")
-            self.assertEqual(cap.get_handshake("git", "a", "b"), handshake)
-            self.assertEqual(lock["state"], "acquired")
-            self.assertEqual(busy["state"], "busy")
-            self.assertEqual(cap.list_broadcasts("updates")[0]["content"], broadcast["content"])
-            self.assertEqual(cap.get_heartbeat("a")["session_id"], heartbeat["session_id"])
 
     def test_load_dotenv_prefers_existing_environment_values(self) -> None:
         with TemporaryDirectory() as tmp:

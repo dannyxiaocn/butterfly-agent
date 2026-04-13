@@ -8,9 +8,7 @@ from pathlib import Path
 
 from nutshell.session_engine.task_cards import (
     TaskCard,
-    _parse_legacy_md_card,
     clear_all_cards,
-    migrate_legacy_task_sources,
     ensure_card,
     has_pending_cards,
     load_all_cards,
@@ -24,7 +22,8 @@ from nutshell.session_engine.task_cards import (
 
 
 def test_card_is_due_when_never_finished():
-    card = TaskCard(name="test", description="do it", interval=600)
+    past = (datetime.now() - timedelta(hours=1)).isoformat()
+    card = TaskCard(name="test", description="do it", interval=600, start_at=past)
     assert card.is_due()
 
 
@@ -39,20 +38,23 @@ def test_card_not_due_when_working():
 
 
 def test_card_due_when_interval_elapsed():
+    past_start = (datetime.now() - timedelta(hours=1)).isoformat()
     past = (datetime.now() - timedelta(seconds=700)).isoformat()
-    card = TaskCard(name="test", description="do it", interval=600, last_finished_at=past)
+    card = TaskCard(name="test", description="do it", interval=600, last_finished_at=past, start_at=past_start)
     assert card.is_due()
 
 
 def test_card_due_when_interval_elapsed_with_timezone_aware_timestamp():
+    past_start = (datetime.now() - timedelta(hours=1)).isoformat()
     past = (datetime.now().astimezone() - timedelta(seconds=700)).isoformat()
-    card = TaskCard(name="test", description="do it", interval=600, last_finished_at=past)
+    card = TaskCard(name="test", description="do it", interval=600, last_finished_at=past, start_at=past_start)
     assert card.is_due()
 
 
 def test_card_not_due_when_interval_not_elapsed():
+    past_start = (datetime.now() - timedelta(hours=1)).isoformat()
     recent = (datetime.now() - timedelta(seconds=100)).isoformat()
-    card = TaskCard(name="test", description="do it", interval=600, last_finished_at=recent)
+    card = TaskCard(name="test", description="do it", interval=600, last_finished_at=recent, start_at=past_start)
     assert not card.is_due()
 
 
@@ -90,7 +92,7 @@ def test_mark_finished_oneshot():
 def test_mark_finished_recurring():
     card = TaskCard(name="test", description="x", interval=600)
     card.mark_finished()
-    assert card.status == "paused"
+    assert card.status == "pending"
     assert card.last_finished_at is not None
 
 
@@ -142,13 +144,6 @@ def test_to_dict_from_dict_roundtrip():
     assert restored.progress == "50%"
 
 
-def test_from_dict_backward_compat_last_run_at():
-    """from_dict maps legacy last_run_at to last_finished_at."""
-    d = {"name": "old", "last_run_at": "2026-01-01T00:00:00"}
-    card = TaskCard.from_dict(d)
-    assert card.last_finished_at == "2026-01-01T00:00:00"
-
-
 # ── Directory operations ──────────────────────────────────────────────────────
 
 
@@ -172,7 +167,8 @@ def test_load_all_cards_nonexistent_dir(tmp_path):
 
 
 def test_load_due_cards(tmp_path):
-    save_card(tmp_path, TaskCard(name="due", description="x", interval=600))
+    past = (datetime.now() - timedelta(hours=1)).isoformat()
+    save_card(tmp_path, TaskCard(name="due", description="x", interval=600, start_at=past))
     save_card(tmp_path, TaskCard(name="done", description="y", status="finished"))
     save_card(tmp_path, TaskCard(name="busy", description="z", status="working"))
     due = load_due_cards(tmp_path)
@@ -194,104 +190,6 @@ def test_clear_all_cards(tmp_path):
     assert all(c.status == "finished" for c in cards)
 
 
-# ── Migration ─────────────────────────────────────────────────────────────────
-
-
-def test_migrate_legacy_task_sources_with_tasks_md(tmp_path):
-    session_dir = tmp_path / "session"
-    core_dir = session_dir / "core"
-    core_dir.mkdir(parents=True)
-    tasks_md = core_dir / "tasks.md"
-    tasks_md.write_text("- [ ] do something\n- [ ] do another thing\n", encoding="utf-8")
-
-    migrate_legacy_task_sources(session_dir)
-
-    assert not tasks_md.exists()
-    tasks_dir = core_dir / "tasks"
-    cards = load_all_cards(tasks_dir)
-    assert len(cards) == 1
-    assert cards[0].name == "migrated_task"
-    assert "do something" in cards[0].description
-    assert cards[0].interval is None
-
-
-def test_migrate_legacy_task_sources_empty_tasks_md(tmp_path):
-    session_dir = tmp_path / "session"
-    core_dir = session_dir / "core"
-    core_dir.mkdir(parents=True)
-    tasks_md = core_dir / "tasks.md"
-    tasks_md.write_text("", encoding="utf-8")
-
-    migrate_legacy_task_sources(session_dir)
-
-    assert not tasks_md.exists()
-    tasks_dir = core_dir / "tasks"
-    assert tasks_dir.is_dir()
-    assert load_all_cards(tasks_dir) == []
-
-
-def test_migrate_noop_when_no_tasks_md(tmp_path):
-    session_dir = tmp_path / "session"
-    core_dir = session_dir / "core"
-    core_dir.mkdir(parents=True)
-    migrate_legacy_task_sources(session_dir)
-    assert not (core_dir / "tasks").exists()
-
-
-def test_migrate_skips_when_cards_exist(tmp_path):
-    session_dir = tmp_path / "session"
-    core_dir = session_dir / "core"
-    core_dir.mkdir(parents=True)
-    tasks_md = core_dir / "tasks.md"
-    tasks_md.write_text("old content", encoding="utf-8")
-    tasks_dir = core_dir / "tasks"
-    save_card(tasks_dir, TaskCard(name="existing", description="already here"))
-
-    migrate_legacy_task_sources(session_dir)
-
-    cards = load_all_cards(tasks_dir)
-    names = {c.name for c in cards}
-    assert "existing" in names
-    assert "migrated_task" not in names
-
-
-# ── Legacy .md card parsing ──────────────────────────────────────────────────
-
-
-def test_parse_legacy_md_card_with_frontmatter(tmp_path):
-    path = tmp_path / "old_task.md"
-    path.write_text(
-        "---\nstatus: running\ninterval: 3600\nlast_run_at: 2026-01-01T00:00:00\n---\n\nDo stuff\n",
-        encoding="utf-8",
-    )
-    card = _parse_legacy_md_card(path)
-    assert card.name == "old_task"
-    assert card.status == "working"  # "running" maps to "working"
-    assert card.interval == 3600
-    # YAML may parse datetime strings as datetime objects
-    assert str(card.last_finished_at).startswith("2026-01-01")
-    assert card.description == "Do stuff"
-
-
-def test_parse_legacy_md_card_without_frontmatter(tmp_path):
-    path = tmp_path / "plain.md"
-    path.write_text("Just a plain task\n", encoding="utf-8")
-    card = _parse_legacy_md_card(path)
-    assert card.name == "plain"
-    assert card.description == "Just a plain task"
-    assert card.status == "paused"  # "pending" maps to "paused"
-
-
-def test_load_all_cards_includes_legacy_md(tmp_path):
-    """load_all_cards loads both .json and legacy .md cards."""
-    save_card(tmp_path, TaskCard(name="modern", description="json card"))
-    (tmp_path / "old.md").write_text("---\nstatus: pending\n---\n\nLegacy task\n", encoding="utf-8")
-    cards = load_all_cards(tmp_path)
-    names = {c.name for c in cards}
-    assert "modern" in names
-    assert "old" in names
-
-
 # ── ensure_card ──────────────────────────────────────────────────────────────
 
 
@@ -299,7 +197,7 @@ def test_ensure_card_creates(tmp_path):
     card = ensure_card(tmp_path, name="duty", interval=3600, description="Duty task")
     assert card.name == "duty"
     assert card.interval == 3600
-    assert card.status == "paused"
+    assert card.status == "pending"
     assert (tmp_path / "duty.json").exists()
 
 

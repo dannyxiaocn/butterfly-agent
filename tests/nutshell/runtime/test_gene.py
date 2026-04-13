@@ -22,7 +22,7 @@ def _seed_entity_with_gene(tmp_path: Path, gene: list[str] | None = None):
     manifest = {'name': 'demo', 'model': 'm1', 'provider': 'p1'}
     if gene is not None:
         manifest['gene'] = gene
-    (ent / 'agent.yaml').write_text(yaml.dump(manifest), encoding='utf-8')
+    (ent / 'config.yaml').write_text(yaml.dump(manifest), encoding='utf-8')
     return entity_base
 
 

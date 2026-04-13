@@ -1,5 +1,5 @@
 # nutshell_dev Prompts — Design
 
-Overrides only the heartbeat prompt. The system and session prompts are inherited from `agent`.
+Overrides only the task prompt. The system and env prompts are inherited from `agent`.
 
-The heartbeat prompt treats `core/tasks/heartbeat.md` as the recurring repo-work task card — selecting the next actionable `track.md` item or continuing the current task.
+The task prompt drives recurring task card execution — continuing the current task or selecting the next actionable item.

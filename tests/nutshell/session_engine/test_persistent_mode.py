@@ -9,6 +9,7 @@ Covers:
 
 import json
 import pytest
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from nutshell.core.agent import Agent
@@ -90,15 +91,19 @@ async def test_tick_fires_due_task_card(tmp_path):
         system_base=tmp_path / "_sessions",
     )
 
-    save_card(session.tasks_dir, TaskCard(name="check", description="Check state", interval=600))
+    past = (datetime.now() - timedelta(hours=2)).isoformat()
+    save_card(session.tasks_dir, TaskCard(
+        name="check", description="Check state", interval=600,
+        start_at=past,
+    ))
 
     result = await session.tick()
     assert result is not None
     assert result.content == "Task done."
 
-    # Card should be marked paused (recurring) after finish
+    # Card should be marked pending (recurring) after finish
     card = load_card(session.tasks_dir, "check")
-    assert card.status == "paused"
+    assert card.status == "pending"
     assert card.last_finished_at is not None
 
 
@@ -117,7 +122,8 @@ async def test_tick_writes_triggered_by_task(tmp_path):
         system_base=tmp_path / "_sessions",
     )
 
-    save_card(session.tasks_dir, TaskCard(name="duty", description="Do stuff", interval=600))
+    past = (datetime.now() - timedelta(hours=2)).isoformat()
+    save_card(session.tasks_dir, TaskCard(name="duty", description="Do stuff", interval=600, start_at=past))
 
     result = await session.tick()
     assert result is not None
@@ -212,7 +218,7 @@ def test_session_init_creates_duty_card_from_config(tmp_path):
 
 
 def test_session_init_no_duty_keeps_empty_tasks(tmp_path):
-    """init_session without duty in config keeps tasks dir empty (no heartbeat card)."""
+    """init_session without duty in config keeps tasks dir empty (no task card)."""
     from nutshell.session_engine.session_init import init_session
     from unittest.mock import patch
 

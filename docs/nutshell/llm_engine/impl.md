@@ -28,4 +28,4 @@ provider = resolve_provider("codex-oauth")
 
 ## How Sessions Switch Providers
 
-`Session._load_session_capabilities()` reads `core/params.json` for `provider` and `model`, then calls `resolve_provider()`. Changes take effect on the next activation.
+`Session._load_session_capabilities()` reads `core/config.yaml` for `provider` and `model`, then calls `resolve_provider()`. Changes take effect on the next activation.

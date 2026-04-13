@@ -1,6 +1,6 @@
 from __future__ import annotations
 import asyncio
-from typing import Any, Callable
+from typing import Any
 
 from nutshell.core.hook import OnLoopEnd, OnLoopStart, OnTextChunk, OnToolCall, OnToolDone
 from nutshell.core.provider import Provider

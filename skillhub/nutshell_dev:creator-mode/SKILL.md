@@ -153,21 +153,22 @@ rm -rf sessions/YOUR_ID/core/skills/my-skill
 
 ## Task board
 
-`core/tasks/` drives task execution. Each `.md` file is a task card with YAML frontmatter; `core/tasks/heartbeat.md` is the recurring heartbeat card.
+`core/tasks/` drives task execution. Each `.json` file is a task card; `core/tasks/default.json` is the recurring default card.
 
 ```bash
 # Read tasks
 ls sessions/YOUR_ID/core/tasks
-cat sessions/YOUR_ID/core/tasks/heartbeat.md
+cat sessions/YOUR_ID/core/tasks/default.json
 
 # Update an existing task card body while keeping frontmatter valid
 python - <<'PY'
 from pathlib import Path
-path = Path("sessions/YOUR_ID/core/tasks/heartbeat.md")
+path = Path("sessions/YOUR_ID/core/tasks/default.json")
 text = path.read_text(encoding="utf-8")
-frontmatter, sep, _body = text.partition("\n---\n\n")
-if text.startswith("---\n") and sep:
-    path.write_text(frontmatter + "\n---\n\nTask 1 — in progress: completed step A, next is step B\n", encoding="utf-8")
+import json
+data = json.loads(text)
+data['progress'] = 'Task 1 — in progress: completed step A, next is step B'
+path.write_text(json.dumps(data, indent=2), encoding='utf-8')
 PY
 ```
 
@@ -194,20 +195,17 @@ Keep memory concise — it consumes context every activation. One fact per line.
 
 ---
 
-## Runtime config (params.json)
+## Runtime config (config.yaml)
 
-`core/params.json` controls session runtime. Changes take effect on the next activation.
+`core/config.yaml` controls session runtime. Changes take effect on the next activation.
 
 ```bash
-python3 << 'EOF'
-import json, pathlib
-p = pathlib.Path('sessions/YOUR_ID/core/params.json')
-d = json.loads(p.read_text())
-d['heartbeat_interval'] = 300   # 60-300 = urgent, 600 = normal, 3600+ = slow
-# d['model'] = 'claude-opus-4-6'
-# d['tool_providers'] = {'web_search': 'tavily'}
-p.write_text(json.dumps(d, indent=2))
-EOF
+# Edit core/config.yaml to change model, provider, or tool_providers
+# Example fields:
+#   model: claude-opus-4-6
+#   provider: anthropic
+#   tool_providers:
+#     web_search: tavily
 ```
 
 ---

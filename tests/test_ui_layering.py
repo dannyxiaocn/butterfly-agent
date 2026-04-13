@@ -10,7 +10,6 @@ FORBIDDEN_MODULES = {
     "nutshell.runtime.ipc",
     "nutshell.runtime.bridge",
     "nutshell.session_engine.session_status",
-    "nutshell.session_engine.session_params",
 }
 
 

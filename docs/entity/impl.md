@@ -4,11 +4,11 @@
 
 ```
 entity/<name>/
-├── agent.yaml          # Manifest: name, version, init_from, model, provider, tools, skills, prompts, params
+├── config.yaml         # Manifest: name, version, init_from, model, provider, tools, skills, prompts, params
 ├── prompts/
 │   ├── system.md       # System prompt
-│   ├── heartbeat.md    # Heartbeat instructions
-│   └── session.md      # Session context template
+│   ├── task.md        # Task instructions
+│   └── env.md          # Session context template
 ├── tools/              # Tool JSON schemas
 ├── skills/             # Skill directories (each with SKILL.md)
 ├── memory.md           # Seed memory
@@ -30,7 +30,7 @@ nutshell entity new -n myentity --blank            # Blank entity with empty fil
 2. Meta session → `init_session()` copies config → child session `sessions/<id>/`
 3. Child sessions get their config from **meta session**, not directly from entity
 
-## Key agent.yaml Fields
+## Key config.yaml Fields
 
 | Field | Purpose |
 |-------|---------|
@@ -41,13 +41,13 @@ nutshell entity new -n myentity --blank            # Blank entity with empty fil
 | `prompts` | Map of role → file path |
 | `tools` | List of tool JSON schema paths |
 | `skills` | List of skill directory paths |
-| `params` | Extra params merged into `core/params.json` |
+| `params` | Extra params merged into `core/config.yaml` |
 | `meta_session` | Description shown in `nutshell meta` output |
 
 ## Important Files
 
-- `agent.yaml`: the manifest — everything flows from here
-- `prompts/`: system, heartbeat, session prompt files
+- `config.yaml`: the manifest — everything flows from here
+- `prompts/`: system, task, env prompt files
 - `tools/`: default tool schemas
 - `skills/`: default skill catalog
 - `memory.md` and `memory/*.md`: seed memory copied into new sessions

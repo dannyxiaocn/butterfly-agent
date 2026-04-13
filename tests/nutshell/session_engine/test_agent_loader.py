@@ -26,15 +26,14 @@ class AgentLoaderUnitTests(unittest.TestCase):
         self.assertEqual(agent.system_prompt, "system prompt")
         self.assertEqual(agent.model, "claude-sonnet-4-6")
 
-    def test_load_falls_back_to_agent_yaml(self) -> None:
-        """AgentLoader loads from legacy agent.yaml when config.yaml is absent."""
+    def test_load_requires_config_yaml(self) -> None:
+        """AgentLoader raises FileNotFoundError when config.yaml is absent."""
         with TemporaryDirectory() as td:
             root = Path(td)
             entity_dir = root / "minimal"
             entity_dir.mkdir()
-            (entity_dir / "agent.yaml").write_text("name: minimal\n", encoding="utf-8")
-            agent = AgentLoader().load(entity_dir)
-        self.assertEqual(agent.model, "claude-sonnet-4-6")
+            with self.assertRaises(FileNotFoundError):
+                AgentLoader().load(entity_dir)
 
     def test_load_with_task_and_env_prompts(self) -> None:
         """AgentLoader reads new task + env prompt keys from config.yaml."""

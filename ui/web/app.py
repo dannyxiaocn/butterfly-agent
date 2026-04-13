@@ -107,9 +107,6 @@ def _normalize_task_name(value, field_name: str = "Task name") -> str:
 
 def _parse_task_status(value) -> str:
     status = str(value or "").strip() or "pending"
-    # Accept both canonical and legacy names
-    _NORMALIZE = {"running": "working", "completed": "finished"}
-    status = _NORMALIZE.get(status, status)
     if status not in {"pending", "working", "finished", "paused"}:
         raise HTTPException(400, "Task status must be one of pending, working, finished, paused")
     return status
@@ -191,7 +188,7 @@ def create_app(sessions_dir: Path, system_sessions_dir: Path | None = None) -> F
     async def interrupt_session_handler(session_id: str):
         """Send a soft interrupt to the session.
 
-        Drains any pending queued inputs and defers the next heartbeat tick.
+        Drains any pending queued inputs and defers the next task tick.
         In-progress turns run to completion.
         """
         try:
@@ -330,7 +327,6 @@ def create_app(sessions_dir: Path, system_sessions_dir: Path | None = None) -> F
         params = body.get("params")
         if not isinstance(params, dict):
             raise HTTPException(400, "Body must include a JSON object in 'params'")
-        params.pop("heartbeat_interval", None)  # legacy field, no longer used
         try:
             saved = service_update_config(session_id, sessions_dir, system_sessions_dir, params)
         except (FileNotFoundError, ValueError) as exc:

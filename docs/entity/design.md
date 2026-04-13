@@ -29,7 +29,7 @@ nutshell entity new -n my-agent --init-from agent  # copy all files from 'agent'
 nutshell entity new -n my-agent --blank            # empty placeholder files
 ```
 
-`--init-from` performs a one-time full copy (prompts, tools, skills, agent.yaml with updated name).
+`--init-from` performs a one-time full copy (prompts, tools, skills, config.yaml with updated name).
 There is no live link — the copy is independent from the moment it is created.
 
 ## Relationship to Meta Session
@@ -37,4 +37,4 @@ There is no live link — the copy is independent from the moment it is created.
 - Entity is used **once** when a meta session is first created (`populate_meta_from_entity`)
 - After that, the meta session is the source of truth for all child sessions
 - Meta session improvements are synced back to `entity/` via PRs on the `mecam/entity-update` branch
-- Entity version is tracked in `agent_version` inside `agent.yaml`; meta session version is in `core/params.json`
+- Entity version is tracked in `agent_version` inside `config.yaml`; meta session version is in `core/config.yaml`

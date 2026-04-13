@@ -47,9 +47,6 @@ def get_session(session_id: str, sessions_dir: Path, system_sessions_dir: Path) 
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except Exception:
         manifest = {}
-    if session_dir.exists():
-        from nutshell.session_engine.task_cards import migrate_legacy_task_sources
-        migrate_legacy_task_sources(session_dir)
     status_payload = read_session_status(system_dir)
     params = read_config(session_dir) if session_dir.exists() else {}
     from nutshell.session_engine.task_cards import has_pending_cards
@@ -108,8 +105,8 @@ def list_sessions(sessions_dir: Path, system_sessions_dir: Path, exclude_meta: b
     return sort_sessions(result)
 
 
-def create_session(session_id: str, entity: str, sessions_dir: Path, system_sessions_dir: Path, **_kwargs) -> dict:
-    """Create a new session. Accepts legacy heartbeat= kwarg for backward compat (ignored)."""
+def create_session(session_id: str, entity: str, sessions_dir: Path, system_sessions_dir: Path) -> dict:
+    """Create a new session."""
     _validate_session_id(session_id)
     from nutshell.session_engine.session_init import init_session
     entity_path = Path(entity)
@@ -153,7 +150,7 @@ def stop_session(session_id: str, system_sessions_dir: Path) -> bool:
         return False
     write_session_status(system_dir, status="stopped", pid=None, stopped_at=datetime.now().isoformat())
     from nutshell.runtime.ipc import FileIPC
-    FileIPC(system_dir).append_event({"type": "status", "value": "heartbeat paused — use ▶ Start to resume"})
+    FileIPC(system_dir).append_event({"type": "status", "value": "paused — use ▶ Start to resume"})
     return True
 
 
@@ -164,5 +161,5 @@ def start_session(session_id: str, system_sessions_dir: Path) -> bool:
         return False
     write_session_status(system_dir, status="active", stopped_at=None)
     from nutshell.runtime.ipc import FileIPC
-    FileIPC(system_dir).append_event({"type": "status", "value": "heartbeat resumed"})
+    FileIPC(system_dir).append_event({"type": "status", "value": "resumed"})
     return True

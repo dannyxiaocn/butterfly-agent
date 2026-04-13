@@ -86,8 +86,8 @@ export function createPanel(): HTMLElement {
   }
 
   function renderTaskCard(card: TaskCard): string {
-    const isHb = card.name === 'heartbeat';
-    const hbPill = isHb ? `<span class="hb-pill">heartbeat</span>` : '';
+    const isDuty = card.name === 'duty';
+    const dutyPill = isDuty ? `<span class="hb-pill">duty</span>` : '';
     const intervalStr = formatInterval(card.interval);
     const lastRun = formatRelative(card.last_finished_at);
     const statusClass = `task-status-${card.status}`;
@@ -99,7 +99,7 @@ export function createPanel(): HTMLElement {
       <div class="task-card" data-name="${escHtml(card.name)}">
         <div class="task-card-header">
           <span class="task-name">${escHtml(card.name)}</span>
-          ${hbPill}
+          ${dutyPill}
           <span class="task-status-badge ${statusClass}">${card.status}</span>
         </div>
         <div class="task-card-meta">
@@ -170,7 +170,7 @@ export function createPanel(): HTMLElement {
     const params = store.currentParams;
     if (!params) return '<div class="config-empty">No config loaded.</div>';
 
-    const excluded = new Set(['default_task', 'is_meta_session']);
+    const excluded = new Set(['is_meta_session']);
     const rows = Object.entries(params)
       .filter(([k]) => !excluded.has(k))
       .map(([k, v]) => {

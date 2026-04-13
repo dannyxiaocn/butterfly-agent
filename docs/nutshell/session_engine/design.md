@@ -4,7 +4,7 @@ The session engine is the **bridge between static entity definitions and live ru
 
 ## Responsibilities
 
-- Parse entity `agent.yaml` manifests
+- Parse entity `config.yaml` manifests
 - Build `Agent` objects from fully self-contained entity directories
 - Manage meta sessions (entity → meta → child session lifecycle)
 - Create session directory structures on disk
@@ -28,8 +28,8 @@ entity/<name>/          ← static template, version-controlled
 Each entity has a meta session (`<entity>_meta`) that:
 - Holds the canonical, evolving config for all future child sessions of that entity
 - Acts as shared mutable state store (memory, playground)
-- Runs as a real persistent agent with "dream cycle" heartbeat
-- Maintains `agent_version` in `core/params.json`; version history in `_sessions/<entity>_meta/version_history.json`
+- Runs as a real persistent agent with "dream cycle" task schedule
+- Maintains `agent_version` in `core/config.yaml`; version history in `_sessions/<entity>_meta/version_history.json`
 - Syncs improvements back to `entity/` via PRs on the `mecam/entity-update` branch
 
 ### Entity Templates
@@ -37,7 +37,7 @@ Each entity has a meta session (`<entity>_meta`) that:
 `entity/<name>/` is a **static seed**, not a live config:
 - Used once to bootstrap the meta session
 - Each entity is fully self-contained — all prompts, tools, skills are physically present
-- `init_from` in `agent.yaml` documents provenance but has no runtime effect
+- `init_from` in `config.yaml` documents provenance but has no runtime effect
 - New entities are created with `nutshell entity new --init-from <source>` (one-time copy) or `--blank`
 
 ### Version Staleness Notices

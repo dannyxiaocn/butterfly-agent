@@ -9,10 +9,9 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from nutshell.session_engine.session_params import read_session_params
 from nutshell.session_engine.task_cards import TaskCard, save_card
 from ui.web.app import create_app
-from ui.web.sessions import _is_stale_stopped
+from nutshell.service.sessions_service import _is_stale_stopped
 
 
 def _make_session(root: Path, session_id: str = "test-session") -> Path:
@@ -103,21 +102,6 @@ class WebUnitTests(unittest.TestCase):
             data = resp.json()
             self.assertIn("cards", data)
             self.assertIsInstance(data["cards"], list)
-
-    def test_get_tasks_migrates_legacy_tasks_md(self) -> None:
-        """GET /tasks must migrate tasks.md → tasks/ on first access."""
-        with TemporaryDirectory() as td:
-            root = _make_session(Path(td))
-            tasks_md = root / "sessions" / "test-session" / "core" / "tasks.md"
-            tasks_md.write_text("legacy task content", encoding="utf-8")
-            app = create_app(root / "sessions", root / "_sessions")
-            with TestClient(app) as client:
-                resp = client.get("/api/sessions/test-session/tasks")
-            self.assertEqual(resp.status_code, 200)
-            self.assertFalse(tasks_md.exists(), "tasks.md should be removed after migration")
-            cards = resp.json()["cards"]
-            self.assertEqual(len(cards), 1)
-            self.assertEqual(cards[0]["description"], "legacy task content")
 
     def test_get_tasks_returns_task_cards_with_new_schema(self) -> None:
         """GET /tasks returns task cards with new field names (description, last_finished_at)."""

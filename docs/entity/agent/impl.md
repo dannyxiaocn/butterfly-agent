@@ -7,7 +7,7 @@ nutshell new --entity agent
 nutshell chat --entity agent "build a small CLI"
 ```
 
-## Configuration (agent.yaml)
+## Configuration (config.yaml)
 
 - `model`: gpt-5.4
 - `provider`: codex-oauth
@@ -18,6 +18,6 @@ nutshell chat --entity agent "build a small CLI"
 
 ## What It Ships
 
-- **Prompts**: system.md (operating rules), heartbeat.md (autonomous wake-up), session.md (session layout)
+- **Prompts**: system.md (operating rules), task.md (autonomous wake-up), env.md (session layout)
 - **Tools**: bash.json, skill.json, web_search.json
 - **Skills**: creator-mode (self-extending at runtime)

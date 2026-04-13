@@ -84,20 +84,16 @@ def _init_meta_version(
     entity_root = entity_base or (_REPO_ROOT / 'entity')
     version = "1.0.0"
 
-    # Try config.yaml first, fall back to legacy agent.yaml
     config_yaml = entity_root / entity_name / 'config.yaml'
-    agent_yaml = entity_root / entity_name / 'agent.yaml'
-    for yaml_path in (config_yaml, agent_yaml):
-        if yaml_path.exists():
-            try:
-                import yaml
-                manifest = yaml.safe_load(yaml_path.read_text(encoding='utf-8')) or {}
-                v = manifest.get('version')
-                if v:
-                    version = str(v)
-                    break
-            except Exception:
-                pass
+    if config_yaml.exists():
+        try:
+            import yaml
+            manifest = yaml.safe_load(config_yaml.read_text(encoding='utf-8')) or {}
+            v = manifest.get('version')
+            if v:
+                version = str(v)
+        except Exception:
+            pass
 
     system_base = sys_base or _SYSTEM_SESSIONS_DIR
     system_dir = system_base / get_meta_session_id(entity_name)
@@ -204,15 +200,13 @@ def populate_meta_from_entity(
     meta_dir = ensure_meta_session(entity_name, s_base=s_base)
     core_dir = meta_dir / 'core'
 
-    # Copy prompts (new names with fallback to old names)
-    for new_src, old_src, dst_name in [
-        ('prompts/system.md', None, 'system.md'),
-        ('prompts/task.md', 'prompts/heartbeat.md', 'task.md'),
-        ('prompts/env.md', 'prompts/session.md', 'env.md'),
+    # Copy prompts
+    for src_name, dst_name in [
+        ('prompts/system.md', 'system.md'),
+        ('prompts/task.md', 'task.md'),
+        ('prompts/env.md', 'env.md'),
     ]:
-        src = entity_dir / new_src
-        if not src.exists() and old_src:
-            src = entity_dir / old_src
+        src = entity_dir / src_name
         if src.exists():
             (core_dir / dst_name).write_text(src.read_text(encoding='utf-8'), encoding='utf-8')
 
@@ -279,23 +273,21 @@ def sync_from_entity(entity_name: str, entity_base: Path | None = None, s_base: 
 
 
 def _load_gene_commands(entity_name: str, entity_base: Path | None = None) -> list[str]:
-    """Read the ``gene`` list from the entity's config.yaml (falls back to agent.yaml)."""
+    """Read the ``gene`` list from the entity's config.yaml."""
     entity_root = entity_base or (_REPO_ROOT / 'entity')
     entity_dir = entity_root / entity_name
 
-    # Try config.yaml first, fall back to legacy agent.yaml
-    for fname in ('config.yaml', 'agent.yaml'):
-        yaml_path = entity_dir / fname
-        if not yaml_path.exists():
-            continue
-        try:
-            import yaml
-            manifest = yaml.safe_load(yaml_path.read_text(encoding='utf-8')) or {}
-            gene = manifest.get('gene')
-            if gene and isinstance(gene, list):
-                return [str(cmd) for cmd in gene]
-        except Exception:
-            pass
+    yaml_path = entity_dir / 'config.yaml'
+    if not yaml_path.exists():
+        return []
+    try:
+        import yaml
+        manifest = yaml.safe_load(yaml_path.read_text(encoding='utf-8')) or {}
+        gene = manifest.get('gene')
+        if gene and isinstance(gene, list):
+            return [str(cmd) for cmd in gene]
+    except Exception:
+        pass
     return []
 
 
@@ -304,7 +296,7 @@ def run_gene_commands(
     entity_base: Path | None = None,
     s_base: Path | None = None,
 ) -> None:
-    """Execute the ``gene`` shell commands from agent.yaml in the meta playground."""
+    """Execute the ``gene`` shell commands from config.yaml in the meta playground."""
     commands = _load_gene_commands(entity_name, entity_base)
     if not commands:
         return
@@ -375,14 +367,14 @@ When you make meaningful improvements to core/:
 1. Use the CLI or bump the version in _sessions/{entity}_meta/status.json (e.g. "1.0.0" → "1.0.1")
 2. Append to _sessions/{entity}_meta/version_history.json:
    {{"version": "X.Y.Z", "ts": "<ISO timestamp>", "note": "what changed"}}
-3. Open a PR to sync changes back to entity/{entity}/ (see heartbeat for steps)
+3. Open a PR to sync changes back to entity/{entity}/
 
 ## Updating Entity Definition
 All entity updates go through the single branch `mecam/entity-update`.
 This keeps the entity/ directory as a stable, reviewable snapshot of your current state.
 
 You have access to bash to inspect sessions, read their content, and manage child sessions.
-Meta-session memory is system-managed; keep it current through your heartbeat cycle.
+Meta-session memory is system-managed; keep it current through your task cycles.
 
 # TODO: more efficient tools for learning what to update (e.g. session diff summaries, structured change detection)
 """
@@ -441,7 +433,7 @@ def start_meta_agent(
     """
     from nutshell.session_engine.session_status import ensure_session_status
     from nutshell.session_engine.session_config import ensure_config
-    from nutshell.session_engine.task_cards import ensure_card, migrate_legacy_task_sources
+    from nutshell.session_engine.task_cards import ensure_card
 
     sessions_base = s_base or _SESSIONS_DIR
     system_base = sys_base or _SYSTEM_SESSIONS_DIR
@@ -494,8 +486,6 @@ def start_meta_agent(
         interval=21600.0,
         description="Dream: review and process all child sessions for this entity",
     )
-    migrate_legacy_task_sources(meta_dir)
-
     return system_dir
 
 

@@ -1,6 +1,6 @@
 import pytest
 
-from nutshell.session_engine.session_params import DEFAULT_PARAMS
+from nutshell.session_engine.session_config import DEFAULT_CONFIG
 from nutshell.llm_engine.providers.anthropic import AnthropicProvider
 
 
@@ -137,8 +137,8 @@ async def test_anthropic_thinking_disabled_omits_beta_and_thinking_block():
 
 
 def test_default_params_include_thinking_fields():
-    assert DEFAULT_PARAMS["thinking"] is False
-    assert DEFAULT_PARAMS["thinking_budget"] == 8000
+    assert DEFAULT_CONFIG["thinking"] is False
+    assert DEFAULT_CONFIG["thinking_budget"] == 8000
 
 
 # ── Kimi thinking ─────────────────────────────────────────────────────────────

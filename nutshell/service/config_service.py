@@ -18,19 +18,13 @@ def get_config(session_id: str, sessions_dir: Path, system_sessions_dir: Path) -
 
 def update_config(session_id: str, sessions_dir: Path, system_sessions_dir: Path, params: dict) -> dict:
     _validate_session_id(session_id)
-    from nutshell.session_engine.task_cards import ensure_card, load_card, migrate_legacy_task_sources, save_card
+    from nutshell.session_engine.task_cards import ensure_card, load_card, save_card
     session_dir = sessions_dir / session_id
     system_dir = system_sessions_dir / session_id
     if not system_dir.exists() or not session_dir.exists():
         raise FileNotFoundError(session_id)
     params = dict(params)
     params.pop('is_meta_session', None)
-    migrate_legacy_task_sources(session_dir)
-
-    # Strip legacy keys that no longer belong in config
-    params.pop('default_task', None)
-    params.pop('heartbeat_interval', None)
-    params.pop('session_type', None)
 
     # Sync duty config field with task card
     duty = params.get('duty')

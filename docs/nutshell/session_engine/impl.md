@@ -4,11 +4,11 @@
 
 | File | Purpose |
 |------|---------|
-| `entity_config.py` | `AgentConfig` dataclass — reads `agent.yaml`, provides typed view of manifest |
+| `entity_config.py` | `AgentConfig` dataclass — reads `config.yaml`, provides typed view of manifest |
 | `agent_loader.py` | `AgentLoader` — builds `Agent` from a fully self-contained entity dir |
 | `entity_state.py` | Meta session lifecycle, version management, gene commands, entity→meta bootstrap |
 | `session_init.py` | `init_session()` — creates full session directory structure from meta session |
-| `session_params.py` | Reads/writes `core/params.json` with defaults |
+| `session_config.py` | Reads/writes `core/config.yaml` with defaults |
 | `session_status.py` | Reads/writes `_sessions/<id>/status.json` |
 | `task_cards.py` | Per-task `.json` files in `core/tasks/` with scheduling and status management |
 | `session.py` | `Session` class — wraps Agent with persistent file-backed behavior |
@@ -28,7 +28,7 @@ chat(message):
   3. append turn to context.jsonl
 
 tick(card):
-  1. Build prompt from card + heartbeat.md
+  1. Build prompt from card + task.md
   2. agent.run(...)
   3. Mark card done (recurring → pending with updated last_finished_at)
   4. On error: mark_pending() (not paused) so task retries next cycle
@@ -40,14 +40,14 @@ tick(card):
 2. Write `manifest.json`, create `.venv`
 3. Ensure meta session → `populate_meta_from_entity()` if first time
 4. Copy prompts/tools/skills **from meta** (not directly from entity)
-5. Write `params.json` from entity's `agent.yaml`; record meta version as `agent_version`
+5. Write `config.yaml` from entity's `config.yaml`; record meta version as `agent_version`
 6. Seed memory from meta → entity fallback
 7. Seed playground, task cards
 
 ## AgentLoader.load()
 
 Each entity is fully self-contained — no inheritance chain:
-1. Read `agent.yaml` → `AgentConfig`
+1. Read `config.yaml` → `AgentConfig`
 2. Load prompts from paths listed under `prompts:` key
 3. Load tools from paths listed under `tools:` key
 4. Load skills from paths listed under `skills:` key
@@ -55,9 +55,9 @@ Each entity is fully self-contained — no inheritance chain:
 
 ## Version Management
 
-- Meta session version: `agent_version` in `sessions/<entity>_meta/core/params.json`
+- Meta session version: `agent_version` in `sessions/<entity>_meta/core/config.yaml`
 - Version history: `_sessions/<entity>_meta/version_history.json`
-- Child session records meta version at creation time in its own `core/params.json`
+- Child session records meta version at creation time in its own `core/config.yaml`
 - `Session._emit_version_notice_if_stale()` emits a `system_notice` event if meta has advanced
 - `bump_meta_version()` increments patch version and appends to history
 
@@ -66,8 +66,8 @@ Each entity is fully self-contained — no inheritance chain:
 | Type | Behavior |
 |------|----------|
 | `ephemeral` | Auto-stops after processing inputs with no pending cards |
-| `default` | Standard session, no autonomous heartbeat |
-| `persistent` | Has recurring heartbeat task card at `heartbeat_interval` |
+| `default` | Standard session, no autonomous tasks |
+| `persistent` | Has recurring task card (e.g. duty) with configured interval |
 
 ## Task Card System
 
@@ -106,16 +106,8 @@ Each task card is a `.json` file in `core/tasks/`:
 - A task with `status=pending` fires when: `now >= start_at AND now < end_at AND (never finished OR interval elapsed)`.
 - Past `end_at` → auto-marked `finished` and persisted to disk by `load_due_cards()`.
 
-### Legacy compatibility
-
-- Legacy `.md` cards with YAML frontmatter are still loaded (JSON takes precedence if both exist)
-- Legacy status values normalized on load: `running` → `working`, `completed` → `finished`
-- `paused` is preserved as-is (valid user-initiated state)
-- `migrate_legacy_task_sources()` converts old `tasks.md` to one-shot card
-
 ## Important Behaviors
 
 - Every session gets its own `.venv` under `sessions/<id>/.venv`
 - `reload_capabilities` tool is always injected at runtime
-- Legacy `tasks.md` files are migrated into task cards; `default_task` param is dropped on config write
 - `system_notice` events are passed through IPC and rendered in both web UI and SSE stream

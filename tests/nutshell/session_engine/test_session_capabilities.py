@@ -7,6 +7,7 @@
 """
 import json
 import pytest
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from nutshell.core.provider import Provider
@@ -490,7 +491,8 @@ async def test_task_replaces_prompt_with_compact_marker(tmp_path):
     session = make_session(tmp_path, agent)
 
     # Write the recurring task card so a real task activation fires.
-    save_card(session.tasks_dir, TaskCard(name="duty", description="- [ ] Do something", interval=600))
+    past = (datetime.now() - timedelta(hours=2)).isoformat()
+    save_card(session.tasks_dir, TaskCard(name="duty", description="- [ ] Do something", interval=600, start_at=past))
     (session.core_dir / "task.md").write_text(
         "Task wakeup.\n\nCurrent tasks:\n{task}", encoding="utf-8"
     )

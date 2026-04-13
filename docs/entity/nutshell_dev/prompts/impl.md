@@ -2,6 +2,6 @@
 
 ## File
 
-- `heartbeat.md`: autonomous repo-work task card selection from `track.md`
+- `task.md`: autonomous repo-work task card execution
 
 This prompt is what makes `nutshell_dev` autonomous for this repository.

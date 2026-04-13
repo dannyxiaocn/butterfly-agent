@@ -31,10 +31,10 @@ class CliHelpersTest(unittest.TestCase):
             entity_root = Path(tmp) / "entity"
             (entity_root / "agent" / "prompts").mkdir(parents=True)
             (entity_root / "agent" / "tools").mkdir()
-            (entity_root / "agent" / "agent.yaml").write_text("name: agent\n", encoding="utf-8")
+            (entity_root / "agent" / "config.yaml").write_text("name: agent\n", encoding="utf-8")
             (entity_root / "agent" / "prompts" / "system.md").write_text("sys", encoding="utf-8")
-            (entity_root / "agent" / "prompts" / "heartbeat.md").write_text("beat", encoding="utf-8")
-            (entity_root / "agent" / "prompts" / "session.md").write_text("sess", encoding="utf-8")
+            (entity_root / "agent" / "prompts" / "task.md").write_text("beat", encoding="utf-8")
+            (entity_root / "agent" / "prompts" / "env.md").write_text("sess", encoding="utf-8")
             (entity_root / "agent" / "tools" / "bash.json").write_text('{"name":"bash"}', encoding="utf-8")
             (entity_root / "agent" / "tools" / "web_search.json").write_text('{"name":"web_search"}', encoding="utf-8")
             blank = create_entity("blank", entity_root, None)

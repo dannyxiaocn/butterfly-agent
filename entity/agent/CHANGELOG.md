@@ -12,7 +12,7 @@ Improved all prompts based on context engineering and agent prompting best pract
 - Added parallel tool calling guidance
 - Tightened prose throughout: ~30% fewer tokens with same or better clarity
 
-### heartbeat.md
+### task.md (renamed from heartbeat.md)
 - Wrapped task injection in `<current_tasks>` XML tags for clearer context boundaries
 - Added priority directive: "Focus on the highest-priority incomplete item"
 - Wrapped post-activation instructions in `<after_this_activation>` tags

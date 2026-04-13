@@ -14,10 +14,10 @@ def _write_entity(entity_root: Path, name: str) -> Path:
     (entity_dir / "playground").mkdir(exist_ok=True)
     (entity_dir / "memory").mkdir(exist_ok=True)
     (entity_dir / "prompts" / "system.md").write_text("system", encoding="utf-8")
-    (entity_dir / "prompts" / "heartbeat.md").write_text("heartbeat", encoding="utf-8")
-    (entity_dir / "prompts" / "session.md").write_text("session", encoding="utf-8")
-    (entity_dir / "agent.yaml").write_text(
-        "name: {}\nprompts:\n  system: prompts/system.md\n  heartbeat: prompts/heartbeat.md\n  session_context: prompts/session.md\n".format(name),
+    (entity_dir / "prompts" / "task.md").write_text("task", encoding="utf-8")
+    (entity_dir / "prompts" / "env.md").write_text("env", encoding="utf-8")
+    (entity_dir / "config.yaml").write_text(
+        "name: {}\nprompts:\n  system: prompts/system.md\n  task: prompts/task.md\n  env: prompts/env.md\n".format(name),
         encoding="utf-8",
     )
     return entity_dir

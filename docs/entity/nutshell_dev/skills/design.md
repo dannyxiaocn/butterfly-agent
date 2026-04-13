@@ -1,6 +1,6 @@
 # nutshell_dev Skills — Design
 
-Project-specific skills complementing the entity's heartbeat and memory. This is the reusable project knowledge layer.
+Project-specific skills complementing the entity's task execution and memory. This is the reusable project knowledge layer.
 
 ## Active
 

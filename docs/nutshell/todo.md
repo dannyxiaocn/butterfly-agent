@@ -29,7 +29,7 @@ See `docs/nutshell/service/todo.md` for full detail.
 
 ## Backlog
 
-- [ ] CLI-started sessions: auto background server for heartbeat, auto-stop when no pending
+- [ ] CLI-started sessions: auto background server for task execution, auto-stop when no pending
 - [ ] Agent room mode: enter agent room instead of online chat
 - [ ] Agent-agent communication protocol
 - [ ] Sub-agent spawning (call sub-agent / spawn_session)
@@ -48,7 +48,7 @@ See `docs/nutshell/service/todo.md` for full detail.
 
 - [x] **QJBQ 移到 `cli_app/`** (commit: c917184)
 - [x] **删除系统自带通信方式，统一用 QJBQ** (commit: 9c015a9)
-- [x] **Cambridge Agent Protocol (CAP) 模块设计** (commit: b36eb75)：`nutshell/runtime/cap.py`，handshake、lock、broadcast、heartbeat-sync 四类原语
+- [x] **Cambridge Agent Protocol (CAP) 模块设计** (commit: b36eb75)：`nutshell/runtime/cap.py` — 已在清理中删除
 
 ### Module 3 · Meta-session 完善
 
@@ -139,7 +139,7 @@ See `docs/nutshell/service/todo.md` for full detail.
 - [x] token 追踪 (8c4b494 v1.2.7)
 - [x] nutshell token-report (2888655 v1.3.17)
 - [x] memory cache 优化 (ee7d6eb v1.2.0)
-- [x] heartbeat prompt 精简 (0bb3337 v1.2.5)
+- [x] task prompt 精简 (0bb3337 v1.2.5)
 - [x] state_diff tool (f075de1 v1.3.13)
 - [x] Prompt 优化 (693b3a8 v1.3.15)
 

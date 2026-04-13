@@ -36,20 +36,16 @@ def make_session(tmp_path, agent, session_id="demo", **kwargs):
     session = Session(agent=agent, session_id=session_id, base_dir=tmp_path, system_base=system_base, **kwargs)
     # Pre-populate core/ prompt files
     (session.core_dir / "system.md").write_text(agent.system_prompt or "", encoding="utf-8")
-    (session.core_dir / "heartbeat.md").write_text(
-        getattr(agent, "heartbeat_prompt", "") or "", encoding="utf-8"
-    )
-    (session.core_dir / "session.md").write_text(
-        getattr(agent, "session_context_template", "") or "", encoding="utf-8"
-    )
+    (session.core_dir / "task.md").write_text("", encoding="utf-8")
+    (session.core_dir / "env.md").write_text("", encoding="utf-8")
     return session
 
 
 def test_context_event_to_display_expands_turn():
-    """turn events are expanded into heartbeat_trigger + tool + agent display events."""
+    """turn events are expanded into tool + agent display events."""
     turn = {
         "type": "turn",
-        "triggered_by": "heartbeat",
+        "triggered_by": "task:default",
         "ts": "2026-03-11T12:00:00",
         "messages": [
             {
@@ -62,23 +58,21 @@ def test_context_event_to_display_expands_turn():
         ],
     }
 
-    # for_history=True: always emit heartbeat_trigger and tools
+    # for_history=True: always emit tools and agent text
     events = _context_event_to_display(turn, for_history=True)
     assert events == [
-        {"type": "heartbeat_trigger", "ts": "2026-03-11T12:00:00"},
         {"type": "tool", "name": "bash", "input": {"cmd": "ls"}, "ts": "2026-03-11T12:00:00"},
         {
             "type": "agent",
             "content": "# Title\n\nbody",
             "ts": "2026-03-11T12:00:00",
-            "triggered_by": "heartbeat",
         },
     ]
 
-    # for_history=False with pre_triggered=True: suppress heartbeat_trigger (already in events.jsonl)
+    # for_history=False with pre_triggered=True: tools still emitted
     pre_triggered_turn = dict(turn, pre_triggered=True)
     sse_events = _context_event_to_display(pre_triggered_turn, for_history=False)
-    assert sse_events[0]["type"] == "tool"  # no heartbeat_trigger at front
+    assert sse_events[0]["type"] == "tool"
 
     # for_history=False with has_streaming_tools=True: suppress tools (already in events.jsonl)
     streamed_turn = dict(turn, has_streaming_tools=True)

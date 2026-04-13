@@ -47,7 +47,7 @@ def config_path(base_dir: Path) -> Path:
 
 
 def read_config(base_dir: Path) -> dict:
-    """Read config.yaml, falling back to legacy params.json for old sessions."""
+    """Read config.yaml."""
     try:
         import yaml
     except ImportError as exc:
@@ -60,19 +60,6 @@ def read_config(base_dir: Path) -> dict:
         except Exception:
             raw = {}
         return {**DEFAULT_CONFIG, **raw}
-
-    # Fallback: read legacy params.json for backward compatibility
-    legacy_path = base_dir / "core" / "params.json"
-    if not legacy_path.exists():
-        legacy_path = base_dir / "params.json"  # direct entity layout
-    if legacy_path.exists():
-        import json
-        try:
-            raw = json.loads(legacy_path.read_text(encoding="utf-8"))
-            if isinstance(raw, dict):
-                return {**DEFAULT_CONFIG, **raw}
-        except Exception:
-            pass
 
     return dict(DEFAULT_CONFIG)
 

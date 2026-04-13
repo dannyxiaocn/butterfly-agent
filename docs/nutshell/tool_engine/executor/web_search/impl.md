@@ -9,7 +9,7 @@
 
 ## Backend Selection
 
-Set in `sessions/<id>/core/params.json`:
+Set in `sessions/<id>/core/config.yaml`:
 ```json
 {"tool_providers": {"web_search": "tavily"}}
 ```

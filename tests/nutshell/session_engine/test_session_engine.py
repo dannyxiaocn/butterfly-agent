@@ -14,7 +14,6 @@ from nutshell.runtime.ipc import FileIPC
 from nutshell.session_engine.entity_config import AgentConfig
 from nutshell.session_engine.session_init import init_session
 from nutshell.session_engine.session_config import read_config, write_config
-from nutshell.session_engine.session_params import read_session_params
 from nutshell.session_engine.session import Session
 from nutshell.session_engine.session_status import ensure_session_status, read_session_status, write_session_status
 
@@ -32,27 +31,13 @@ class SessionEngineTest(unittest.TestCase):
         self.assertEqual(config.manifest["name"], "demo")
         self.assertEqual(config.manifest["model"], "claude-sonnet-4-6")
 
-    def test_agent_config_fallback_to_agent_yaml(self) -> None:
-        """AgentConfig falls back to agent.yaml when config.yaml is absent."""
+    def test_agent_config_requires_config_yaml(self) -> None:
+        """AgentConfig raises FileNotFoundError when config.yaml is absent."""
         with TemporaryDirectory() as tmp:
             entity_dir = Path(tmp) / "demo"
             entity_dir.mkdir()
-            (entity_dir / "agent.yaml").write_text(
-                "name: demo\nmodel: claude-sonnet-4-6\n",
-                encoding="utf-8",
-            )
-            config = AgentConfig.from_path(entity_dir)
-        self.assertEqual(config.manifest["name"], "demo")
-
-    def test_session_params_fall_back_on_corrupt_json(self) -> None:
-        with TemporaryDirectory() as tmp:
-            session_dir = Path(tmp) / "session"
-            (session_dir / "core").mkdir(parents=True)
-            (session_dir / "core" / "params.json").write_text("{not json", encoding="utf-8")
-            params = read_session_params(session_dir)
-        # Should get defaults — key fields exist
-        self.assertIn("model", params)
-        self.assertIn("provider", params)
+            with self.assertRaises(FileNotFoundError):
+                AgentConfig.from_path(entity_dir)
 
     def test_session_config_read_write_roundtrip(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -63,16 +48,13 @@ class SessionEngineTest(unittest.TestCase):
         self.assertEqual(cfg["model"], "gpt-4")
         self.assertTrue(cfg["thinking"])
 
-    def test_session_config_fallback_to_legacy_params(self) -> None:
-        """read_config falls back to params.json when config.yaml is absent."""
+    def test_session_config_returns_defaults_when_absent(self) -> None:
+        """read_config returns defaults when config.yaml is absent."""
         with TemporaryDirectory() as tmp:
             session_dir = Path(tmp) / "session"
             (session_dir / "core").mkdir(parents=True)
-            (session_dir / "core" / "params.json").write_text(
-                json.dumps({"model": "gpt-3.5"}), encoding="utf-8"
-            )
             cfg = read_config(session_dir)
-        self.assertEqual(cfg["model"], "gpt-3.5")
+        self.assertIsNone(cfg["model"])
 
     def test_session_status_round_trips_updates(self) -> None:
         with TemporaryDirectory() as tmp:

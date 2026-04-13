@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, patch
 from fastapi.testclient import TestClient
 
 from ui.web.app import _sse_format, create_app
-from ui.web.sessions import _init_session, _sort_sessions
+from nutshell.service.sessions_service import create_session, sort_sessions
 from ui.web.weixin import WeixinBridge
 
 
@@ -35,7 +35,7 @@ class WebHelpersTest(unittest.TestCase):
             {"id": "idle", "pid_alive": False, "status": "active", "model_state": "idle", "created_at": "2026-01-01T00:00:00"},
             {"id": "run", "pid_alive": True, "status": "active", "model_state": "running", "created_at": "2026-01-01T00:00:01"},
         ]
-        ordered = _sort_sessions(sessions)
+        ordered = sort_sessions(sessions)
         self.assertEqual(ordered[0]["id"], "run")
 
     def test_sort_sessions_prioritizes_idle_before_stopped(self) -> None:
@@ -43,16 +43,16 @@ class WebHelpersTest(unittest.TestCase):
             {"id": "stopped", "pid_alive": False, "status": "stopped", "model_state": "idle", "created_at": "2026-01-01T00:00:01"},
             {"id": "idle", "pid_alive": False, "status": "active", "model_state": "idle", "created_at": "2026-01-01T00:00:00"},
         ]
-        ordered = _sort_sessions(sessions)
+        ordered = sort_sessions(sessions)
         self.assertEqual(ordered[0]["id"], "idle")
 
-    def test_init_session_resolves_entity_name_from_relative_path(self) -> None:
+    def test_create_session_resolves_entity_name_from_relative_path(self) -> None:
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             sessions_dir = root / "sessions"
             system_dir = root / "_sessions"
             with patch("nutshell.session_engine.session_init.init_session") as init_mock:
-                _init_session(sessions_dir, system_dir, "demo", "entity/agent", None)
+                create_session("demo", "entity/agent", sessions_dir=sessions_dir, system_sessions_dir=system_dir)
         kwargs = init_mock.call_args.kwargs
         self.assertEqual(kwargs["entity_name"], "agent")
 
@@ -91,7 +91,7 @@ class WebHelpersTest(unittest.TestCase):
             fake_client = object()
 
             async def _run() -> None:
-                with patch("ui.web.sessions._init_session") as init_mock, patch.object(
+                with patch("nutshell.service.sessions_service.create_session") as init_mock, patch.object(
                     bridge,
                     "_send_text",
                     new=AsyncMock(),

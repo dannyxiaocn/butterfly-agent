@@ -252,11 +252,11 @@ def _new_session(
         if reply is None:
             print(f"Error: no response within {timeout:.0f}s", file=sys.stderr)
             print(f"\nSession: {session_id}")
-            print("[heartbeat active — server running in background]")
+            print("[active — server running in background]")
             return 1
         print(reply)
         print(f"\nSession: {session_id}")
-        print("[heartbeat active — server running in background]")
+        print("[active — server running in background]")
         return 0
     else:
         _stop_daemon(stop_event_holder, daemon_thread)

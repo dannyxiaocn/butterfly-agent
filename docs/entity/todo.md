@@ -2,7 +2,7 @@
 
 ## Active
 
-- [ ] Entity validation: check agent.yaml schema on load (missing required fields, unknown keys)
+- [ ] Entity validation: check config.yaml schema on load (missing required fields, unknown keys)
 
 ## Completed
 

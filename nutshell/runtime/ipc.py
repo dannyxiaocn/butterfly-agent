@@ -8,13 +8,13 @@ Two files per session:
                    Claude on every new run. Nothing else lives here.
 
   events.jsonl   — ALL runtime / UI signalling events:
-                   model_status, partial_text, tool_call, heartbeat_trigger,
-                   heartbeat_finished, status, error.
+                   model_status, partial_text, tool_call, task_wakeup,
+                   task_finished, status, error.
                    Consumed by the SSE stream; never used by load_history().
 
 context.jsonl event types:
   user_input   — UI → daemon: {"type": "user_input", "content": "...", "id": "...", "ts": "..."}
-  turn         — daemon → UI: {"type": "turn", "triggered_by": "user|heartbeat",
+  turn         — daemon → UI: {"type": "turn", "triggered_by": "user|task:<name>",
                                "messages": [...], "ts": "..."}
 
 events.jsonl event types:
@@ -24,8 +24,8 @@ events.jsonl event types:
   tool_done          — {"type": "tool_done", "name": "...", "result_len": 123, "ts": "..."}
   loop_start         — {"type": "loop_start", "ts": "..."}
   loop_end           — {"type": "loop_end", "iterations": 2, "usage": {...}, "ts": "..."}
-  heartbeat_trigger  — {"type": "heartbeat_trigger", "ts": "..."}
-  heartbeat_finished — {"type": "heartbeat_finished", "ts": "..."}
+  task_wakeup        — {"type": "task_wakeup", "card": "...", "ts": "..."}
+  task_finished       — {"type": "task_finished", "card": "...", "ts": "..."}
   status             — {"type": "status", "value": "...", "ts": "..."}
   error              — {"type": "error", "content": "...", "ts": "..."}
   system_notice      — {"type": "system_notice", "message": "...", "meta_version": "...", "session_version": "...", "ts": "..."}
@@ -34,9 +34,8 @@ Display events derived for the UI:
   user             — from user_input (context)
   agent            — from turn last assistant message (context)
   tool             — from turn tool_use blocks (context) OR streaming tool_call (events)
-  heartbeat_trigger — from heartbeat_trigger (events) OR old-format turn (context, backward compat)
   model_status, partial_text, tool_done, loop_start, loop_end,
-  heartbeat_finished, status, error — pass-through (events)
+  task_wakeup, task_finished, status, error — pass-through (events)
 """
 from __future__ import annotations
 import json
@@ -52,8 +51,8 @@ def _context_event_to_display(event: dict, *, for_history: bool = False) -> list
     """Convert a context.jsonl event (user_input or turn) to display events.
 
     Args:
-        for_history: When True (history endpoint), always emit tools and
-                     heartbeat_trigger from turn content — the streaming events
+        for_history: When True (history endpoint), always emit tools
+                     from turn content — the streaming events
                      in events.jsonl are not available for history replay.
                      When False (SSE live tail), respect has_streaming_tools /
                      pre_triggered flags to avoid duplicating live-streamed items.
@@ -70,11 +69,6 @@ def _context_event_to_display(event: dict, *, for_history: bool = False) -> list
     if etype == "turn":
         result: list[dict] = []
         triggered_by = event.get("triggered_by", "user")
-
-        # Heartbeat trigger marker: always emit for history; for SSE only when
-        # the trigger was NOT pre-emitted to events.jsonl (old-format turns).
-        if triggered_by == "heartbeat" and (for_history or not event.get("pre_triggered")):
-            result.append({"type": "heartbeat_trigger", "ts": ts})
 
         # Tool calls: always emit for history; for SSE only when NOT already
         # streamed live via tool_call events (has_streaming_tools flag).
@@ -126,8 +120,6 @@ def _context_event_to_display(event: dict, *, for_history: bool = False) -> list
                         # does not dedup the agent event after seeing the user event with
                         # the same user_input_id.
                         ev["id"] = f"turn:{ts}"
-                    if triggered_by == "heartbeat":
-                        ev["triggered_by"] = "heartbeat"
                     if event.get("usage"):
                         ev["usage"] = event["usage"]
                     result.append(ev)
@@ -158,8 +150,8 @@ def _runtime_event_to_display(event: dict) -> list[dict]:
         "tool_done",
         "loop_start",
         "loop_end",
-        "heartbeat_trigger",
-        "heartbeat_finished",
+        "task_wakeup",
+        "task_finished",
         "status",
         "error",
         "system_notice",
@@ -209,7 +201,7 @@ class FileIPC:
 
         The session's run_daemon_loop polls for this via poll_interrupt() and
         responds with a soft interrupt: drains pending inputs and skips the
-        next heartbeat tick.
+        next task tick.
         """
         self.append_event({"type": "interrupt"})
 
@@ -219,7 +211,7 @@ class FileIPC:
         """Read events.jsonl for an 'interrupt' event at or after offset.
 
         Returns (found, new_offset). The daemon calls this each cycle; when
-        found=True it should drain pending inputs, skip the next heartbeat,
+        found=True it should drain pending inputs, skip the next task tick,
         and emit {"type": "interrupted"} back to events.jsonl.
         """
         if not self.events_path.exists():
@@ -291,7 +283,7 @@ class FileIPC:
     def tail_history(self, offset: int = 0) -> Iterator[tuple[dict, int]]:
         """Yield display events from context.jsonl for the history endpoint.
 
-        Always emits tools and heartbeat markers from turn content (for_history=True),
+        Always emits tools from turn content (for_history=True),
         since events.jsonl is not consulted for history replay.
         """
         yield from self._readline_loop(

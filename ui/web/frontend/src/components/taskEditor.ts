@@ -1,12 +1,9 @@
 import { api } from '../api';
-import { store } from '../store';
 import type { TaskCard } from '../types';
 import { escapeHtml } from '../markdown';
 
 export function renderTaskEditor(card: TaskCard | null, sessionId: string, onDone: () => void): HTMLElement {
   const isNew = card === null;
-  const isHeartbeat = card?.name === 'heartbeat';
-  const sessionHeartbeatInterval = store.currentSession?.heartbeat_interval ?? 7200;
 
   const el = document.createElement('div');
   el.className = 'task-editor';
@@ -24,7 +21,7 @@ export function renderTaskEditor(card: TaskCard | null, sessionId: string, onDon
     </div>
     <div class="form-field">
       <label>Task name</label>
-      <input id="te-name" type="text" value="${escapeHtml(card?.name ?? '')}" ${isHeartbeat ? 'disabled' : ''} placeholder="task-name" />
+      <input id="te-name" type="text" value="${escapeHtml(card?.name ?? '')}" placeholder="task-name" />
     </div>
     <div class="form-field">
       <label>Status</label>
@@ -50,7 +47,7 @@ export function renderTaskEditor(card: TaskCard | null, sessionId: string, onDon
     </div>
     <div class="form-row task-editor-actions">
       <button class="btn-primary" id="te-save">Save</button>
-      ${!isNew && !isHeartbeat ? `<button class="btn-danger" id="te-delete">Delete</button>` : ''}
+      ${!isNew ? `<button class="btn-danger" id="te-delete">Delete</button>` : ''}
       <button class="btn-sm" id="te-cancel">Cancel</button>
     </div>
     <div id="te-error" class="form-error hidden"></div>
@@ -71,7 +68,7 @@ export function renderTaskEditor(card: TaskCard | null, sessionId: string, onDon
     const endsEl = el.querySelector('#te-ends') as HTMLInputElement;
     const contentEl = el.querySelector('#te-content') as HTMLTextAreaElement;
 
-    const name = isHeartbeat ? 'heartbeat' : nameEl.value.trim();
+    const name = nameEl.value.trim();
     if (!name) { showError('Task name is required'); return; }
 
     const intervalRaw = intervalEl.value.trim();
@@ -80,10 +77,6 @@ export function renderTaskEditor(card: TaskCard | null, sessionId: string, onDon
       interval = parseFloat(intervalRaw);
       if (isNaN(interval) || interval < 1) { showError('Interval must be at least 1 second'); return; }
     }
-    if (name === 'heartbeat' && interval === null) {
-      interval = sessionHeartbeatInterval;
-    }
-
     const startAt = startsEl.value ? fromDatetimeLocal(startsEl.value) : null;
     const endAt = endsEl.value ? fromDatetimeLocal(endsEl.value) : null;
 

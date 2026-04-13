@@ -79,7 +79,7 @@ def test_prompt_stats_with_files(tmp_path, capsys):
     sessions_base, system_base = _make_session(tmp_path)
     core = sessions_base / "test-session" / "core"
     (core / "system.md").write_text("You are an agent.\n" * 5)
-    (core / "session.md").write_text("Session table.\n")
+    (core / "env.md").write_text("Env table.\n")
     (core / "memory.md").write_text("Remember this.\n")
 
     args = _FakeArgs("test-session", sessions_base, system_base)
@@ -140,10 +140,10 @@ def test_prompt_stats_skills(tmp_path, capsys):
     assert "1 skills" in out
 
 
-def test_prompt_stats_heartbeat_section(tmp_path, capsys):
+def test_prompt_stats_task_section(tmp_path, capsys):
     sessions_base, system_base = _make_session(tmp_path)
     core = sessions_base / "test-session" / "core"
-    (core / "heartbeat.md").write_text("Heartbeat prompt.\n")
+    (core / "task.md").write_text("Task prompt.\n")
 
     args = _FakeArgs("test-session", sessions_base, system_base)
     rc = cmd_prompt_stats(args)

@@ -19,13 +19,6 @@ class ShellExecutor(BaseExecutor):
         self._sh_path = sh_path
         self._cwd = cwd
 
-    @classmethod
-    def can_handle(cls, tool_name: str, tool_path: Path | None) -> bool:
-        if tool_path is None:
-            return False
-        sh = tool_path.with_suffix(".sh")
-        return sh.exists()
-
     async def execute(self, **kwargs: Any) -> str:
         input_json = json.dumps(kwargs).encode()
         proc: asyncio.subprocess.Process | None = None

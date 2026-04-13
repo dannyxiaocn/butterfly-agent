@@ -99,17 +99,3 @@ async def _brave_search(
         query, count, country, language, freshness, date_after, date_before,
     )
 
-
-_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "query": {"type": "string", "description": "Search query string."},
-        "count": {"type": "integer", "description": "Number of results (1-10). Default: 5.", "minimum": 1, "maximum": 10},
-        "country": {"type": "string", "description": "2-letter country code (e.g. 'US', 'CN', 'DE')."},
-        "language": {"type": "string", "description": "ISO 639-1 language code (e.g. 'en', 'zh-hans')."},
-        "freshness": {"type": "string", "description": "Time filter: 'day', 'week', 'month', or 'year'."},
-        "date_after": {"type": "string", "description": "Results published after this date (YYYY-MM-DD)."},
-        "date_before": {"type": "string", "description": "Results published before this date (YYYY-MM-DD)."},
-    },
-    "required": ["query"],
-}

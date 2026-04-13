@@ -17,7 +17,7 @@ The project root is at the path you were given. Run all commands from there.
 
 **What you must not do:**
 - Change public API signatures (method names, parameter names, return types)
-- Change file formats or schemas (params.json, status.json, context.jsonl, events.jsonl)
+- Change file formats or schemas (config.yaml, status.json, context.jsonl, events.jsonl)
 - Remove tests
 - Add new features or behaviour
 - Rename files or directories
