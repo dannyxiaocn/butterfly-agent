@@ -107,6 +107,9 @@ def _normalize_task_name(value, field_name: str = "Task name") -> str:
 
 def _parse_task_status(value) -> str:
     status = str(value or "").strip() or "pending"
+    # Accept both canonical and legacy names
+    _NORMALIZE = {"running": "working", "completed": "finished"}
+    status = _NORMALIZE.get(status, status)
     if status not in {"pending", "working", "finished", "paused"}:
         raise HTTPException(400, "Task status must be one of pending, working, finished, paused")
     return status
@@ -282,11 +285,11 @@ def create_app(sessions_dir: Path, system_sessions_dir: Path | None = None) -> F
             # Normalize frontend field names → backend canonical names
             if "starts_at" in payload:
                 payload["start_at"] = _parse_task_timestamp(payload.pop("starts_at"), "start_at")
-            if "start_at" in payload:
+            elif "start_at" in payload:
                 payload["start_at"] = _parse_task_timestamp(payload.get("start_at"), "start_at")
             if "ends_at" in payload:
                 payload["end_at"] = _parse_task_timestamp(payload.pop("ends_at"), "end_at")
-            if "end_at" in payload:
+            elif "end_at" in payload:
                 payload["end_at"] = _parse_task_timestamp(payload.get("end_at"), "end_at")
             if "content" in payload:
                 payload["description"] = payload.pop("content")

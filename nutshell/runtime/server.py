@@ -120,6 +120,7 @@ def _start_daemon(sessions_dir: Path, system_sessions_dir: Path) -> int:
         start_new_session=True,  # detach from parent
         cwd=str(_REPO_ROOT),
     )
+    log_fh.close()  # parent no longer needs the fd
 
     # Wait briefly to confirm it started
     time.sleep(0.5)
@@ -233,32 +234,35 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
+    # Top-level --foreground for convenience (nutshell-server --foreground)
+    parser.add_argument("--foreground", action="store_true", help="Run in foreground (don't daemonize)")
+    _add_dir_args(parser)
+
     subparsers = parser.add_subparsers(dest="command")
 
     # start (default)
-    p_start = subparsers.add_parser("start", help="Start the server (default)")
+    p_start = subparsers.add_parser("start", allow_abbrev=False, help="Start the server (default)")
     _add_dir_args(p_start)
     p_start.add_argument("--foreground", action="store_true", help="Run in foreground (don't daemonize)")
     p_start.set_defaults(func=_cmd_start)
 
     # stop
-    p_stop = subparsers.add_parser("stop", help="Stop the running server")
+    p_stop = subparsers.add_parser("stop", allow_abbrev=False, help="Stop the running server")
     p_stop.set_defaults(func=_cmd_stop)
 
     # status
-    p_status = subparsers.add_parser("status", help="Show server status")
+    p_status = subparsers.add_parser("status", allow_abbrev=False, help="Show server status")
     p_status.set_defaults(func=_cmd_status)
 
     # update
-    p_update = subparsers.add_parser("update", help="Reinstall package and restart server")
+    p_update = subparsers.add_parser("update", allow_abbrev=False, help="Reinstall package and restart server")
     p_update.set_defaults(func=_cmd_update)
 
     args = parser.parse_args()
 
-    # Default to 'start' (daemon mode) if no subcommand given
+    # Default to 'start' if no subcommand given — use top-level args directly
     if args.command is None:
-        # Re-parse with 'start' prepended
-        args = parser.parse_args(["start"])
+        args.func = _cmd_start
 
     sys.exit(args.func(args))
 

@@ -44,21 +44,28 @@ from pathlib import Path
 _SEVEN_DAYS = 7 * 24 * 3600  # seconds
 
 
-def _truncate_to_hour(dt: datetime) -> datetime:
-    """Truncate a datetime to the hour (zero out minutes/seconds/micros)."""
+def _ceil_to_hour(dt: datetime) -> datetime:
+    """Round a datetime UP to the next whole hour (unless already exact)."""
+    if dt.minute == 0 and dt.second == 0 and dt.microsecond == 0:
+        return dt
+    return (dt.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1))
+
+
+def _floor_to_hour(dt: datetime) -> datetime:
+    """Truncate a datetime DOWN to the hour."""
     return dt.replace(minute=0, second=0, microsecond=0)
 
 
 def _default_start_at(created: datetime, interval: float | None) -> str:
     """Compute default start_at (hour-level granularity).
 
-    Recurring: created + 1 interval.  One-shot: created (immediate).
+    Recurring: ceil(created + 1 interval) — never earlier than a full interval.
+    One-shot: created (immediate).
     """
-    if interval:
+    if interval is not None and interval > 0:
         raw = created + timedelta(seconds=interval)
-    else:
-        raw = created
-    return _truncate_to_hour(raw).isoformat()
+        return _ceil_to_hour(raw).isoformat()
+    return _floor_to_hour(created).isoformat()
 
 
 def _default_end_at(created: datetime, interval: float | None) -> str:
@@ -66,11 +73,11 @@ def _default_end_at(created: datetime, interval: float | None) -> str:
 
     Default 7 days. If interval > 7 days → 10 * interval instead.
     """
-    if interval and interval > _SEVEN_DAYS:
+    if interval is not None and interval > _SEVEN_DAYS:
         raw = created + timedelta(seconds=interval * 10)
     else:
         raw = created + timedelta(days=7)
-    return _truncate_to_hour(raw).isoformat()
+    return _ceil_to_hour(raw).isoformat()
 
 
 @dataclass
