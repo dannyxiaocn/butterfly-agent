@@ -6,6 +6,15 @@
 
 ## Active
 
+### Module 10 · v2.0.2 Follow-ups (from PR #17 review)
+
+- [ ] **验证 Codex `gpt-5-codex` 默认模型是否在 ChatGPT-OAuth 端点可用**：PR #17 把 `CodexProvider.DEFAULT_MODEL` 从 `gpt-5.4` 改成 `gpt-5-codex`（对齐 openai/codex-rs CLI），但 PR description 中 `Manual end-to-end call against Codex (codex-oauth) with thinking=True` 的 checkbox 未勾选 —— 没有人真实跑过这个组合。同时 `entity/agent/config.yaml`、`entity/butterfly_dev/config.yaml`、`README.md`、`docs/entity/agent/impl.md`、`ui/web/frontend/src/components/chat.ts` 里的 token 上限表仍是 `gpt-5.4`，处于不一致状态。需要：
+  - 手动跑一次 `codex-oauth` + `thinking=True` + 无显式 model 的会话，确认 `gpt-5-codex` 被服务端接受
+  - 确认后要么统一 entity/docs/frontend 都改成 `gpt-5-codex`，要么把 `DEFAULT_MODEL` 回退到 `gpt-5.4` 保持兼容
+- [ ] **`agent.py` `consume_extra_blocks` 的 `getattr` fallback 已是死代码**：基类 `Provider` ABC 现在默认实现了 `consume_extra_blocks`（返回 `[]`），`getattr(active_provider, "consume_extra_blocks", lambda: [])()` 里的 `lambda: []` 永远不会命中。留着是防御性写法，但严格说冗余。可简化为 `active_provider.consume_extra_blocks()`
+- [ ] **`openai_api._tc_map_to_list` 未过滤空 `name` 的条目**：Codex 和 OpenAI Responses 两个 provider 都有 `if tc["name"]` 过滤，只有 Chat Completions 这条没有。实际 OpenAI 第一个 tool_call delta 一定带 name，不会真触发，但三个 provider 的行为不对齐，属于一致性 drift。补一个 `if entry["name"]`
+- [ ] **`_get_fallback_provider` 在只配 `fallback_model` 时静默失效**：`agent.py` 的 `_get_fallback_provider` 早期 return 要求 `fallback_provider` 和 `fallback_model` 两个都为空；但只配 `fallback_model`（不配 `fallback_provider`）时，`self._fallback_provider` 会留在 None，fallback 整条路径被跳过。要么只配 `fallback_model` 时报错提示，要么继承主 provider 类型
+
 ### Module 8 · Codebase Pruning (partial)
 
 - [ ] **`runtime/` 中 session 内容移至 `session_engine/`**：与 llm_engine/tool_engine/skill_engine 命名对齐；更新约 30 处 import
