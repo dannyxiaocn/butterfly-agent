@@ -2,10 +2,11 @@ from __future__ import annotations
 from butterfly.core.provider import Provider
 
 _REGISTRY: dict[str, tuple[str, str]] = {
-    "anthropic":        ("butterfly.llm_engine.providers.anthropic",        "AnthropicProvider"),
-    "openai":           ("butterfly.llm_engine.providers.openai_api",        "OpenAIProvider"),
-    "kimi-coding-plan": ("butterfly.llm_engine.providers.kimi",             "KimiForCodingProvider"),
-    "codex-oauth":      ("butterfly.llm_engine.providers.codex",            "CodexProvider"),
+    "anthropic":         ("butterfly.llm_engine.providers.anthropic",        "AnthropicProvider"),
+    "openai":            ("butterfly.llm_engine.providers.openai_api",       "OpenAIProvider"),
+    "openai-responses":  ("butterfly.llm_engine.providers.openai_responses", "OpenAIResponsesProvider"),
+    "kimi-coding-plan":  ("butterfly.llm_engine.providers.kimi",             "KimiForCodingProvider"),
+    "codex-oauth":       ("butterfly.llm_engine.providers.codex",            "CodexProvider"),
 }
 
 

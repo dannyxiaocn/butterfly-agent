@@ -243,14 +243,14 @@ async def test_session_chat_composes_hook_events_with_external_callbacks(tmp_pat
     assert runtime_events[3]["name"] == "echo_tool"
     assert runtime_events[3]["result_len"] == 9
     assert runtime_events[4]["iterations"] == 2
-    assert runtime_events[4]["usage"] == {"input": 15, "output": 3, "cache_read": 3, "cache_write": 0}
+    assert runtime_events[4]["usage"] == {"input": 15, "output": 3, "cache_read": 3, "cache_write": 0, "reasoning": 0}
 
     assert starts == ["hello"]
     assert done_calls == [("echo_tool", {"text": "ping"}, "echo:ping")]
-    assert ends == [(2, {"input": 15, "output": 3, "cache_read": 3, "cache_write": 0})]
+    assert ends == [(2, {"input": 15, "output": 3, "cache_read": 3, "cache_write": 0, "reasoning": 0})]
 
     assert context_events[0]["has_streaming_tools"] is True
-    assert context_events[0]["usage"] == {"input": 15, "output": 3, "cache_read": 3, "cache_write": 0}
+    assert context_events[0]["usage"] == {"input": 15, "output": 3, "cache_read": 3, "cache_write": 0, "reasoning": 0}
 
 
 @pytest.mark.asyncio
@@ -297,4 +297,4 @@ async def test_session_tick_emits_hook_events_and_preserves_turn_flags(tmp_path)
     assert context_events[0]["triggered_by"] == "task:duty"
     assert context_events[0]["pre_triggered"] is True
     assert context_events[0]["has_streaming_tools"] is True
-    assert context_events[0]["usage"] == {"input": 10, "output": 4, "cache_read": 0, "cache_write": 0}
+    assert context_events[0]["usage"] == {"input": 10, "output": 4, "cache_read": 0, "cache_write": 0, "reasoning": 0}

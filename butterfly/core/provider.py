@@ -40,5 +40,15 @@ class Provider(ABC):
         """
         ...
 
+    def consume_extra_blocks(self) -> list[dict]:
+        """Return provider-generated content blocks to attach to the last assistant Message.
+
+        The agent loop appends these verbatim to the assistant message content so
+        they round-trip to the provider on the next turn. Used by providers whose
+        server-side state must be re-echoed (e.g. OpenAI Responses reasoning items
+        with encrypted_content). Default: no extra blocks.
+        """
+        return []
+
 
 __all__ = ["Provider"]

@@ -1,6 +1,12 @@
+"""OpenAI Chat Completions provider.
+
+For the Responses API (recommended for o-series / gpt-5 reasoning models),
+see ``openai_responses.py``.
+"""
 from __future__ import annotations
 import json
 import os
+import re
 from typing import TYPE_CHECKING, Any, Callable, ClassVar
 
 from butterfly.core.provider import Provider
@@ -12,11 +18,23 @@ if TYPE_CHECKING:
     from butterfly.core.tool import Tool
 
 
-class OpenAIProvider(Provider):
-    """LLM provider backed by OpenAI (GPT models).
+# Reasoning-family models want ``max_completion_tokens`` and ``reasoning_effort``,
+# and reject ``temperature`` / ``top_p`` / ``presence_penalty`` / ``frequency_penalty``.
+_REASONING_MODEL_RE = re.compile(r"^(o\d|gpt-5|gpt-oss)", re.IGNORECASE)
 
-    Supports the official ``openai`` Python SDK.  Works with standard API keys
-    as well as OAuth tokens (e.g. from *openai-codex*).
+# Valid reasoning_effort values per OpenAI schema.
+_OPENAI_EFFORTS = {"minimal", "low", "medium", "high", "xhigh", "none"}
+
+
+def _is_reasoning_model(model: str) -> bool:
+    return bool(_REASONING_MODEL_RE.match((model or "").strip()))
+
+
+class OpenAIProvider(Provider):
+    """LLM provider backed by OpenAI's Chat Completions API.
+
+    Supports the official ``openai`` Python SDK. Works with standard API keys
+    and with OAuth tokens (e.g. from ``openai-codex``).
 
     Environment variables
     ---------------------
@@ -24,13 +42,14 @@ class OpenAIProvider(Provider):
     OPENAI_BASE_URL  – Optional custom endpoint
     """
 
-    _supports_thinking: ClassVar[bool] = False
+    _supports_thinking: ClassVar[bool] = True
 
     def __init__(
         self,
         api_key: str | None = None,
         base_url: str | None = None,
         max_tokens: int = 8096,
+        max_retries: int = 3,
     ) -> None:
         try:
             from openai import AsyncOpenAI
@@ -42,16 +61,15 @@ class OpenAIProvider(Provider):
         resolved_key = api_key or os.environ.get("OPENAI_API_KEY")
         resolved_base = base_url or os.environ.get("OPENAI_BASE_URL") or None
 
-        client_kwargs: dict[str, Any] = {"api_key": resolved_key}
+        client_kwargs: dict[str, Any] = {
+            "api_key": resolved_key,
+            "max_retries": max_retries,
+        }
         if resolved_base is not None:
             client_kwargs["base_url"] = resolved_base
 
         self._client = AsyncOpenAI(**client_kwargs)
         self.max_tokens = max_tokens
-
-    # ------------------------------------------------------------------
-    # Provider interface
-    # ------------------------------------------------------------------
 
     async def complete(
         self,
@@ -64,17 +82,20 @@ class OpenAIProvider(Provider):
         cache_system_prefix: str = "",
         cache_last_human_turn: bool = False,
         thinking: bool = False,
-        thinking_budget: int = 8000,
-        thinking_effort: str = "high",  # ignored — OpenAI Chat Completions has no reasoning toggle
+        thinking_budget: int = 8000,  # ignored — Chat Completions uses reasoning_effort
+        thinking_effort: str = "high",
     ) -> tuple[str, list[ToolCall], TokenUsage]:
         api_messages = _build_messages(system_prompt, messages, cache_system_prefix)
         api_tools = [_tool_to_openai(t) for t in tools] if tools else []
 
-        kwargs: dict[str, Any] = {
-            "model": model,
-            "max_tokens": self.max_tokens,
-            "messages": api_messages,
-        }
+        kwargs: dict[str, Any] = {"model": model, "messages": api_messages}
+        _apply_model_specific_params(
+            kwargs,
+            model=model,
+            max_tokens=self.max_tokens,
+            thinking=thinking,
+            thinking_effort=thinking_effort,
+        )
         if api_tools:
             kwargs["tools"] = api_tools
 
@@ -101,7 +122,6 @@ class OpenAIProvider(Provider):
         kwargs["stream_options"] = {"include_usage": True}
 
         content_parts: list[str] = []
-        # tool_calls are accumulated by index
         tc_map: dict[int, dict[str, Any]] = {}
         usage = TokenUsage()
 
@@ -115,12 +135,10 @@ class OpenAIProvider(Provider):
 
             delta = chunk.choices[0].delta
 
-            # --- streamed text ---
             if delta.content:
                 on_text_chunk(delta.content)
                 content_parts.append(delta.content)
 
-            # --- streamed tool calls ---
             if delta.tool_calls:
                 for tc_delta in delta.tool_calls:
                     idx = tc_delta.index
@@ -149,6 +167,29 @@ class OpenAIProvider(Provider):
 # ======================================================================
 
 
+def _apply_model_specific_params(
+    kwargs: dict[str, Any],
+    *,
+    model: str,
+    max_tokens: int,
+    thinking: bool,
+    thinking_effort: str,
+) -> None:
+    """Normalize per-model Chat Completions params.
+
+    Reasoning-family models (o-series, gpt-5) want ``max_completion_tokens`` +
+    ``reasoning_effort`` and reject ``temperature`` / ``top_p``. For everything
+    else we keep the legacy ``max_tokens``.
+    """
+    if _is_reasoning_model(model):
+        kwargs["max_completion_tokens"] = max_tokens
+        if thinking:
+            effort = thinking_effort if thinking_effort in _OPENAI_EFFORTS else "medium"
+            kwargs["reasoning_effort"] = effort
+    else:
+        kwargs["max_tokens"] = max_tokens
+
+
 def _build_messages(
     system_prompt: str,
     messages: list["Message"],
@@ -157,7 +198,6 @@ def _build_messages(
     """Convert butterfly Messages to OpenAI chat messages."""
     result: list[dict[str, Any]] = []
 
-    # System prompt is the first message with role=system
     full_system = (
         (cache_prefix + "\n" + system_prompt).strip()
         if cache_prefix
@@ -168,29 +208,26 @@ def _build_messages(
 
     for msg in messages:
         if msg.role == "tool":
-            # Tool results: OpenAI expects role=tool with tool_call_id
-            # butterfly encodes tool results as list content blocks
             if isinstance(msg.content, list):
                 for block in msg.content:
                     if isinstance(block, dict) and block.get("type") == "tool_result":
                         result.append({
                             "role": "tool",
                             "tool_call_id": block.get("tool_use_id", ""),
-                            "content": block.get("content", ""),
+                            "content": _stringify_tool_result(block.get("content", "")),
                         })
                     else:
-                        # Fallback: treat as plain text
                         result.append({"role": "user", "content": str(block)})
             else:
                 result.append({"role": "tool", "tool_call_id": "", "content": str(msg.content)})
         elif msg.role == "assistant":
-            # Assistant messages may contain tool_calls
             if isinstance(msg.content, list):
                 text_parts = []
                 tool_calls_api = []
                 for block in msg.content:
                     if isinstance(block, dict):
-                        if block.get("type") == "tool_use":
+                        btype = block.get("type")
+                        if btype == "tool_use":
                             tool_calls_api.append({
                                 "id": block["id"],
                                 "type": "function",
@@ -199,8 +236,10 @@ def _build_messages(
                                     "arguments": json.dumps(block.get("input", {})),
                                 },
                             })
-                        elif block.get("type") == "text":
+                        elif btype == "text":
                             text_parts.append(block.get("text", ""))
+                        # Provider-specific blocks (e.g. Codex "reasoning") are
+                        # skipped — they don't round-trip through Chat Completions.
                     else:
                         text_parts.append(str(block))
                 entry: dict[str, Any] = {
@@ -213,9 +252,7 @@ def _build_messages(
             else:
                 result.append({"role": "assistant", "content": msg.content})
         else:
-            # user messages
             if isinstance(msg.content, list):
-                # Flatten to text for OpenAI
                 parts = []
                 for block in msg.content:
                     if isinstance(block, dict) and block.get("type") == "text":
@@ -231,8 +268,20 @@ def _build_messages(
     return result
 
 
+def _stringify_tool_result(content: Any) -> str:
+    if isinstance(content, list):
+        parts = []
+        for b in content:
+            if isinstance(b, dict) and b.get("type") == "text":
+                parts.append(b.get("text", ""))
+            else:
+                parts.append(str(b))
+        return "".join(parts)
+    return str(content)
+
+
 def _tool_to_openai(tool: "Tool") -> dict[str, Any]:
-    """Convert a butterfly Tool to OpenAI function-calling format."""
+    """Convert a butterfly Tool to OpenAI function-calling (Chat Completions) format."""
     api = tool.to_api_dict()
     return {
         "type": "function",
@@ -244,9 +293,7 @@ def _tool_to_openai(tool: "Tool") -> dict[str, Any]:
     }
 
 
-def _parse_response(
-    response: Any,
-) -> tuple[str, list[ToolCall], TokenUsage]:
+def _parse_response(response: Any) -> tuple[str, list[ToolCall], TokenUsage]:
     """Parse a non-streaming ChatCompletion response."""
     choice = response.choices[0] if response.choices else None
     text = ""
@@ -258,8 +305,11 @@ def _parse_response(
         if msg.tool_calls:
             for tc in msg.tool_calls:
                 tool_calls.append(
-                    ToolCall(id=tc.id, name=tc.function.name,
-                             input=_parse_json_args(tc.function.arguments or ""))
+                    ToolCall(
+                        id=tc.id,
+                        name=tc.function.name,
+                        input=_parse_json_args(tc.function.arguments or ""),
+                    )
                 )
 
     usage = TokenUsage()
@@ -271,21 +321,32 @@ def _parse_response(
 
 def _extract_usage_from_obj(usage: Any) -> TokenUsage:
     """Extract TokenUsage from an OpenAI usage object."""
+    prompt_details = getattr(usage, "prompt_tokens_details", None)
+    cached = getattr(prompt_details, "cached_tokens", 0) if prompt_details else 0
+    cached = cached or 0
+
+    completion_details = getattr(usage, "completion_tokens_details", None)
+    reasoning = getattr(completion_details, "reasoning_tokens", 0) if completion_details else 0
+    reasoning = reasoning or 0
+
+    prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
     return TokenUsage(
-        input_tokens=getattr(usage, "prompt_tokens", 0) or 0,
+        input_tokens=max(prompt_tokens - cached, 0),
         output_tokens=getattr(usage, "completion_tokens", 0) or 0,
-        cache_read_tokens=getattr(usage, "prompt_tokens_details", None)
-        and getattr(usage.prompt_tokens_details, "cached_tokens", 0)
-        or 0,
+        cache_read_tokens=cached,
         cache_write_tokens=0,
+        reasoning_tokens=reasoning,
     )
 
 
 def _tc_map_to_list(tc_map: dict[int, dict[str, Any]]) -> list[ToolCall]:
     """Convert accumulated streaming tool-call fragments to ToolCall list."""
     return [
-        ToolCall(id=entry["id"], name=entry["name"],
-                 input=_parse_json_args(entry["arguments"]))
+        ToolCall(
+            id=entry["id"],
+            name=entry["name"],
+            input=_parse_json_args(entry["arguments"]),
+        )
         for idx in sorted(tc_map)
         for entry in (tc_map[idx],)
     ]

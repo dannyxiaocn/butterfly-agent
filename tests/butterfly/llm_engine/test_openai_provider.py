@@ -341,10 +341,13 @@ def test_extract_usage_with_cache():
         prompt_tokens_details=SimpleNamespace(cached_tokens=30),
     )
     usage = _extract_usage_from_obj(usage_obj)
-    assert usage.input_tokens == 100
+    # OpenAI reports prompt_tokens inclusive of cached; we expose non-cached input
+    # to match Anthropic/Codex semantics (input_tokens + cache_read = total input).
+    assert usage.input_tokens == 70
     assert usage.output_tokens == 50
     assert usage.cache_read_tokens == 30
     assert usage.cache_write_tokens == 0
+    assert usage.reasoning_tokens == 0
 
 
 # ── 12. TokenUsage extraction without details ────────────────────────
@@ -491,3 +494,80 @@ def test_registry_has_openai():
     mod, cls = _REGISTRY["openai"]
     assert cls == "OpenAIProvider"
     assert "openai_api" in mod
+
+
+# ── 21. model-family detection + per-model param scrubbing ────────────
+
+
+def test_is_reasoning_model_matches():
+    from butterfly.llm_engine.providers.openai_api import _is_reasoning_model
+
+    assert _is_reasoning_model("gpt-5")
+    assert _is_reasoning_model("gpt-5-codex")
+    assert _is_reasoning_model("o1-preview")
+    assert _is_reasoning_model("o3-mini")
+    assert _is_reasoning_model("gpt-oss-20b")
+
+    assert not _is_reasoning_model("gpt-4o")
+    assert not _is_reasoning_model("gpt-4.1")
+    assert not _is_reasoning_model("claude-sonnet-4-6")
+    assert not _is_reasoning_model("")
+
+
+def test_apply_params_gpt5_uses_max_completion_tokens_and_effort():
+    from butterfly.llm_engine.providers.openai_api import _apply_model_specific_params
+
+    kwargs: dict = {}
+    _apply_model_specific_params(
+        kwargs, model="gpt-5", max_tokens=1000, thinking=True, thinking_effort="high"
+    )
+    assert kwargs == {"max_completion_tokens": 1000, "reasoning_effort": "high"}
+
+
+def test_apply_params_gpt5_clamps_invalid_effort():
+    from butterfly.llm_engine.providers.openai_api import _apply_model_specific_params
+
+    kwargs: dict = {}
+    _apply_model_specific_params(
+        kwargs, model="gpt-5-codex", max_tokens=500, thinking=True, thinking_effort="ultra"
+    )
+    assert kwargs["reasoning_effort"] == "medium"
+
+
+def test_apply_params_legacy_uses_max_tokens():
+    from butterfly.llm_engine.providers.openai_api import _apply_model_specific_params
+
+    kwargs: dict = {}
+    _apply_model_specific_params(
+        kwargs, model="gpt-4o", max_tokens=1000, thinking=False, thinking_effort="high"
+    )
+    assert kwargs == {"max_tokens": 1000}
+    assert "reasoning_effort" not in kwargs
+
+
+def test_apply_params_reasoning_without_thinking_skips_effort():
+    """On reasoning models, reasoning_effort should only be set when thinking=True."""
+    from butterfly.llm_engine.providers.openai_api import _apply_model_specific_params
+
+    kwargs: dict = {}
+    _apply_model_specific_params(
+        kwargs, model="o3-mini", max_tokens=800, thinking=False, thinking_effort="high"
+    )
+    assert kwargs == {"max_completion_tokens": 800}
+
+
+# ── 22. reasoning_tokens surfaced through TokenUsage ─────────────────
+
+
+def test_extract_usage_reports_reasoning_tokens():
+    usage_obj = SimpleNamespace(
+        prompt_tokens=100,
+        completion_tokens=200,
+        prompt_tokens_details=SimpleNamespace(cached_tokens=40),
+        completion_tokens_details=SimpleNamespace(reasoning_tokens=150),
+    )
+    usage = _extract_usage_from_obj(usage_obj)
+    assert usage.input_tokens == 60  # 100 - 40 cached
+    assert usage.output_tokens == 200
+    assert usage.cache_read_tokens == 40
+    assert usage.reasoning_tokens == 150

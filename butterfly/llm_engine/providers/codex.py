@@ -5,11 +5,23 @@ auto-refreshes the access token when it expires, and calls:
   POST https://chatgpt.com/backend-api/codex/responses
 
 The response format is the OpenAI Responses API over SSE, not Chat Completions.
+
+Behavioral notes (aligned with openai/codex rust CLI `codex-rs`):
+  * Default model is ``gpt-5-codex`` (codex-rs default).
+  * When ``thinking=True`` we send ``include=["reasoning.encrypted_content"]``
+    and re-echo reasoning items on subsequent turns so the server can retain
+    chain-of-thought across turns.
+  * ``prompt_cache_key`` is set to a per-provider-instance conversation id so
+    the server can hit its prompt cache on the stable prefix.
+  * ``response.failed`` / ``response.incomplete`` are mapped to the butterfly
+    error taxonomy.
+  * A single auto-refresh + retry is attempted on 401 mid-stream.
 """
 from __future__ import annotations
 
 import json
 import os
+import re
 import time
 import uuid
 from pathlib import Path
@@ -17,6 +29,14 @@ from typing import TYPE_CHECKING, Any, Callable, ClassVar
 
 from butterfly.core.provider import Provider
 from butterfly.core.types import TokenUsage, ToolCall
+from butterfly.llm_engine.errors import (
+    AuthError,
+    BadRequestError,
+    ContextWindowExceededError,
+    ProviderError,
+    RateLimitError,
+    ServerError,
+)
 from butterfly.llm_engine.providers._common import _parse_json_args
 
 if TYPE_CHECKING:
@@ -29,29 +49,32 @@ _CODEX_URL = "https://chatgpt.com/backend-api/codex/responses"
 _TOKEN_URL = "https://auth.openai.com/oauth/token"
 _CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 _JWT_AUTH_CLAIM = "https://api.openai.com/auth"
+_DEFAULT_READ_TIMEOUT = 600.0  # gpt-5 xhigh routinely exceeds 120s before first token
+_ORIGINATOR = "codex_cli_rs"  # matches openai/codex; "pi" is not on the server allowlist
 
 
 class CodexProvider(Provider):
-    """LLM provider backed by OpenAI Codex via ChatGPT Plus OAuth.
-
-    Uses ``~/.codex/auth.json`` written by the official ``codex`` CLI.
-    Access tokens are refreshed automatically.
-
-    Default model: gpt-5.4 with high reasoning effort when thinking=True.
-    """
+    """LLM provider backed by OpenAI Codex via ChatGPT Plus OAuth."""
 
     _supports_thinking: ClassVar[bool] = True
-    # Default model for the Codex OAuth endpoint.
-    # Passed through to complete() when the session model is empty or the
-    # generic fallback ("claude-sonnet-4-6").
-    DEFAULT_MODEL: ClassVar[str] = "gpt-5.4"
+    DEFAULT_MODEL: ClassVar[str] = "gpt-5-codex"
 
     def __init__(self, max_tokens: int = 8096) -> None:
         self.max_tokens = max_tokens
+        # Per-instance conversation id — used for prompt_cache_key + session_id header.
+        # One provider instance = one conversation bucket from the server's POV.
+        self._conversation_id = str(uuid.uuid4())
+        # Reasoning items captured from the last stream; drained by consume_extra_blocks().
+        self._pending_reasoning: list[dict[str, Any]] = []
 
     # ------------------------------------------------------------------
     # Provider interface
     # ------------------------------------------------------------------
+
+    def consume_extra_blocks(self) -> list[dict]:
+        blocks = self._pending_reasoning
+        self._pending_reasoning = []
+        return blocks
 
     async def complete(
         self,
@@ -67,53 +90,81 @@ class CodexProvider(Provider):
         thinking_budget: int = 8000,  # ignored — Codex uses effort, not budget_tokens
         thinking_effort: str = "high",
     ) -> tuple[str, list[ToolCall], TokenUsage]:
-        access_token, account_id = self._get_auth()
-        headers = _build_headers(access_token, account_id)
         full_system = (
             (cache_system_prefix + "\n\n" + system_prompt).strip()
             if cache_system_prefix
             else system_prompt
         )
-        # Fall back to DEFAULT_MODEL when no model is configured for this provider
         effective_model = model if model and model != "claude-sonnet-4-6" else self.DEFAULT_MODEL
-        # Validate effort level — silently clamp to "high" if caller passes an invalid value
         effort = thinking_effort if thinking_effort in _VALID_EFFORTS else "high"
-        body = _build_request_body(effective_model, full_system, messages, tools, thinking=thinking, thinking_effort=effort)
+        body = _build_request_body(
+            effective_model,
+            full_system,
+            messages,
+            tools,
+            thinking=thinking,
+            thinking_effort=effort,
+            prompt_cache_key=self._conversation_id,
+        )
 
         import httpx
 
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            async with client.stream("POST", _CODEX_URL, headers=headers, json=body) as resp:
-                if resp.status_code != 200:
-                    error_text = await resp.aread()
-                    raise RuntimeError(
-                        f"Codex API error {resp.status_code}: {error_text.decode()[:500]}"
-                    )
-                return await _parse_sse_stream(resp, on_text_chunk)
+        timeout = httpx.Timeout(connect=10.0, read=_DEFAULT_READ_TIMEOUT, write=30.0, pool=10.0)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            for attempt in range(2):
+                access_token, account_id = self._get_auth(force_refresh=attempt > 0)
+                headers = _build_headers(access_token, account_id, self._conversation_id)
+                try:
+                    async with client.stream("POST", _CODEX_URL, headers=headers, json=body) as resp:
+                        status = resp.status_code
+                        if status == 401 and attempt == 0:
+                            await resp.aread()
+                            continue
+                        if status != 200:
+                            body_bytes = await resp.aread()
+                            _raise_from_status(
+                                status, body_bytes.decode("utf-8", errors="replace")[:500]
+                            )
+                        text, tool_calls, usage, reasoning_items = await _parse_sse_stream(
+                            resp, on_text_chunk
+                        )
+                        self._pending_reasoning = reasoning_items
+                        return text, tool_calls, usage
+                except httpx.TimeoutException as exc:
+                    raise ProviderError(
+                        f"Codex request timed out: {exc}", provider="codex-oauth"
+                    ) from exc
+
+        raise AuthError(
+            "Codex authentication failed after refresh",
+            provider="codex-oauth",
+            status=401,
+        )
 
     # ------------------------------------------------------------------
     # Auth helpers
     # ------------------------------------------------------------------
 
-    def _get_auth(self) -> tuple[str, str]:
-        """Return (access_token, account_id), refreshing if needed."""
+    def _get_auth(self, *, force_refresh: bool = False) -> tuple[str, str]:
         auth = _read_auth()
         tokens = auth.get("tokens", {})
         access_token = tokens.get("access_token", "")
         refresh_token = tokens.get("refresh_token", "")
 
-        if _is_token_expired(access_token):
+        if force_refresh or _is_token_expired(access_token):
             if not refresh_token:
-                raise RuntimeError(
+                raise AuthError(
                     "Codex access token expired and no refresh_token available. "
-                    "Run `codex login` to re-authenticate."
+                    "Run `codex login` to re-authenticate.",
+                    provider="codex-oauth",
+                    status=401,
                 )
             tokens = _refresh_access_token(refresh_token)
             auth["tokens"] = tokens
             _write_auth(auth)
             access_token = tokens["access_token"]
 
-        account_id = _extract_account_id(access_token)
+        account_id = _extract_account_id(access_token, tokens.get("id_token", ""))
         return access_token, account_id
 
 
@@ -124,9 +175,11 @@ class CodexProvider(Provider):
 
 def _read_auth() -> dict[str, Any]:
     if not _AUTH_PATH.exists():
-        raise RuntimeError(
+        raise AuthError(
             f"Codex auth file not found at {_AUTH_PATH}. "
-            "Run `codex login` to authenticate."
+            "Run `codex login` to authenticate.",
+            provider="codex-oauth",
+            status=401,
         )
     return json.loads(_AUTH_PATH.read_text(encoding="utf-8"))
 
@@ -136,7 +189,6 @@ def _write_auth(auth: dict[str, Any]) -> None:
 
 
 def _is_token_expired(token: str, buffer_seconds: int = 300) -> bool:
-    """Return True if JWT is expired or will expire within buffer_seconds."""
     if not token:
         return True
     try:
@@ -156,22 +208,30 @@ def _b64decode_pad(s: str) -> bytes:
     return base64.urlsafe_b64decode(s)
 
 
-def _extract_account_id(token: str) -> str:
-    try:
-        parts = token.split(".")
-        payload = json.loads(_b64decode_pad(parts[1]))
-        account_id = payload.get(_JWT_AUTH_CLAIM, {}).get("chatgpt_account_id", "")
-        if not account_id:
-            raise ValueError("No chatgpt_account_id in token")
-        return account_id
-    except Exception as exc:
-        raise RuntimeError(f"Failed to extract account_id from Codex token: {exc}") from exc
+def _extract_account_id(access_token: str, id_token: str = "") -> str:
+    """Extract chatgpt_account_id from access_token, with id_token as fallback."""
+    for token in (access_token, id_token):
+        if not token:
+            continue
+        try:
+            parts = token.split(".")
+            payload = json.loads(_b64decode_pad(parts[1]))
+            account_id = payload.get(_JWT_AUTH_CLAIM, {}).get("chatgpt_account_id", "")
+            if account_id:
+                return account_id
+        except Exception:
+            continue
+    raise AuthError(
+        "Failed to extract chatgpt_account_id from Codex tokens",
+        provider="codex-oauth",
+        status=401,
+    )
 
 
 def _refresh_access_token(refresh_token: str) -> dict[str, str]:
+    import urllib.error
     import urllib.request
 
-    # Official Codex uses JSON body (not form-urlencoded) per codex-rs/login/src/auth/manager.rs
     payload = json.dumps({
         "grant_type": "refresh_token",
         "refresh_token": refresh_token,
@@ -183,17 +243,30 @@ def _refresh_access_token(refresh_token: str) -> dict[str, str]:
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        result = json.loads(resp.read())
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            result = json.loads(resp.read())
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace") if exc.fp else ""
+        raise AuthError(
+            f"Codex token refresh failed ({exc.code}): {body[:200] or exc.reason}. "
+            "The refresh token may be expired or revoked — run `codex login` again.",
+            provider="codex-oauth",
+            status=exc.code,
+        ) from exc
 
     if "access_token" not in result or "refresh_token" not in result:
-        raise RuntimeError(f"Token refresh failed: {result}")
+        raise AuthError(
+            f"Codex token refresh returned unexpected payload: {result}",
+            provider="codex-oauth",
+            status=401,
+        )
 
     return {
         "access_token": result["access_token"],
         "refresh_token": result["refresh_token"],
         "id_token": result.get("id_token", ""),
-        "account_id": _extract_account_id(result["access_token"]),
+        "account_id": _extract_account_id(result["access_token"], result.get("id_token", "")),
     }
 
 
@@ -202,15 +275,20 @@ def _refresh_access_token(refresh_token: str) -> dict[str, str]:
 # ======================================================================
 
 
-def _build_headers(access_token: str, account_id: str) -> dict[str, str]:
+def _build_headers(access_token: str, account_id: str, conversation_id: str) -> dict[str, str]:
+    try:
+        sysname = os.uname().sysname.lower()
+    except AttributeError:
+        sysname = "unknown"
     return {
         "Authorization": f"Bearer {access_token}",
-        "chatgpt-account-id": account_id,
+        "ChatGPT-Account-ID": account_id,
         "OpenAI-Beta": "responses=experimental",
-        "originator": "pi",
+        "originator": _ORIGINATOR,
+        "session_id": conversation_id,
         "Content-Type": "application/json",
         "Accept": "text/event-stream",
-        "User-Agent": "butterfly/1.0 (darwin)",
+        "User-Agent": f"butterfly/2.0 ({sysname})",
     }
 
 
@@ -221,8 +299,8 @@ def _build_request_body(
     tools: list["Tool"],
     thinking: bool = False,
     thinking_effort: str = "high",
+    prompt_cache_key: str = "",
 ) -> dict[str, Any]:
-    # Strip "openai-codex/" prefix if present — bare model id for the endpoint
     model_id = model.split("/")[-1] if "/" in model else model
 
     body: dict[str, Any] = {
@@ -235,11 +313,11 @@ def _build_request_body(
         "tool_choice": "auto",
         "parallel_tool_calls": True,
     }
+    if prompt_cache_key:
+        body["prompt_cache_key"] = prompt_cache_key
     if thinking:
-        # Codex Responses API uses reasoning.effort (not budget_tokens).
-        # Values: "none" | "minimal" | "low" | "medium" | "high" | "xhigh"
-        # Source: codex-rs/protocol/src/openai_models.rs ReasoningEffort enum
-        body["reasoning"] = {"effort": thinking_effort}
+        body["reasoning"] = {"effort": thinking_effort, "summary": "auto"}
+        body["include"] = ["reasoning.encrypted_content"]
     if tools:
         body["tools"] = [_tool_to_responses_api(t) for t in tools]
     return body
@@ -252,8 +330,26 @@ def _tool_to_responses_api(tool: "Tool") -> dict[str, Any]:
         "name": api["name"],
         "description": api.get("description", ""),
         "parameters": api.get("input_schema", {"type": "object", "properties": {}}),
-        "strict": None,
+        "strict": False,
     }
+
+
+def _raise_from_status(status: int, body: str) -> None:
+    msg = f"Codex API error {status}" + (f": {body}" if body else "")
+    if status in (401, 403):
+        raise AuthError(msg, provider="codex-oauth", status=status)
+    if status == 400:
+        raise BadRequestError(msg, provider="codex-oauth", status=status)
+    if status == 429:
+        raise RateLimitError(
+            msg,
+            provider="codex-oauth",
+            status=status,
+            retry_after=_parse_retry_after(body),
+        )
+    if 500 <= status < 600:
+        raise ServerError(msg, provider="codex-oauth", status=status)
+    raise ProviderError(msg, provider="codex-oauth", status=status)
 
 
 # ======================================================================
@@ -293,17 +389,18 @@ def _convert_user(msg: "Message") -> dict[str, Any] | None:
 def _convert_assistant(msg: "Message") -> list[dict[str, Any]]:
     content = msg.content
     if isinstance(content, str):
-        return [{
-            "type": "message",
-            "role": "assistant",
-            "content": [{"type": "output_text", "text": content, "annotations": []}],
-            "status": "completed",
-        }]
+        return [_assistant_message_item(content)]
     if not isinstance(content, list):
         return []
 
     result: list[dict[str, Any]] = []
     text_parts: list[str] = []
+
+    def flush_text() -> None:
+        nonlocal text_parts
+        if text_parts:
+            result.append(_assistant_message_item("".join(text_parts)))
+            text_parts = []
 
     for block in content:
         if not isinstance(block, dict):
@@ -312,16 +409,21 @@ def _convert_assistant(msg: "Message") -> list[dict[str, Any]]:
         btype = block.get("type", "")
         if btype == "text":
             text_parts.append(block.get("text", ""))
+        elif btype == "reasoning":
+            # Replay reasoning verbatim: server validates id + encrypted_content
+            # against the previous turn when `include=reasoning.encrypted_content`
+            # was set on that request.
+            flush_text()
+            item: dict[str, Any] = {
+                "type": "reasoning",
+                "id": block.get("id") or f"rs_{uuid.uuid4().hex[:24]}",
+                "summary": block.get("summary", []),
+            }
+            if "encrypted_content" in block:
+                item["encrypted_content"] = block["encrypted_content"]
+            result.append(item)
         elif btype == "tool_use":
-            # Flush accumulated text first
-            if text_parts:
-                result.append({
-                    "type": "message",
-                    "role": "assistant",
-                    "content": [{"type": "output_text", "text": "".join(text_parts), "annotations": []}],
-                    "status": "completed",
-                })
-                text_parts = []
+            flush_text()
             tool_id = block.get("id", str(uuid.uuid4()))
             result.append({
                 "type": "function_call",
@@ -331,14 +433,17 @@ def _convert_assistant(msg: "Message") -> list[dict[str, Any]]:
                 "arguments": json.dumps(block.get("input", {})),
             })
 
-    if text_parts:
-        result.append({
-            "type": "message",
-            "role": "assistant",
-            "content": [{"type": "output_text", "text": "".join(text_parts), "annotations": []}],
-            "status": "completed",
-        })
+    flush_text()
     return result
+
+
+def _assistant_message_item(text: str) -> dict[str, Any]:
+    return {
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "output_text", "text": text, "annotations": []}],
+        "status": "completed",
+    }
 
 
 def _convert_tool_result(msg: "Message") -> list[dict[str, Any]]:
@@ -373,11 +478,11 @@ def _convert_tool_result(msg: "Message") -> list[dict[str, Any]]:
 async def _parse_sse_stream(
     resp: Any,
     on_text_chunk: Callable[[str], None] | None,
-) -> tuple[str, list[ToolCall], TokenUsage]:
+) -> tuple[str, list[ToolCall], TokenUsage, list[dict[str, Any]]]:
     text_parts: list[str] = []
-    # tool call accumulation: call_id → {name, args_str}
     tc_map: dict[str, dict[str, str]] = {}
     current_tc_id: str | None = None
+    reasoning_items: list[dict[str, Any]] = []
     usage = TokenUsage()
 
     buffer = ""
@@ -414,11 +519,21 @@ async def _parse_sse_stream(
 
                 elif etype == "response.output_item.done":
                     item = event.get("item", {})
-                    if item.get("type") == "function_call":
+                    itype = item.get("type", "")
+                    if itype == "function_call":
                         call_id = item.get("call_id", "")
                         if call_id in tc_map:
                             tc_map[call_id]["args"] = item.get("arguments", tc_map[call_id]["args"])
                         current_tc_id = None
+                    elif itype == "reasoning":
+                        captured: dict[str, Any] = {
+                            "type": "reasoning",
+                            "id": item.get("id", ""),
+                            "summary": item.get("summary", []),
+                        }
+                        if "encrypted_content" in item:
+                            captured["encrypted_content"] = item["encrypted_content"]
+                        reasoning_items.append(captured)
 
                 elif etype == "response.output_text.delta":
                     delta = event.get("delta", "")
@@ -428,26 +543,37 @@ async def _parse_sse_stream(
                             on_text_chunk(delta)
 
                 elif etype == "response.reasoning_text.delta":
-                    # Streaming thinking/reasoning content — forward to on_text_chunk
-                    # (same treatment as Anthropic's thinking_delta)
+                    delta = event.get("delta", "")
+                    if delta and on_text_chunk:
+                        on_text_chunk(delta)
+
+                elif etype == "response.reasoning_summary_text.delta":
                     delta = event.get("delta", "")
                     if delta and on_text_chunk:
                         on_text_chunk(delta)
 
                 elif etype in ("response.completed", "response.done"):
                     resp_data = event.get("response", {})
-                    u = resp_data.get("usage", {})
-                    cached = (u.get("input_tokens_details") or {}).get("cached_tokens", 0)
-                    usage = TokenUsage(
-                        input_tokens=(u.get("input_tokens") or 0) - cached,
-                        output_tokens=u.get("output_tokens") or 0,
-                        cache_read_tokens=cached,
-                        cache_write_tokens=0,
+                    usage = _extract_usage(resp_data.get("usage") or {})
+
+                elif etype == "response.incomplete":
+                    resp_data = event.get("response", {})
+                    reason = (
+                        (resp_data.get("incomplete_details") or {}).get("reason")
+                        or event.get("incomplete_details", {}).get("reason")
+                        or "incomplete"
+                    )
+                    if reason == "context_length":
+                        raise ContextWindowExceededError(
+                            "Codex response incomplete: context length exceeded",
+                            provider="codex-oauth",
+                        )
+                    raise ProviderError(
+                        f"Codex response incomplete: {reason}", provider="codex-oauth"
                     )
 
                 elif etype in ("error", "response.failed"):
-                    msg = event.get("message") or event.get("response", {}).get("error", {}).get("message", "")
-                    raise RuntimeError(f"Codex stream error: {msg or json.dumps(event)}")
+                    _raise_stream_error(event)
 
     text = "".join(text_parts)
     tool_calls = [
@@ -455,4 +581,70 @@ async def _parse_sse_stream(
         for call_id, tc in tc_map.items()
         if tc["name"]
     ]
-    return text, tool_calls, usage
+    return text, tool_calls, usage, reasoning_items
+
+
+def _extract_usage(u: dict[str, Any]) -> TokenUsage:
+    cached = (u.get("input_tokens_details") or {}).get("cached_tokens", 0) or 0
+    reasoning = (u.get("output_tokens_details") or {}).get("reasoning_tokens", 0) or 0
+    input_raw = u.get("input_tokens") or 0
+    return TokenUsage(
+        input_tokens=max(input_raw - cached, 0),
+        output_tokens=u.get("output_tokens") or 0,
+        cache_read_tokens=cached,
+        cache_write_tokens=0,
+        reasoning_tokens=reasoning,
+    )
+
+
+def _raise_stream_error(event: dict[str, Any]) -> None:
+    """Classify a response.failed / error event into the butterfly error taxonomy."""
+    err_obj: dict[str, Any] = {}
+    resp_data = event.get("response") or {}
+    if isinstance(resp_data, dict):
+        err_obj = resp_data.get("error") or {}
+    message = (
+        event.get("message")
+        or err_obj.get("message")
+        or json.dumps(event)[:300]
+    )
+    code = event.get("code") or err_obj.get("code") or ""
+
+    code_l = (code or "").lower()
+    msg_l = (message or "").lower()
+    if "context" in code_l or ("context" in msg_l and "length" in msg_l):
+        raise ContextWindowExceededError(
+            f"Codex context length exceeded: {message}", provider="codex-oauth"
+        )
+    if "quota" in code_l or "rate_limit" in code_l or "rate limit" in msg_l:
+        raise RateLimitError(
+            f"Codex rate/quota error: {message}",
+            provider="codex-oauth",
+            retry_after=_parse_retry_after(message),
+        )
+    if "auth" in code_l or "invalid_api_key" in code_l:
+        raise AuthError(f"Codex auth error: {message}", provider="codex-oauth", status=401)
+    if "overloaded" in code_l or "server" in code_l:
+        raise ServerError(f"Codex server error: {message}", provider="codex-oauth")
+    raise ProviderError(f"Codex stream error: {message}", provider="codex-oauth")
+
+
+_RETRY_AFTER_RE = re.compile(
+    r"(\d+(?:\.\d+)?)\s*(milliseconds?|ms|seconds?|secs?|s|minutes?|mins?|m)\b"
+)
+
+
+def _parse_retry_after(text: str) -> float | None:
+    """Best-effort extraction of a retry-after value from a free-form message."""
+    if not text:
+        return None
+    m = _RETRY_AFTER_RE.search(text.lower())
+    if not m:
+        return None
+    value = float(m.group(1))
+    unit = m.group(2)
+    if unit.startswith("m") and (unit.startswith("mil") or unit == "ms"):
+        return value / 1000.0
+    if unit.startswith("m"):  # minutes
+        return value * 60.0
+    return value  # seconds

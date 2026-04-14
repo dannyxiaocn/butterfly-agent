@@ -221,9 +221,13 @@ class Agent:
             total_usage = total_usage + turn_usage
             on_text_chunk = None
 
+            extra_blocks = getattr(active_provider, "consume_extra_blocks", lambda: [])()
+
             assistant_content: Any = content
-            if tool_calls:
+            if tool_calls or extra_blocks:
                 blocks: list[Any] = []
+                for eb in extra_blocks:
+                    blocks.append(eb)
                 if content:
                     blocks.append({"type": "text", "text": content})
                 for tc in tool_calls:
