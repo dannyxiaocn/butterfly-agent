@@ -1,6 +1,6 @@
 # Butterfly🦋Agent
 
-A minimal, file-backed Python agent runtime. Sessions, prompts, tools, skills, state, and UI traffic all live on disk — the server, CLI, Web UI, and agents share the same source of truth.
+Agent system that serves all humans.
 
 ## Quick Start
 
