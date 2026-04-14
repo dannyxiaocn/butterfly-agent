@@ -4,7 +4,7 @@
 
 ```bash
 # Ensure workspace exists (local clone of the origin repo)
-ls playground/butterfly 2>/dev/null || git clone /Users/xiaobocheng/agent_core/butterfly playground/butterfly
+ls playground/butterfly 2>/dev/null || git clone /Users/xiaobocheng/agent_core/butterfly-agent playground/butterfly
 cd playground/butterfly
 git checkout main
 git pull origin main        # sync latest before starting work

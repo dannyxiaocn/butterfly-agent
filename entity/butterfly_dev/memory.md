@@ -21,7 +21,7 @@ My workspace:    playground/butterfly/       ← git clone of the repo, all work
 
 ```bash
 # Check if workspace already exists
-ls playground/butterfly 2>/dev/null || git clone /Users/xiaobocheng/agent_core/butterfly playground/butterfly
+ls playground/butterfly 2>/dev/null || git clone /Users/xiaobocheng/agent_core/butterfly-agent playground/butterfly
 cd playground/butterfly
 git status
 ```
@@ -38,7 +38,7 @@ Ready branches can be reviewed and merged from there. Active implementation shou
 ## Project State
 
 - **Current version**: v1.3.84
-- **Origin repo**: `/Users/xiaobocheng/agent_core/butterfly`
+- **Origin repo**: `/Users/xiaobocheng/agent_core/butterfly-agent`
 - **My working copy**: `playground/butterfly/` (relative to my session dir)
 - **Tests**: `pytest tests/ -q`
 - **Main branch**: `main`
