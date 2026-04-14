@@ -21,7 +21,6 @@ from ui.cli.main import (
     cmd_entity,
     _add_new_parser,
     _add_log_parser,
-    _add_prompt_stats_parser,
     _add_tasks_parser,
     _read_all_sessions,
     _fmt_ago,
@@ -208,7 +207,6 @@ def _parse_subcommand(add_parser, argv: list[str]):
     [
         (_add_log_parser, "log"),
         (_add_tasks_parser, "tasks"),
-        (_add_prompt_stats_parser, "prompt-stats"),
     ],
 )
 def test_session_alias_parsers_accept_flag_form(add_parser, command):

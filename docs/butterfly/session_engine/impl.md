@@ -56,7 +56,6 @@ Each entity is fully self-contained — no inheritance chain:
 ## Version Management
 
 - Meta session version: `agent_version` in `sessions/<entity>_meta/core/config.yaml`
-- Version history: `_sessions/<entity>_meta/version_history.json`
 - Child session records meta version at creation time in its own `core/config.yaml`
 - `Session._emit_version_notice_if_stale()` emits a `system_notice` event if meta has advanced
 - `bump_meta_version()` increments patch version and appends to history

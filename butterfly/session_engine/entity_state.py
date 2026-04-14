@@ -120,35 +120,15 @@ def get_meta_version(entity_name: str, sys_base: Path | None = None) -> str | No
         return None
 
 
-def _record_version_entry(
-    entity_name: str,
-    version: str,
-    note: str = "",
-    sys_base: Path | None = None,
-) -> None:
-    """Append a version entry to _sessions/<entity>_meta/version_history.json."""
-    system_base = sys_base or _SYSTEM_SESSIONS_DIR
-    history_path = system_base / f"{entity_name}_meta" / "version_history.json"
-    history_path.parent.mkdir(parents=True, exist_ok=True)
-    history: list[dict] = []
-    if history_path.exists():
-        try:
-            history = json.loads(history_path.read_text(encoding='utf-8'))
-        except Exception:
-            history = []
-    history.append({"version": version, "ts": datetime.now().isoformat(), "note": note})
-    history_path.write_text(json.dumps(history, indent=2, ensure_ascii=False), encoding='utf-8')
-
-
 def bump_meta_version(
     entity_name: str,
     note: str = "",
     sys_base: Path | None = None,
 ) -> str:
-    """Increment meta session's agent_version, record in version history.
+    """Increment meta session's agent_version.
 
-    Returns the new version string. Called by the meta agent or CLI when
-    the meta session's core content is meaningfully updated.
+    Returns the new version string. Called by the meta agent when the meta
+    session's core content is meaningfully updated.
     """
     from butterfly.session_engine.session_status import write_session_status
 
@@ -159,22 +139,9 @@ def bump_meta_version(
     system_dir = system_base / get_meta_session_id(entity_name)
     try:
         write_session_status(system_dir, agent_version=new_version)
-        _record_version_entry(entity_name, new_version, note, sys_base=sys_base)
     except Exception:
         pass
     return new_version
-
-
-def get_version_history(entity_name: str, sys_base: Path | None = None) -> list[dict]:
-    """Return version history list from _sessions/<entity>_meta/version_history.json."""
-    system_base = sys_base or _SYSTEM_SESSIONS_DIR
-    history_path = system_base / f"{entity_name}_meta" / "version_history.json"
-    if not history_path.exists():
-        return []
-    try:
-        return json.loads(history_path.read_text(encoding='utf-8'))
-    except Exception:
-        return []
 
 
 # ── Meta session bootstrap ────────────────────────────────────────────────────
@@ -364,10 +331,8 @@ _META_SYSTEM_PROMPT = """You are the meta-agent for entity '{entity}'. You are t
 ## Version Management
 Your version is stored in _sessions/{entity}_meta/status.json as "agent_version".
 When you make meaningful improvements to core/:
-1. Use the CLI or bump the version in _sessions/{entity}_meta/status.json (e.g. "1.0.0" → "1.0.1")
-2. Append to _sessions/{entity}_meta/version_history.json:
-   {{"version": "X.Y.Z", "ts": "<ISO timestamp>", "note": "what changed"}}
-3. Open a PR to sync changes back to entity/{entity}/
+1. Bump the version in _sessions/{entity}_meta/status.json (e.g. "1.0.0" → "1.0.1")
+2. Open a PR to sync changes back to entity/{entity}/
 
 ## Updating Entity Definition
 All entity updates go through the single branch `mecam/entity-update`.
@@ -398,9 +363,7 @@ Keep core/memory.md accurate:
 ## 3. Sync core updates back to entity (if you improved anything)
 If you updated core/ files (system.md, task.md, tools.md, skills.md):
 a. Bump version — update "agent_version" in _sessions/{entity}_meta/status.json
-b. Record — append to _sessions/{entity}_meta/version_history.json:
-   {{"version":"X.Y.Z","ts":"<ISO>","note":"<what changed>"}}
-c. Create PR to mecam/entity-update branch:
+b. Create PR to mecam/entity-update branch:
    ```bash
    cd <repo_root>
    git checkout -B mecam/entity-update

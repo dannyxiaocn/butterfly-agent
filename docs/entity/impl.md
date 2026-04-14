@@ -42,7 +42,7 @@ butterfly entity new -n myentity --blank            # Blank entity with empty fi
 | `tools` | List of tool JSON schema paths |
 | `skills` | List of skill directory paths |
 | `params` | Extra params merged into `core/config.yaml` |
-| `meta_session` | Description shown in `butterfly meta` output |
+| `meta_session` | Description of the entity's meta session, surfaced to the meta agent on wake-up |
 
 ## Important Files
 

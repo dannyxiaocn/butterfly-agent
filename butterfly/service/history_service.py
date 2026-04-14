@@ -6,8 +6,6 @@ from pathlib import Path
 
 from .sessions_service import _validate_session_id
 
-_MEMORY_LAYER_INLINE_LINES = 60
-
 
 def get_history(session_id: str, system_sessions_dir: Path, context_since: int = 0) -> dict:
     _validate_session_id(session_id)
@@ -177,34 +175,3 @@ def get_token_report(session_id: str, system_sessions_dir: Path) -> list[dict]:
     return rows
 
 
-def get_prompt_stats(session_id: str, sessions_dir: Path, system_sessions_dir: Path) -> dict:
-    _validate_session_id(session_id)
-    core = sessions_dir / session_id / 'core'
-    system_dir = system_sessions_dir / session_id
-    if not core.exists() or not system_dir.exists():
-        raise FileNotFoundError(session_id)
-    def _read(path: Path) -> str:
-        return path.read_text(encoding='utf-8') if path.exists() else ''
-    def _row(label: str, content: str, note: str = '') -> dict:
-        chars = len(content)
-        return {'label': label, 'lines': len(content.splitlines()), 'chars': chars, 'tokens': max(1, chars // 4), 'note': note}
-    rows = []
-    rows.append(_row('system.md', _read(core / 'system.md')))
-    rows.append(_row('env.md', _read(core / 'env.md')))
-    rows.append(_row('memory.md', _read(core / 'memory.md')))
-    mem_dir = core / 'memory'
-    if mem_dir.exists():
-        for md_file in sorted(mem_dir.glob('*.md')):
-            content = md_file.read_text(encoding='utf-8')
-            disk_lines = len(content.splitlines())
-            if disk_lines > _MEMORY_LAYER_INLINE_LINES:
-                content = '\n'.join(content.splitlines()[:_MEMORY_LAYER_INLINE_LINES])
-                rows.append(_row(f'memory/{md_file.stem}', content, f'truncated ({disk_lines}→{_MEMORY_LAYER_INLINE_LINES} lines)'))
-            else:
-                rows.append(_row(f'memory/{md_file.stem}', content))
-    skills_dir = core / 'skills'
-    skill_names = [d.name for d in sorted(skills_dir.iterdir()) if d.is_dir()] if skills_dir.exists() else []
-    catalog_chars = sum(40 + len(n) for n in skill_names)
-    rows.append({'label': 'skills (catalog)', 'lines': len(skill_names), 'chars': catalog_chars, 'tokens': max(1, catalog_chars // 4), 'note': f'{len(skill_names)} skills (catalog only; bodies loaded on demand)'})
-    rows.append(_row('task.md *', _read(core / 'task.md'), 'task activations only'))
-    return {'rows': rows}

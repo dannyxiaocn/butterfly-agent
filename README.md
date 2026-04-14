@@ -88,7 +88,6 @@ butterfly log <id>
 butterfly tasks <id>
 butterfly stop <id>
 butterfly start <id>
-butterfly meta butterfly_dev
 butterfly web
 
 butterfly-server                # start server (auto-daemonize)

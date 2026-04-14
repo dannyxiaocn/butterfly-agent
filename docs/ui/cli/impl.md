@@ -5,21 +5,23 @@
 | File | Purpose |
 |------|---------|
 | `main.py` | Subcommand registration and top-level orchestration |
-| `chat.py` | Legacy single-shot chat helper for `butterfly chat` |
-| `new_agent.py` | Entity scaffolding |
-| `friends.py`, `kanban.py`, `visit.py` | Read-only session views |
-| `repo_skill.py` | Repo overview skill generation |
+| `chat.py` | Single-shot chat helper for `butterfly chat` |
+| `new_agent.py` | Entity scaffolding (`butterfly entity new`) |
 
-## Common Commands
+## Available Commands
 
 ```bash
-butterfly chat "message"
-butterfly new --entity agent
-butterfly sessions
-butterfly log <id>
-butterfly prompt-stats <id>
-butterfly token-report <id>
-butterfly meta <entity>
+butterfly chat MESSAGE                  # new session + send message
+butterfly chat --session ID MSG         # send to existing session
+butterfly new [ID] [--entity NAME]      # create session (no message)
+butterfly sessions                      # list sessions
+butterfly log [ID] [-n N] [--watch]     # conversation history
+butterfly tasks [ID]                    # session task board
+butterfly stop ID                       # stop session
+butterfly start ID                      # resume session
+butterfly entity new ...                # scaffold a new entity
+butterfly server                        # start the server daemon
+butterfly web                           # start the web UI
 ```
 
 ## Server Auto-Start
