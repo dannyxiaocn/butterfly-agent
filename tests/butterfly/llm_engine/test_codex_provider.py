@@ -226,3 +226,193 @@ def test_consume_extra_blocks_drains_pending_reasoning():
 def test_registry_has_codex_oauth():
     from butterfly.llm_engine.registry import _REGISTRY
     assert "codex-oauth" in _REGISTRY
+
+
+# ── SSE stream parser ───────────────────────────────────────────────
+
+
+class _FakeSSEResponse:
+    """Mimics httpx stream response — yields byte chunks via aiter_bytes()."""
+
+    def __init__(self, chunks: list[bytes]) -> None:
+        self._chunks = chunks
+
+    async def aiter_bytes(self):
+        for c in self._chunks:
+            yield c
+
+
+def _sse_event(event_dict: dict) -> bytes:
+    return f"data: {json.dumps(event_dict)}\n\n".encode()
+
+
+@pytest.mark.asyncio
+async def test_parse_sse_stream_text_and_tool_call():
+    from butterfly.llm_engine.providers.codex import _parse_sse_stream
+
+    chunks = [
+        _sse_event({"type": "response.output_text.delta", "delta": "Hello "}),
+        _sse_event({"type": "response.output_text.delta", "delta": "world"}),
+        _sse_event({
+            "type": "response.output_item.added",
+            "item": {"type": "function_call", "call_id": "tc-42", "name": "bash"},
+        }),
+        _sse_event({
+            "type": "response.function_call_arguments.delta",
+            "call_id": "tc-42",
+            "delta": '{"cmd":',
+        }),
+        _sse_event({
+            "type": "response.function_call_arguments.delta",
+            "call_id": "tc-42",
+            "delta": ' "ls"}',
+        }),
+        _sse_event({
+            "type": "response.output_item.done",
+            "item": {
+                "type": "function_call",
+                "call_id": "tc-42",
+                "arguments": '{"cmd": "ls"}',
+            },
+        }),
+        _sse_event({
+            "type": "response.completed",
+            "response": {
+                "usage": {
+                    "input_tokens": 20,
+                    "output_tokens": 8,
+                    "input_tokens_details": {"cached_tokens": 5},
+                    "output_tokens_details": {"reasoning_tokens": 4},
+                }
+            },
+        }),
+    ]
+
+    streamed: list[str] = []
+    text, tool_calls, usage, reasoning_items = await _parse_sse_stream(
+        _FakeSSEResponse(chunks), streamed.append
+    )
+
+    assert streamed == ["Hello ", "world"]
+    assert text == "Hello world"
+    assert len(tool_calls) == 1
+    assert tool_calls[0].id == "tc-42"
+    assert tool_calls[0].name == "bash"
+    assert tool_calls[0].input == {"cmd": "ls"}
+    assert usage.input_tokens == 15  # 20 - 5 cached
+    assert usage.cache_read_tokens == 5
+    assert usage.reasoning_tokens == 4
+    assert reasoning_items == []
+
+
+@pytest.mark.asyncio
+async def test_parse_sse_stream_captures_reasoning_items():
+    from butterfly.llm_engine.providers.codex import _parse_sse_stream
+
+    chunks = [
+        _sse_event({
+            "type": "response.output_item.done",
+            "item": {
+                "type": "reasoning",
+                "id": "rs_9",
+                "summary": [{"type": "summary_text", "text": "thinking"}],
+                "encrypted_content": "OPAQUE",
+            },
+        }),
+        _sse_event({"type": "response.output_text.delta", "delta": "ok"}),
+        _sse_event({"type": "response.completed", "response": {"usage": {}}}),
+    ]
+
+    text, tool_calls, usage, reasoning_items = await _parse_sse_stream(
+        _FakeSSEResponse(chunks), None
+    )
+
+    assert text == "ok"
+    assert tool_calls == []
+    assert len(reasoning_items) == 1
+    assert reasoning_items[0]["id"] == "rs_9"
+    assert reasoning_items[0]["encrypted_content"] == "OPAQUE"
+
+
+@pytest.mark.asyncio
+async def test_parse_sse_stream_raises_on_incomplete_context_length():
+    from butterfly.llm_engine.providers.codex import _parse_sse_stream
+
+    chunks = [
+        _sse_event({
+            "type": "response.incomplete",
+            "response": {"incomplete_details": {"reason": "context_length"}},
+        }),
+    ]
+    with pytest.raises(ContextWindowExceededError):
+        await _parse_sse_stream(_FakeSSEResponse(chunks), None)
+
+
+@pytest.mark.asyncio
+async def test_parse_sse_stream_ignores_malformed_json():
+    from butterfly.llm_engine.providers.codex import _parse_sse_stream
+
+    chunks = [
+        b"data: not json\n\n",
+        _sse_event({"type": "response.output_text.delta", "delta": "hi"}),
+        _sse_event({"type": "response.completed", "response": {"usage": {}}}),
+    ]
+    text, _, _, _ = await _parse_sse_stream(_FakeSSEResponse(chunks), None)
+    assert text == "hi"
+
+
+@pytest.mark.asyncio
+async def test_parse_sse_stream_handles_split_events_across_chunks():
+    """An event split mid-payload across two byte chunks must still parse."""
+    from butterfly.llm_engine.providers.codex import _parse_sse_stream
+
+    payload = _sse_event({"type": "response.output_text.delta", "delta": "split"})
+    completed = _sse_event({"type": "response.completed", "response": {"usage": {}}})
+    mid = len(payload) // 2
+    chunks = [payload[:mid], payload[mid:], completed]
+
+    text, _, _, _ = await _parse_sse_stream(_FakeSSEResponse(chunks), None)
+    assert text == "split"
+
+
+# ── request body: prompt_cache_key absence ──────────────────────────
+
+
+def test_build_request_body_omits_prompt_cache_key_when_empty():
+    body = _build_request_body(
+        "gpt-5-codex", "sys", [Message(role="user", content="hi")], [],
+        thinking=False, prompt_cache_key="",
+    )
+    assert "prompt_cache_key" not in body
+
+
+def test_build_request_body_serializes_tools():
+    class _T:
+        def to_api_dict(self):
+            return {"name": "bash", "description": "Run", "input_schema": {"type": "object"}}
+
+    body = _build_request_body(
+        "gpt-5-codex", "sys", [Message(role="user", content="hi")], [_T()],
+        thinking=False, prompt_cache_key="c",
+    )
+    assert body["tools"][0]["type"] == "function"
+    assert body["tools"][0]["name"] == "bash"
+    assert body["tools"][0]["strict"] is False
+
+
+# ── assistant message with no encrypted_content on reasoning ────────
+
+
+def test_convert_assistant_reasoning_without_encrypted_content():
+    """If the server didn't return encrypted_content, replay must still be valid (no crash)."""
+    msg = Message(
+        role="assistant",
+        content=[
+            {"type": "reasoning", "id": "rs_x", "summary": []},
+            {"type": "text", "text": "t"},
+        ],
+    )
+    items = _convert_assistant(msg)
+    assert items[0]["type"] == "reasoning"
+    assert "encrypted_content" not in items[0]
+    assert items[0]["id"] == "rs_x"
