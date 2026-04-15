@@ -229,3 +229,110 @@ def test_init_session_writes_manifest_after_config_populated(tmp_path):
             f"had a real model (observed model: {observed['config_model']!r}) — "
             "watcher would race with init_session."
         )
+
+
+# ── Regression: _needs_seed hardened against non-mapping YAML ──────────────────
+
+def _run_init_with_stub_config(tmp_path, *, stub_content: str) -> dict:
+    """Run init_session with a pre-seeded stub config.yaml, return the
+    resulting session config as a dict.
+
+    The stub content simulates various ways a racing ensure_config() or a
+    hand-edited file could leave the session config.yaml in a non-mapping /
+    malformed / empty shape. The fix under test is `_needs_seed`: regardless
+    of stub content, init_session should re-seed from the entity config.
+    """
+    unique_entity = f"unit_test_entity_{uuid.uuid4().hex}"
+    with TemporaryDirectory() as td, patch(
+        "butterfly.session_engine.entity_state._create_meta_venv",
+        side_effect=lambda p: p / ".venv",
+    ), patch(
+        "butterfly.session_engine.session_init._create_session_venv",
+        side_effect=lambda p: p / ".venv",
+    ), patch("butterfly.session_engine.entity_state.start_meta_agent"):
+        root = Path(td)
+        entity_base = root / "entity"
+        sessions_base = root / "sessions"
+        system_base = root / "_sessions"
+
+        entity_dir = entity_base / unique_entity
+        (entity_dir / "prompts").mkdir(parents=True)
+        (entity_dir / "tools.md").write_text("", encoding="utf-8")
+        (entity_dir / "skills.md").write_text("", encoding="utf-8")
+        (entity_dir / "prompts" / "system.md").write_text("system", encoding="utf-8")
+        (entity_dir / "prompts" / "task.md").write_text("task", encoding="utf-8")
+        (entity_dir / "prompts" / "env.md").write_text("env", encoding="utf-8")
+        (entity_dir / "config.yaml").write_text(
+            "provider: anthropic\nmodel: claude-demo\n",
+            encoding="utf-8",
+        )
+
+        session_id = "stub-check"
+        core_dir = sessions_base / session_id / "core"
+        core_dir.mkdir(parents=True)
+        (core_dir / "config.yaml").write_text(stub_content, encoding="utf-8")
+
+        init_session(
+            session_id=session_id,
+            entity_name=unique_entity,
+            sessions_base=sessions_base,
+            system_sessions_base=system_base,
+            entity_base=entity_base,
+        )
+
+        from butterfly.session_engine.session_config import read_config
+        return read_config(sessions_base / session_id)
+
+
+def test_needs_seed_reseeds_when_stub_is_empty(tmp_path):
+    """Empty file → safe_load returns None → treat as needs_seed."""
+    cfg = _run_init_with_stub_config(tmp_path, stub_content="")
+    assert cfg["model"] == "claude-demo"
+    assert cfg["provider"] == "anthropic"
+
+
+def test_needs_seed_reseeds_when_stub_is_yaml_list(tmp_path):
+    """YAML list → safe_load returns a list (not a dict) → needs_seed."""
+    cfg = _run_init_with_stub_config(tmp_path, stub_content="[]\n")
+    assert cfg["model"] == "claude-demo"
+    assert cfg["provider"] == "anthropic"
+
+
+def test_needs_seed_reseeds_when_stub_is_scalar(tmp_path):
+    """YAML scalar → safe_load returns a string → needs_seed."""
+    cfg = _run_init_with_stub_config(tmp_path, stub_content="just a string\n")
+    assert cfg["model"] == "claude-demo"
+    assert cfg["provider"] == "anthropic"
+
+
+def test_needs_seed_reseeds_when_stub_is_invalid_yaml(tmp_path):
+    """Genuinely broken YAML → safe_load raises YAMLError → needs_seed."""
+    # Unclosed flow mapping raises yaml.YAMLError.
+    cfg = _run_init_with_stub_config(tmp_path, stub_content="{unclosed: \n")
+    assert cfg["model"] == "claude-demo"
+    assert cfg["provider"] == "anthropic"
+
+
+def test_needs_seed_reseeds_when_stub_has_model_but_no_provider(tmp_path):
+    """Stub with model set but provider=None (hypothetical hand-edit) — the
+    widened predicate should still trigger a reseed from the entity.
+    """
+    cfg = _run_init_with_stub_config(
+        tmp_path,
+        stub_content="model: foo\nprovider: null\n",
+    )
+    assert cfg["model"] == "claude-demo"
+    assert cfg["provider"] == "anthropic"
+
+
+def test_needs_seed_keeps_populated_stub(tmp_path):
+    """Positive control: when the existing config already has both model AND
+    provider, init_session must NOT clobber it — this is the idempotency
+    guarantee the original `if not exists()` guard was protecting.
+    """
+    cfg = _run_init_with_stub_config(
+        tmp_path,
+        stub_content="model: preserved-model\nprovider: preserved-provider\n",
+    )
+    assert cfg["model"] == "preserved-model"
+    assert cfg["provider"] == "preserved-provider"

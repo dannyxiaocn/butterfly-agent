@@ -118,7 +118,7 @@ def init_session(
     # Create session-level Python venv (idempotent)
     _create_session_venv(session_dir)
 
-    # NOTE (v2.0.8, first-run model=null fix):
+    # NOTE (first-run race fix — see docs/butterfly/session_engine/design.md):
     # manifest.json is the watcher's discovery signal. It MUST be written LAST —
     # after sessions/<id>/core/config.yaml is populated with the entity's real
     # model and provider. If we publish manifest.json first, the server-side
@@ -173,12 +173,19 @@ def init_session(
             return True
         try:
             import yaml as _yaml
-            loaded = _yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            loaded = _yaml.safe_load(path.read_text(encoding="utf-8"))
         except Exception:
             return True
-        # Stub DEFAULT_CONFIG written by ensure_config has model=None; real
-        # entity configs always carry a model string.
-        return not loaded.get("model")
+        # safe_load returns None for empty files, and may return lists/scalars
+        # for malformed-but-valid YAML. Anything that isn't a mapping is
+        # treated as "needs seed" — safer to overwrite a broken stub with the
+        # real entity config than to trust it.
+        if not isinstance(loaded, dict):
+            return True
+        # Stub DEFAULT_CONFIG written by ensure_config has model=None and
+        # provider=None; real entity configs always carry both. If either
+        # is missing/falsy, re-seed from the entity.
+        return not loaded.get("model") or not loaded.get("provider")
 
     if _needs_seed(session_config_path):
         if meta_config_path.exists() and meta_config_path.read_text(encoding="utf-8").strip():
