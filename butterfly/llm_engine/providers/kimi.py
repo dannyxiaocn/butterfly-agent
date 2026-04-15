@@ -2,6 +2,7 @@ from __future__ import annotations
 import os
 from typing import ClassVar
 
+from butterfly.llm_engine.errors import AuthError
 from butterfly.llm_engine.providers.anthropic import AnthropicProvider
 
 # Moonshot's Kimi Code gateway exposes BOTH an Anthropic-compatible surface
@@ -34,12 +35,24 @@ class KimiForCodingProvider(AnthropicProvider):
         max_tokens: int = 8096,
         base_url: str | None = None,
     ) -> None:
+        resolved_key = (
+            api_key
+            or os.environ.get("KIMI_FOR_CODING_API_KEY")
+            or os.environ.get("KIMI_API_KEY")
+        )
+        # NEW-6: fail fast instead of letting the Anthropic SDK raise an
+        # opaque "Could not resolve authentication method" at first request.
+        # The practical trigger is an agent switching from a failing primary
+        # to kimi-coding-plan without the env var being set.
+        if not resolved_key:
+            raise AuthError(
+                "KimiForCodingProvider requires KIMI_FOR_CODING_API_KEY (or "
+                "KIMI_API_KEY) to be set, or an explicit api_key argument.",
+                provider="kimi-coding-plan",
+                status=401,
+            )
         super().__init__(
-            api_key=(
-                api_key
-                or os.environ.get("KIMI_FOR_CODING_API_KEY")
-                or os.environ.get("KIMI_API_KEY")
-            ),
+            api_key=resolved_key,
             max_tokens=max_tokens,
             base_url=base_url or os.environ.get("KIMI_BASE_URL") or _KIMI_BASE_URL,
         )

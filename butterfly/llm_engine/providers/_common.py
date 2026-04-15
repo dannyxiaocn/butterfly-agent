@@ -41,7 +41,11 @@ def stringify_tool_result_content(content: Any) -> str:
         for block in content:
             if isinstance(block, dict):
                 if block.get("type") == "text":
-                    parts.append(block.get("text", ""))
+                    # Coerce to str so a misbehaving upstream emitting e.g.
+                    # ``{"type":"text", "text": 42}`` doesn't TypeError the
+                    # downstream ``"".join``.
+                    text = block.get("text", "")
+                    parts.append(text if isinstance(text, str) else str(text))
                 else:
                     btype = block.get("type", "unknown")
                     parts.append(f"[{btype} block omitted]")

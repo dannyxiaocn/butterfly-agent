@@ -98,7 +98,12 @@ class CodexProvider(Provider):
     # supports codex model IDs. See docstring for details.
     DEFAULT_MODEL: ClassVar[str] = "gpt-5.4"
 
-    def __init__(self, max_tokens: int = 8096) -> None:
+    def __init__(self, max_tokens: int | None = None) -> None:
+        # NEW-5: the ChatGPT-OAuth Codex backend rejects ``max_output_tokens``
+        # with HTTP 400 even though the public Responses API accepts it. Make
+        # the field opt-in — ``max_tokens=None`` (default) means "don't send
+        # ``max_output_tokens`` in the body"; callers who know their endpoint
+        # supports it can pass an explicit integer.
         self.max_tokens = max_tokens
         # Per-instance conversation id — used for prompt_cache_key + session_id header.
         # One provider instance = one conversation bucket from the server's POV.
@@ -191,11 +196,10 @@ class CodexProvider(Provider):
                         f"Codex request timed out: {exc}", provider="codex-oauth"
                     ) from exc
 
-        raise AuthError(
-            "Codex authentication failed after refresh",
-            provider="codex-oauth",
-            status=401,
-        )
+        # Every control-flow path inside the `for attempt in range(2)` loop
+        # either returns (success) or raises (401-after-refresh, non-200
+        # status, timeout). The loop never falls through.
+        raise AssertionError("unreachable: codex retry loop fell through")  # pragma: no cover
 
     # ------------------------------------------------------------------
     # Auth helpers

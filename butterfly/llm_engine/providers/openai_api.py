@@ -29,8 +29,12 @@ if TYPE_CHECKING:
 
 # Reasoning-family models want ``max_completion_tokens`` and ``reasoning_effort``,
 # and reject ``temperature`` / ``top_p`` / ``presence_penalty`` / ``frequency_penalty``.
-# Anchor on word-boundary after the family token so "gpt-5x-legacy" / "gpt-oss-custom"
-# do NOT match — only real family names like "gpt-5", "gpt-5.4", "gpt-5-codex", "o3-mini".
+#
+# Anchoring: ``gpt-5`` is followed only by end-of-string / ``.`` / ``-`` so
+# ``gpt-5x-legacy`` (a hypothetical non-reasoning derivative) does NOT match.
+# In contrast ``gpt-oss-*`` and ``o\d+-*`` match any suffix on purpose — every
+# member of those families (``gpt-oss-20b``, ``gpt-oss-120b``, custom fine-tunes
+# like ``gpt-oss-custom``, ``o3-mini``, ``o4-mini-high`` …) is a reasoning model.
 _REASONING_MODEL_RE = re.compile(r"^(o\d+(?:$|-)|gpt-5(?:$|\.|-)|gpt-oss(?:$|-))", re.IGNORECASE)
 
 # Valid reasoning_effort values per OpenAI schema.

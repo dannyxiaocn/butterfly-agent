@@ -269,7 +269,16 @@ def _to_api_messages(
     result = []
     for i, msg in enumerate(messages):
         role = "user" if msg.role == "tool" else msg.role
-        content = _sanitize_content_for_anthropic(msg.content)
+        # Only sanitize ASSISTANT content — user messages and tool_result
+        # payloads may legitimately contain custom block types (images,
+        # documents, etc.) that the filter would otherwise strip away.
+        # The cross-provider fallback hazard (NEW-1) is purely about
+        # assistant-origin reasoning blocks.
+        content = (
+            _sanitize_content_for_anthropic(msg.content)
+            if msg.role == "assistant"
+            else msg.content
+        )
 
         # Add cache_control at the specified breakpoint
         if i == cache_breakpoint_index:
