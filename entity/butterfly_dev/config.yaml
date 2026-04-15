@@ -5,7 +5,7 @@ model: gpt-5.4
 provider: codex-oauth
 fallback_model: kimi-for-coding
 fallback_provider: kimi-coding-plan
-max_iterations: 20
+max_iterations: 1000
 thinking: true
 thinking_budget: 8000
 thinking_effort: high

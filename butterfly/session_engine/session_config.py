@@ -18,7 +18,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "provider": None,
     "fallback_model": None,
     "fallback_provider": None,
-    "max_iterations": 20,
+    "max_iterations": 1000,
     "thinking": False,
     "thinking_budget": 8000,
     "thinking_effort": "high",

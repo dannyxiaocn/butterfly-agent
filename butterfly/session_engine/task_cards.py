@@ -8,7 +8,8 @@ Each task card is a .json file:
       "status": "pending",
       "interval": 3600,
       "start_at": "2026-04-12T11:00:00",
-      "end_at": "2026-04-19T10:00:00",
+      "end_at": null,                        # None = never expires (default)
+      # e.g. set "end_at": "2026-04-19T10:00:00" for a bounded window
       "created_at": "2026-04-12T10:00:00",
       "last_started_at": null,
       "last_finished_at": null,
@@ -27,11 +28,13 @@ Interval: null = one-shot, N = recurring every N seconds.
 Scheduling:
 - start_at: earliest time this task can fire. Default for recurring = created_at + interval;
             for one-shot = created_at (immediate).
-- end_at:   auto-expire time. Default = created_at + 7 days; if interval > 7 days then
-            created_at + 10 * interval. Hour-level granularity (truncated to the hour).
+- end_at:   auto-expire time (ISO string). None = never expires (no auto-expiry).
+            Callers that want a bounded window set an explicit ISO timestamp; the
+            duty card seeded for every meta session is end_at=None so long-running
+            agents do not self-cancel after a week.
 
 A task with status=pending fires when:
-  now >= start_at AND now < end_at AND
+  now >= start_at AND (end_at is None OR now < end_at) AND
   (last_finished_at is None OR (now - last_finished_at) >= interval)
 """
 from __future__ import annotations
@@ -40,9 +43,6 @@ import json
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-
-_SEVEN_DAYS = 7 * 24 * 3600  # seconds
-
 
 def _ceil_to_hour(dt: datetime) -> datetime:
     """Round a datetime UP to the next whole hour (unless already exact)."""
@@ -68,18 +68,6 @@ def _default_start_at(created: datetime, interval: float | None) -> str:
     return _floor_to_hour(created).isoformat()
 
 
-def _default_end_at(created: datetime, interval: float | None) -> str:
-    """Compute default end_at (hour-level granularity).
-
-    Default 7 days. If interval > 7 days → 10 * interval instead.
-    """
-    if interval is not None and interval > _SEVEN_DAYS:
-        raw = created + timedelta(seconds=interval * 10)
-    else:
-        raw = created + timedelta(days=7)
-    return _ceil_to_hour(raw).isoformat()
-
-
 @dataclass
 class TaskCard:
     """A single task card stored as core/tasks/<name>.json."""
@@ -96,15 +84,17 @@ class TaskCard:
     progress: str = ""
 
     def __post_init__(self) -> None:
-        """Fill start_at / end_at defaults if not set."""
+        """Fill start_at default if not set.
+
+        end_at is intentionally NOT auto-filled: None means 'never expires'.
+        Callers that want a bounded window pass an explicit ISO timestamp.
+        """
         try:
             created = datetime.fromisoformat(self.created_at)
         except (ValueError, TypeError):
             created = datetime.now()
         if self.start_at is None:
             self.start_at = _default_start_at(created, self.interval)
-        if self.end_at is None:
-            self.end_at = _default_end_at(created, self.interval)
 
     def is_due(self, now: datetime | None = None) -> bool:
         """True if this card should fire now."""

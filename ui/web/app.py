@@ -5,7 +5,7 @@ via POST. FastAPI is a thin HTTP wrapper over FileIPC — no agent logic here.
 
 Usage:
     butterfly-web
-    butterfly-web --port 8080 --sessions-dir ./sessions
+    butterfly-web --port 7720 --sessions-dir ./sessions
     python -m butterfly.ui.web
 """
 from __future__ import annotations
@@ -49,7 +49,7 @@ from butterfly.service.sessions_service import _validate_session_id as _service_
 SESSIONS_DIR = Path(__file__).parent.parent.parent / "sessions"
 _SYSTEM_SESSIONS_DIR = Path(__file__).parent.parent.parent / "_sessions"
 _DEFAULT_ENTITY = "entity/agent"
-_DEFAULT_PORT = 8080
+_DEFAULT_PORT = 7720
 _DIST_DIR = Path(__file__).parent / "frontend" / "dist"
 
 
@@ -448,7 +448,7 @@ def main() -> None:
     from butterfly.runtime.env import load_dotenv
     load_dotenv()
     parser = argparse.ArgumentParser(description="Butterfly Web UI")
-    parser.add_argument("--port", type=int, default=_DEFAULT_PORT)
+    parser.add_argument("--port", type=int, default=_DEFAULT_PORT, help="HTTP port (default: %(default)s)")
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--sessions-dir", default=str(SESSIONS_DIR), metavar="DIR")
     parser.add_argument("--system-sessions-dir", default=str(_SYSTEM_SESSIONS_DIR), metavar="DIR")

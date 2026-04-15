@@ -13,7 +13,7 @@ butterfly chat --entity agent "build a small CLI"
 - `provider`: codex-oauth
 - `fallback_model`: kimi-for-coding
 - `fallback_provider`: kimi-coding-plan
-- `max_iterations`: 20
+- `max_iterations`: 1000
 - `params.thinking`: true
 
 ## What It Ships

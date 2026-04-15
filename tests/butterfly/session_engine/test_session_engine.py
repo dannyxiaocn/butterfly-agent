@@ -95,7 +95,7 @@ class SessionEngineTest(unittest.TestCase):
             (meta_dir / "core" / "memory.md").write_text("meta memory", encoding="utf-8")
             (meta_dir / "core" / "memory" / "layer.md").write_text("layer", encoding="utf-8")
             (meta_dir / "core" / "tools.md").write_text("bash\n", encoding="utf-8")
-            (meta_dir / "core" / "skills.md").write_text("dev-butterfly\n", encoding="utf-8")
+            (meta_dir / "core" / "skills.md").write_text("butterfly\n", encoding="utf-8")
             (meta_dir / "playground" / "seed.txt").write_text("seed", encoding="utf-8")
 
             def fake_create_session_venv(session_dir: Path) -> Path:

@@ -79,7 +79,7 @@ Each task card is a `.json` file in `core/tasks/`:
   "status": "pending",
   "interval": 3600,
   "start_at": "2026-04-12T11:00:00",
-  "end_at": "2026-04-19T10:00:00",
+  "end_at": null,
   "created_at": "2026-04-12T10:00:00",
   "last_started_at": null,
   "last_finished_at": null,
@@ -87,6 +87,8 @@ Each task card is a `.json` file in `core/tasks/`:
   "progress": ""
 }
 ```
+
+`end_at: null` (default) means the card never auto-expires. Set an explicit ISO timestamp (e.g. `"2026-04-19T10:00:00"`) to create a bounded window.
 
 ### Status values
 
@@ -100,10 +102,10 @@ Each task card is a `.json` file in `core/tasks/`:
 ### Scheduling (`start_at` / `end_at`)
 
 - `start_at`: earliest time a task can fire. Default for recurring = `ceil(created_at + interval)`; for one-shot = `floor(created_at)`.
-- `end_at`: auto-expire time. Default = `ceil(created_at + 7 days)`; if interval > 7 days then `ceil(created_at + 10 * interval)`.
+- `end_at`: auto-expire time. No default — `None` means the card never expires. Callers that want a bounded window set an explicit ISO timestamp.
 - Hour-level granularity: `_ceil_to_hour()` rounds up, `_floor_to_hour()` truncates down.
-- A task with `status=pending` fires when: `now >= start_at AND now < end_at AND (never finished OR interval elapsed)`.
-- Past `end_at` → auto-marked `finished` and persisted to disk by `load_due_cards()`.
+- A task with `status=pending` fires when: `now >= start_at AND (end_at is None OR now < end_at) AND (never finished OR interval elapsed)`.
+- If `end_at` is set and `now >= end_at` → auto-marked `finished` and persisted to disk by `load_due_cards()`. Cards with `end_at=None` are never auto-expired.
 
 ## Important Behaviors
 

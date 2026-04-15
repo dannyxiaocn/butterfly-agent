@@ -33,7 +33,7 @@ class Agent:
         model: Model identifier string (default: claude-sonnet-4-6).
         provider: LLM provider instance. If omitted, AnthropicProvider
                   is used with the ANTHROPIC_API_KEY environment variable.
-        max_iterations: Max tool-call loops per run (default: 20).
+        max_iterations: Max tool-call loops per run (default: 1000).
     """
 
     def __init__(
@@ -43,7 +43,7 @@ class Agent:
         skills: list[Skill] | None = None,
         model: str = _DEFAULT_MODEL,
         provider: Provider | None = None,
-        max_iterations: int = 20,
+        max_iterations: int = 1000,
         task_prompt: str = "",
         env_template: str = "",
         fallback_model: str = "",

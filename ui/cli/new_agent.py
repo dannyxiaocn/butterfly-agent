@@ -26,7 +26,7 @@ name: {name}
 description: ""
 model: claude-sonnet-4-6
 provider: anthropic
-max_iterations: 20
+max_iterations: 1000
 thinking: false
 thinking_budget: 8000
 thinking_effort: high

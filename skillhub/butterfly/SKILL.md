@@ -1,17 +1,156 @@
 ---
-name: dev-butterfly
+name: butterfly
 description: >
-  Development context for the Butterfly codebase. Load this skill for tasks that
-  change Butterfly itself: runtime work, provider changes, session lifecycle,
-  CLI or web changes, tool/skill engine work, entity updates, documentation,
-  tests, or repo-level maintenance.
+  Butterfly agent-runtime guide — covers both CLI usage (running agents,
+  managing sessions, creating entities, viewing logs) and development on
+  the Butterfly codebase itself (runtime, providers, session lifecycle,
+  CLI/web changes, tool/skill engine, entity updates, tests, docs).
+  Load this skill whenever the user asks how to use Butterfly from the
+  terminal OR asks for work that changes Butterfly itself.
 ---
 
-# Butterfly Developer Guide
+# Butterfly Agent — Usage and Development Guide
 
-Read the code and tests before trusting any documentation. Keep changes local to the task scope. Update docs and tests together with behavior changes.
+Butterfly is a minimal Python agent runtime. Agents persist across conversations via filesystem-based sessions. This skill covers two audiences:
 
-## Repo Layout
+1. **Using Butterfly** — run the CLI, drive agents, manage sessions (Part A).
+2. **Developing Butterfly** — change the codebase itself (Part B).
+
+Read the code and tests before trusting documentation. Keep changes local to the task scope. Update docs and tests together with behaviour changes.
+
+---
+
+## Part A — Using Butterfly (CLI guide)
+
+### Core Concepts
+
+- **Entity** — a reusable agent template (`entity/<name>/`): config, prompts, tools, skills
+- **Session** — a running instance of an entity (`sessions/<id>/`): agent-visible workspace
+- **Meta session** — mutable shared seed for all sessions of an entity (`sessions/<entity>_meta/`)
+- **Server** — background daemon that watches for sessions and runs agent loops
+
+### Quick Start
+
+```bash
+# Start the server (auto-daemonizes)
+butterfly server
+# or directly:
+butterfly-server start
+
+# Send a message (auto-starts server if needed)
+butterfly chat "Hello, what can you do?"
+
+# Use a specific entity
+butterfly chat --entity butterfly_dev "Review the codebase"
+
+# Continue an existing session
+butterfly chat --session 2026-04-13_10-00-00-a1b2 "What's the status?"
+```
+
+### All CLI Commands
+
+#### Session Interaction
+
+| Command | Description |
+|---------|-------------|
+| `butterfly chat MESSAGE` | Send a message; creates a new session or continues one |
+| `butterfly new [ID]` | Create a session without sending a message |
+| `butterfly stop SESSION_ID` | Stop a session's heartbeat loop |
+| `butterfly start SESSION_ID` | Resume a stopped session |
+
+**`chat` flags:**
+- `--session ID` — continue an existing session
+- `--entity NAME` — entity to use (default: `agent`)
+- `--no-wait` — fire-and-forget (don't block for reply)
+- `--timeout N` — seconds to wait (default: 300)
+- `--keep-alive` — keep server running after reply
+- `--inject-memory KEY=VALUE` or `KEY=@FILE` — inject memory layers
+
+**`new` flags:**
+- `--entity NAME` — entity to init from (default: `agent`)
+- `--heartbeat N` — heartbeat interval in seconds
+- `--inject-memory KEY=VALUE` — inject memory at creation
+
+#### Monitoring & Views
+
+| Command | Description |
+|---------|-------------|
+| `butterfly sessions` | List all sessions with status |
+| `butterfly log [SESSION_ID]` | Show conversation history |
+| `butterfly tasks [SESSION_ID]` | Show task cards |
+
+**`log` flags:**
+- `-n N` — number of turns (default: 5)
+- `--since TIMESTAMP` — filter by time (ISO-8601, epoch, or `now`)
+- `--watch` — poll for new turns every 2s
+
+#### Entity Management
+
+| Command | Description |
+|---------|-------------|
+| `butterfly entity new` | Scaffold a new entity (interactive) |
+
+**`entity new` flags:**
+- `-n NAME` — skip interactive prompt
+- `--init-from SOURCE` — copy from existing entity
+- `--blank` — empty entity with placeholders
+
+#### Server / Web Management
+
+| Command | Description |
+|---------|-------------|
+| `butterfly server` | Start the server daemon |
+| `butterfly-server start` | Start server (auto-daemonizes) |
+| `butterfly-server stop` | Stop the server |
+| `butterfly-server status` | Check if server is running |
+| `butterfly-server update` | Stop, reinstall, restart |
+| `butterfly-server --foreground` | Run in current process |
+| `butterfly web` | Start the Web UI (default port 7720) |
+| `butterfly-web --port N` | Start Web UI on a custom port |
+
+### Session Lifecycle
+
+```
+entity/ ──create──> sessions/<id>/ ──chat──> agent runs ──stop──> napping
+                                                  ↑                  │
+                                                  └────start─────────┘
+```
+
+1. `butterfly new` or `butterfly chat` creates a session from an entity template
+2. Server picks up the session and runs the agent loop
+3. Agent reads/writes `core/` files (memory, tasks, tools, skills)
+4. `butterfly stop` pauses; `butterfly start` resumes
+
+### Practical Workflows
+
+**Quick one-shot question:**
+```bash
+butterfly chat "Explain how Python generators work"
+```
+
+**Long-running dev session:**
+```bash
+butterfly new --entity butterfly_dev my-feature
+butterfly chat --session my-feature "Add pagination to the API"
+butterfly log --session my-feature --watch  # monitor progress
+```
+
+**Inject context into a session:**
+```bash
+butterfly chat --inject-memory spec=@design_doc.md "Implement this spec"
+```
+
+**Check all agent activity:**
+```bash
+butterfly sessions              # list all sessions with status
+butterfly tasks <SESSION_ID>    # inspect a specific session's task board
+```
+
+---
+
+## Part B — Developing Butterfly (contributor guide)
+
+### Repo Layout
 
 ```text
 butterfly/           runtime implementation
@@ -31,32 +170,32 @@ tests/              mirrors source layout
 docs/               documentation and task boards
 ```
 
-## Key Design Principles
+### Key Design Principles
 
-### Filesystem-as-Everything
+#### Filesystem-as-Everything
 - Agents read/write session directories; IPC via `context.jsonl` + `events.jsonl`
 - `entity/` is read-only template; all mutable state in `sessions/`
 - `sessions/<entity>_meta/` holds entity-level mutable state
 
-### Hub Pattern (toolhub + skillhub)
+#### Hub Pattern (toolhub + skillhub)
 - All built-in tools live in `toolhub/<name>/` with `tool.json` + `executor.py`
 - All built-in skills live in `skillhub/<name>/SKILL.md`
 - Entity and session `tools.md` / `skills.md` only list **enabled** names (one per line)
 - Agent-created tools (`core/tools/`) and skills (`core/skills/`) are session-local extensions
 
-### Progressive Disclosure (Skills)
+#### Progressive Disclosure (Skills)
 - File-backed skills render as `<available_skills>` catalog in system prompt
 - Model loads full skill body on demand via the `skill` tool
 - Inline skills (no file location) inject body directly
 
-### Dependency Flow
+#### Dependency Flow
 ```
 UI → runtime → session_engine → core
 ```
 - `session_engine` never imports `runtime` (except `git_coordinator`)
 - `core` should stay low-dependency, but currently depends on `llm_engine` and `skill_engine` in a few places
 
-## Package Boundaries
+### Package Boundaries
 
 | Package | Owns | Does NOT own |
 |---------|------|-------------|
@@ -67,7 +206,7 @@ UI → runtime → session_engine → core
 | `session_engine/` | Session lifecycle, entity config, meta-session, task cards | Central dispatch |
 | `runtime/` | Server, watcher, IPC, bridge | Entity config |
 
-## Session Model
+### Session Model
 
 ```
 entity/<name>/           read-only template
@@ -88,7 +227,7 @@ sessions/<id>/           agent-visible runtime
       ├── skills.md      enabled skillhub skills
       ├── tools/         agent-created tools (.json + .sh pairs)
       ├── skills/        agent-created skills (SKILL.md dirs)
-      └── tasks/         task cards (*.md with YAML frontmatter)
+      └── tasks/         task cards (*.json)
 
 _sessions/<id>/          system-only twin (agent never sees)
   ├── manifest.json      entity name, created_at
@@ -97,9 +236,9 @@ _sessions/<id>/          system-only twin (agent never sees)
   └── events.jsonl       live runtime events for UI streaming
 ```
 
-## How to Add Things
+### How to Add Things
 
-### Adding a built-in tool
+#### Adding a built-in tool
 
 1. Create `toolhub/<name>/tool.json` (Anthropic tool schema format)
 2. Create `toolhub/<name>/executor.py` with an executor class
@@ -107,25 +246,25 @@ _sessions/<id>/          system-only twin (agent never sees)
 4. Add the tool name to relevant entity `tools.md` files
 5. Update docs and tests
 
-### Adding a provider
+#### Adding a provider
 
 1. Create or update `butterfly/llm_engine/providers/<name>.py`
 2. Register in `butterfly/llm_engine/registry.py`
 3. Align with `butterfly/core/provider.py` contract
 4. Verify: message conversion, tool calls, streaming, token usage
 
-### Adding a built-in skill
+#### Adding a built-in skill
 
 1. Create `skillhub/<name>/SKILL.md` with frontmatter + body
 2. Add the skill name to relevant entity `skills.md` files
 3. Update docs
 
-### Adding an entity
+#### Adding an entity
 
 1. Create `entity/<name>/` with `config.yaml`, `prompts/`, `tools.md`, `skills.md` (or use `butterfly entity new -n <name> --init-from agent`)
 2. The meta session is initialized automatically the first time a child session is created from the entity (`populate_meta_from_entity` runs during `init_session`).
 
-## System Prompt Assembly
+### System Prompt Assembly
 
 Order (top to bottom):
 1. `system.md` — static system prompt (cached)
@@ -137,7 +276,7 @@ Order (top to bottom):
 
 Static prefix (`system.md` + `env.md`) uses Anthropic `cache_control: ephemeral`.
 
-## Testing
+### Testing
 
 Run the smallest scope first:
 ```bash
@@ -148,7 +287,7 @@ pytest tests/ -q
 
 Test layout mirrors source: `tests/butterfly/{core,llm_engine,tool_engine,...}/`
 
-## Practical Heuristics
+### Practical Heuristics
 
 - If a README and the code disagree, trust the code and fix the README
 - If a directory is an operational subsystem, it should have a short README

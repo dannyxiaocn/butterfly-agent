@@ -9,7 +9,6 @@ from pathlib import Path
 from butterfly.session_engine.task_cards import (
     TaskCard,
     _default_start_at,
-    _default_end_at,
     _ceil_to_hour,
     _floor_to_hour,
     ensure_card,
@@ -81,42 +80,14 @@ def test_default_start_at_large_interval():
     assert result == "2026-04-13T10:00:00"
 
 
-# ── _default_end_at ──────────────────────────────────────────────────────────
-
-
-def test_default_end_at_default_7_days():
-    """Default end_at is ceil(7 days from created)."""
-    created = datetime(2026, 4, 12, 10, 30, 0)
-    result = _default_end_at(created, interval=3600)
-    # 10:30 + 7d = 2026-04-19T10:30 → ceil → 11:00
-    assert result == "2026-04-19T11:00:00"
-
-
-def test_default_end_at_no_interval():
-    """One-shot: end_at = ceil(7 days from created)."""
-    created = datetime(2026, 4, 12, 10, 0, 0)
-    result = _default_end_at(created, interval=None)
-    # exact hour, no rounding
-    assert result == "2026-04-19T10:00:00"
-
-
-def test_default_end_at_large_interval():
-    """If interval > 7 days, end_at = ceil(10 * interval)."""
-    created = datetime(2026, 4, 12, 10, 0, 0)
-    eight_days = 8 * 24 * 3600
-    result = _default_end_at(created, interval=eight_days)
-    expected = _ceil_to_hour(created + timedelta(seconds=eight_days * 10))
-    assert result == expected.isoformat()
-
-
 # ── TaskCard defaults via __post_init__ ──────────────────────────────────────
 
 
-def test_post_init_fills_start_at_end_at():
-    """__post_init__ fills start_at/end_at when None."""
+def test_post_init_fills_start_at_leaves_end_at_none():
+    """__post_init__ fills start_at, but leaves end_at=None (never-expires default)."""
     card = TaskCard(name="t", interval=3600, created_at="2026-04-12T10:00:00")
     assert card.start_at == "2026-04-12T11:00:00"
-    assert card.end_at == "2026-04-19T10:00:00"
+    assert card.end_at is None
 
 
 def test_post_init_preserves_explicit_values():
@@ -138,11 +109,22 @@ def test_post_init_oneshot_start_at_is_created():
 
 
 def test_post_init_invalid_created_at():
-    """Invalid created_at falls back to now() for defaults."""
+    """Invalid created_at falls back to now() for start_at default; end_at stays None."""
     card = TaskCard(name="t", interval=3600, created_at="not-a-date")
-    # Should not raise; start_at/end_at should be filled
+    # Should not raise; start_at should be filled, end_at stays None (never expires)
     assert card.start_at is not None
-    assert card.end_at is not None
+    assert card.end_at is None
+
+
+def test_post_init_end_at_none_means_never_expires():
+    """end_at=None → is_due() skips end_at check (never auto-expires)."""
+    past = (datetime.now() - timedelta(hours=1)).isoformat()
+    card = TaskCard(
+        name="duty", interval=600, status="pending",
+        start_at=past, end_at=None,
+    )
+    assert card.is_due()
+    assert card.status == "pending"  # not auto-finished
 
 
 # ── Default status = pending ─────────────────────────────────────────────────
@@ -281,12 +263,12 @@ def test_from_dict_with_start_end():
     assert card.end_at == "2026-04-19T10:00:00"
 
 
-def test_from_dict_without_start_end_gets_defaults():
-    """from_dict with no start_at/end_at triggers __post_init__ defaults."""
+def test_from_dict_without_start_end_gets_default_start_only():
+    """from_dict with no start_at/end_at: __post_init__ fills start_at only."""
     d = {"name": "t", "interval": 3600, "created_at": "2026-04-12T10:00:00"}
     card = TaskCard.from_dict(d)
     assert card.start_at == "2026-04-12T11:00:00"
-    assert card.end_at == "2026-04-19T10:00:00"
+    assert card.end_at is None  # never-expires default
 
 
 def test_roundtrip_preserves_start_end(tmp_path):
@@ -380,7 +362,8 @@ def test_ensure_card_creates_with_pending(tmp_path):
     card = ensure_card(tmp_path, name="duty", interval=3600)
     assert card.status == "pending"
     assert card.start_at is not None
-    assert card.end_at is not None
+    # end_at defaults to None (never expires) — duty cards run indefinitely
+    assert card.end_at is None
 
 
 def test_ensure_card_with_explicit_start_end(tmp_path):

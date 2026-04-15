@@ -17,7 +17,7 @@
 1. **Build system prompt** via `_build_system_parts()` → `(static_prefix, dynamic_suffix)`
    - Static: `system.md` + session context (cacheable by Anthropic)
    - Dynamic: memory, memory_layers, app_notifications, agent-mode guidance, skills catalog
-2. **Iterate** up to `max_iterations` (default 20):
+2. **Iterate** up to `max_iterations` (default 1000):
    - Call `provider.complete()` with messages, tools, system prompt, model
    - If provider fails, try `_get_fallback_provider()` (configurable fallback)
    - If no tool_calls → break (agent is done)

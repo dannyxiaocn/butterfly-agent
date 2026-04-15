@@ -68,7 +68,7 @@ class AgentLoader(BaseLoader[Agent]):
             tools=tools,
             skills=skills,
             model=model,
-            max_iterations=manifest.get("max_iterations", 20),
+            max_iterations=manifest.get("max_iterations", 1000),
             task_prompt=task_prompt,
             env_template=env_template,
             fallback_model=fallback_model,

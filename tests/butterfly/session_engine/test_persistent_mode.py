@@ -216,6 +216,9 @@ def test_session_init_creates_duty_card_from_config(tmp_path):
     assert duty is not None
     assert duty.description == "Check mail"
     assert duty.interval == 3600
+    # v2.0.6 regression pin: duty cards must default to end_at=None so
+    # long-running agents don't silently auto-expire after 7 days.
+    assert duty.end_at is None
 
 
 def test_session_init_no_duty_keeps_empty_tasks(tmp_path):

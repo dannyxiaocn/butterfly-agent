@@ -15,10 +15,9 @@ butterfly chat "hello"          # auto-starts server if needed
 
 ## Using & Developing
 
-Two skills carry the full guides — load them inside Claude Code / Butterfly when you need them:
+One skill carries the full guide — load it inside Claude Code / Butterfly when you need it:
 
-- **`use-butterfly`** — how to run the CLI, manage sessions, create entities
-- **`dev-butterfly`** — how to work on the Butterfly codebase itself
+- **`butterfly`** — unified guide covering CLI usage (run agents, manage sessions, create entities) and codebase development (runtime, providers, tool/skill engine, etc.)
 
 ## Documentation
 

@@ -971,7 +971,7 @@ def main() -> None:
     _add_panel_parser(subparsers)
     _add_entity_parser(subparsers)
     _add_exec_parser(subparsers, "server", "Start the Butterfly server daemon.")
-    _add_exec_parser(subparsers, "web",    "Start the web UI at http://localhost:8080 (monitoring).")
+    _add_exec_parser(subparsers, "web",    "Start the web UI at http://localhost:7720 (monitoring).")
 
     args = parser.parse_args()
     sys.exit(args.func(args))
