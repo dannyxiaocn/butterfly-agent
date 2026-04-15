@@ -80,6 +80,17 @@ All providers accept `thinking_effort ∈ {"none", "minimal", "low", "medium", "
 
 The run loop blocks the retry only when both the provider class AND the model would be unchanged, so "same provider, different model" is a valid fallback path.
 
+## Login helpers (v2.0.7)
+
+Two CLI helpers live at `ui/cli/login.py` and are wired into the top-level `butterfly` entry point:
+
+- **`butterfly codex login`** — checks for the `codex` CLI on `PATH`, shells out to `codex login` (ChatGPT OAuth), then reads `~/.codex/auth.json` to confirm `access_token` / `refresh_token` are present and that `_extract_account_id` succeeds. If the CLI is missing, it prints install + re-verify instructions (`npm install -g @openai/codex`, then `butterfly codex login --skip-cli`). Flags: `--skip-cli` (verify only), `--no-verify` (run CLI only).
+- **`butterfly kimi login`** — prompts via `getpass.getpass` (hidden input) for a Kimi For Coding key (offering to reuse `KIMI_FOR_CODING_API_KEY` from the env if already set), upserts it into `<repo>/.env` with `0600` permissions (preserving other lines), then pings the provider via a 16-token `complete()` call against `kimi-k2-turbo-preview`. Flags: `--env-file PATH`, `--key KEY` (non-interactive), `--no-verify` (skip ping).
+
+Both write exactly where the runtime already reads: `runtime/env.py::load_dotenv` picks up `.env` at repo root for Kimi, and `codex.py::_read_auth` reads `~/.codex/auth.json` for Codex. Neither helper introduces a new config source.
+
+Default Moonshot dashboard URL hardcoded to `https://platform.moonshot.ai/console/api-keys`; override by editing `ui/cli/login.py` if the dashboard moves.
+
 ## Adding a New Provider
 
 1. Create `providers/<name>.py` implementing `Provider.complete()`.
