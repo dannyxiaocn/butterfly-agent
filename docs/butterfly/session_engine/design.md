@@ -44,6 +44,16 @@ Each entity has a meta session (`<entity>_meta`) that:
 
 When a child session starts its daemon loop, it compares its `agent_version` against the meta session's current version. If meta has advanced, a `system_notice` event is emitted — rendered in both web UI and CLI — suggesting the user start a new session to pick up the latest configuration.
 
+### `init_session()` invariant — manifest.json is the watcher's discovery signal
+
+`_sessions/<id>/manifest.json` is what `SessionWatcher._scan()` checks to decide whether to spawn a `Session` task for a given session_id. Therefore:
+
+- **manifest.json MUST be written last** in `init_session()`, only after `sessions/<id>/core/config.yaml` (and any other required seed files) is fully populated from the entity/meta.
+- If manifest.json is published early, the server-side watcher can race `init_session()` and spawn `Session(session_id)` whose `Session.__init__` calls `ensure_config(session_dir)` → that writes `DEFAULT_CONFIG` (with `model=None`, `provider=None`) into the session core before `init_session` gets a chance to copy the real config. Once the stub is on disk, the `if not session_config_path.exists()` guard inside `init_session()` would silently skip the copy, leaving the session permanently stuck on `model: null`.
+- As a belt-and-braces safeguard, `init_session()` also treats a config with `model` unset/null as "still needs seeding" rather than a finished session config. This way, even if a different code path writes a stub config first, the entity's model/provider still make it onto disk.
+
+This invariant was added in v2.0.8 after a first-run repro: `butterfly-server` daemon + `butterfly new` would consistently produce `sessions/<id>/core/config.yaml` with `model: null`.
+
 ## Memory layers — on-demand recall (v2.0.5, β)
 
 **Change from v2.0.x**: previously, every file under `core/memory/*.md` was loaded into `Agent.memory_layers` and injected into the system prompt (with a 60-line truncation). Starting v2.0.5, sub-memory is **not** injected into the prompt. Only `core/memory.md` (main) is.

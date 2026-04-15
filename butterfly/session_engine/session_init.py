@@ -118,16 +118,16 @@ def init_session(
     # Create session-level Python venv (idempotent)
     _create_session_venv(session_dir)
 
-    # Write manifest (always overwritten so entity is current)
-    manifest = {
-        "session_id": session_id,
-        "entity": entity_name,
-        "created_at": datetime.now().isoformat(),
-    }
-    (system_dir / "manifest.json").write_text(
-        json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
-    )
-
+    # NOTE (v2.0.8, first-run model=null fix):
+    # manifest.json is the watcher's discovery signal. It MUST be written LAST —
+    # after sessions/<id>/core/config.yaml is populated with the entity's real
+    # model and provider. If we publish manifest.json first, the server-side
+    # watcher races us: it spawns Session(session_id) whose Session.__init__
+    # calls ensure_config(session_dir), which writes DEFAULT_CONFIG
+    # (model=None, provider=None) before init_session's config copy runs.
+    # Our `if not session_config_path.exists()` guard then skips the real
+    # copy, leaving model=null persisted on disk. The manifest write is
+    # deferred to the end of this function for that reason.
     entity_dir = ent_base / entity_name
 
     # Config always comes from meta session; meta is initially populated from entity.
@@ -159,10 +159,29 @@ def init_session(
             break
 
     # Copy config.yaml from meta (or entity) into session core/.
+    #
+    # If a stub config.yaml already exists (e.g. a racing Session.__init__
+    # called ensure_config() and wrote DEFAULT_CONFIG before we got here),
+    # we still need to seed model/provider from the entity — otherwise the
+    # session ships with `model: null` and the agent has no model to run
+    # (v2.0.8 first-run bug).
     meta_config_path = meta_core_dir / "config.yaml"
     session_config_path = core_dir / "config.yaml"
-    if not session_config_path.exists():
-        if meta_config_path.exists():
+
+    def _needs_seed(path: Path) -> bool:
+        if not path.exists():
+            return True
+        try:
+            import yaml as _yaml
+            loaded = _yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        except Exception:
+            return True
+        # Stub DEFAULT_CONFIG written by ensure_config has model=None; real
+        # entity configs always carry a model string.
+        return not loaded.get("model")
+
+    if _needs_seed(session_config_path):
+        if meta_config_path.exists() and meta_config_path.read_text(encoding="utf-8").strip():
             shutil.copy2(meta_config_path, session_config_path)
         else:
             # No meta config yet — bootstrap from entity config.yaml
@@ -228,6 +247,19 @@ def init_session(
         )
 
     ensure_session_status(system_dir)
+
+    # Publish manifest LAST (see NOTE above about watcher race):
+    # by the time manifest.json is visible to the watcher, sessions/<id>/core/
+    # has a fully-populated config.yaml, so Session.__init__'s ensure_config
+    # is a no-op instead of clobbering model/provider with DEFAULT_CONFIG.
+    manifest = {
+        "session_id": session_id,
+        "entity": entity_name,
+        "created_at": datetime.now().isoformat(),
+    }
+    (system_dir / "manifest.json").write_text(
+        json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
 
     # Write optional initial message
     if initial_message:

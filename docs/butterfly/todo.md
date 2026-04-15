@@ -6,6 +6,19 @@
 
 ## Active
 
+### Module 12 · v2.0.8 First-run fixes
+
+- [x] **首装 quick-start 会话 `config.yaml` 的 `model: null`** (v2.0.8 [debug])：
+  `init_session()` 把 `_sessions/<id>/manifest.json` 写在前面，触发 server 端 watcher
+  抢跑 `Session.__init__` → `ensure_config()` 把 `DEFAULT_CONFIG`（`model=None`,
+  `provider=None`）落到 `sessions/<id>/core/config.yaml`，之后 `init_session` 的
+  `if not session_config_path.exists()` 拷贝分支被跳过，session 永远只带 null
+  model。修复：(a) 把 manifest.json 移到函数末尾，只有当 session core/ 里 config
+  准备好之后 watcher 才能看到；(b) 把拷贝条件从 "文件不存在" 放宽到 "文件缺
+  model"，让即使抢跑产生的 stub config 也会被真正的 entity config 覆盖。
+  回归测试：`tests/butterfly/session_engine/test_session_init.py::test_init_session_config_not_clobbered_by_concurrent_ensure_config`
+  以及 `::test_init_session_writes_manifest_after_config_populated`。
+
 ### Module 11 · v2.0.5 Tool Engine Evolution
 
 Big redesign. Full spec in `docs/butterfly/tool_engine/design.md` and `docs/butterfly/session_engine/design.md` (Memory layers — on-demand recall section).
