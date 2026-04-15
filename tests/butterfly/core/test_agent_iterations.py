@@ -3,11 +3,12 @@
 import pytest
 
 from butterfly.core.agent import Agent
+from butterfly.core.provider import Provider
 from butterfly.core.tool import tool
 from butterfly.core.types import AgentResult, TokenUsage, ToolCall
 
 
-class MockProvider:
+class MockProvider(Provider):
     """A mock provider that returns pre-configured responses."""
 
     def __init__(self, responses):

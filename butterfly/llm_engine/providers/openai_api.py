@@ -340,13 +340,22 @@ def _extract_usage_from_obj(usage: Any) -> TokenUsage:
 
 
 def _tc_map_to_list(tc_map: dict[int, dict[str, Any]]) -> list[ToolCall]:
-    """Convert accumulated streaming tool-call fragments to ToolCall list."""
-    return [
-        ToolCall(
-            id=entry["id"],
-            name=entry["name"],
-            input=_parse_json_args(entry["arguments"]),
+    """Convert accumulated streaming tool-call fragments to ToolCall list.
+
+    Skips entries where the name never arrived — matches the filter in the
+    Codex and OpenAI Responses providers, so a malformed stream doesn't
+    surface an unnamed ``ToolCall`` downstream.
+    """
+    result: list[ToolCall] = []
+    for idx in sorted(tc_map):
+        entry = tc_map[idx]
+        if not entry["name"]:
+            continue
+        result.append(
+            ToolCall(
+                id=entry["id"],
+                name=entry["name"],
+                input=_parse_json_args(entry["arguments"]),
+            )
         )
-        for idx in sorted(tc_map)
-        for entry in (tc_map[idx],)
-    ]
+    return result

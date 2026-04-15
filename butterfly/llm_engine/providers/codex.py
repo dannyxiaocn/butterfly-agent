@@ -7,12 +7,19 @@ auto-refreshes the access token when it expires, and calls:
 The response format is the OpenAI Responses API over SSE, not Chat Completions.
 
 Behavioral notes (aligned with openai/codex rust CLI `codex-rs`):
-  * Default model is ``gpt-5-codex`` (codex-rs default).
+  * Default model is ``gpt-5.4``. (codex-rs defaults to ``gpt-5-codex``, but
+    the ChatGPT-OAuth backend rejects ``gpt-5-codex`` with a 400
+    — confirmed by live test on 2026-04-15 — so we keep the legacy
+    working default here until the backend advertises support.)
   * When ``thinking=True`` we send ``include=["reasoning.encrypted_content"]``
     and re-echo reasoning items on subsequent turns so the server can retain
     chain-of-thought across turns.
-  * ``prompt_cache_key`` is set to a per-provider-instance conversation id so
-    the server can hit its prompt cache on the stable prefix.
+  * ``prompt_cache_key`` and the ``session_id`` header are sent on every
+    request. NOTE: on the ChatGPT-OAuth backend, no cache_read_tokens have
+    been observed in practice even with a stable 1000+ token prefix; we keep
+    the fields because they are the officially documented signal and a
+    future backend change may start honoring them, but callers should not
+    rely on cache hits today.
   * ``response.failed`` / ``response.incomplete`` are mapped to the butterfly
     error taxonomy.
   * A single auto-refresh + retry is attempted on 401 mid-stream.
@@ -53,11 +60,30 @@ _DEFAULT_READ_TIMEOUT = 600.0  # gpt-5 xhigh routinely exceeds 120s before first
 _ORIGINATOR = "codex_cli_rs"  # matches openai/codex; "pi" is not on the server allowlist
 
 
+def _is_codex_compatible_model(model: str) -> bool:
+    """True if *model* names an OpenAI/Codex-family model this endpoint accepts.
+
+    Returns False for empty/None or for Anthropic-family names (which is what
+    the generic ``Agent`` default ``claude-sonnet-4-6`` leaves behind when the
+    caller forgets to override per-provider) — in that case the caller should
+    fall back to ``DEFAULT_MODEL``.
+    """
+    if not model:
+        return False
+    lowered = model.lower()
+    if any(tag in lowered for tag in ("claude", "sonnet", "opus", "haiku")):
+        return False
+    return True
+
+
 class CodexProvider(Provider):
     """LLM provider backed by OpenAI Codex via ChatGPT Plus OAuth."""
 
     _supports_thinking: ClassVar[bool] = True
-    DEFAULT_MODEL: ClassVar[str] = "gpt-5-codex"
+    # ChatGPT-OAuth backend rejects "gpt-5-codex" with 400 as of 2026-04-15 even
+    # though codex-rs defaults to it — keep gpt-5.4 here until the backend
+    # supports codex model IDs. See docstring for details.
+    DEFAULT_MODEL: ClassVar[str] = "gpt-5.4"
 
     def __init__(self, max_tokens: int = 8096) -> None:
         self.max_tokens = max_tokens
@@ -95,8 +121,8 @@ class CodexProvider(Provider):
             if cache_system_prefix
             else system_prompt
         )
-        effective_model = model if model and model != "claude-sonnet-4-6" else self.DEFAULT_MODEL
-        effort = thinking_effort if thinking_effort in _VALID_EFFORTS else "high"
+        effective_model = model if _is_codex_compatible_model(model) else self.DEFAULT_MODEL
+        effort = thinking_effort if thinking_effort in _VALID_EFFORTS else "medium"
         body = _build_request_body(
             effective_model,
             full_system,
@@ -456,7 +482,7 @@ def _convert_tool_result(msg: "Message") -> list[dict[str, Any]]:
             tool_use_id = block.get("tool_use_id", "")
             inner = block.get("content", "")
             if isinstance(inner, list):
-                text = " ".join(
+                text = "".join(
                     b.get("text", "") for b in inner
                     if isinstance(b, dict) and b.get("type") == "text"
                 )

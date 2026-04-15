@@ -77,11 +77,27 @@ class Agent:
         return self._provider
 
     def _get_fallback_provider(self) -> "Provider | None":
+        """Resolve the fallback provider, caching the result.
+
+        Precedence:
+          * ``fallback_provider`` (registry key) wins when set — resolved once.
+          * Otherwise, if only ``fallback_model`` is configured, fall back to
+            the primary provider class so the caller can retry the same
+            backend with a different model. (Previously this silently
+            returned ``None`` and the fallback never fired.)
+          * Neither set → no fallback.
+        """
         if not self._fallback_provider_str and not self.fallback_model:
             return None
-        if self._fallback_provider is None and self._fallback_provider_str:
+        if self._fallback_provider is not None:
+            return self._fallback_provider
+        if self._fallback_provider_str:
             from butterfly.llm_engine.registry import resolve_provider
             self._fallback_provider = resolve_provider(self._fallback_provider_str)
+            return self._fallback_provider
+        # fallback_model set but no fallback_provider — reuse the primary
+        # provider instance; the run loop will pass fallback_model as the model.
+        self._fallback_provider = self.provider
         return self._fallback_provider
 
     # Memory layers longer than this many lines are truncated in the prompt.
@@ -201,11 +217,18 @@ class Agent:
                 )
             except Exception as primary_exc:
                 fb_provider = self._get_fallback_provider()
-                if fb_provider is None or active_provider is fb_provider:
+                fb_model = self.fallback_model or active_model
+                # Only block the retry if both provider class AND model would be
+                # unchanged — otherwise a "same provider, different model"
+                # fallback (common when only ``fallback_model`` is set) is a
+                # legitimate retry path.
+                if fb_provider is None or (
+                    active_provider is fb_provider and fb_model == active_model
+                ):
                     raise
                 print(f"[agent] Primary provider failed ({primary_exc}), switching to fallback")
                 active_provider = fb_provider
-                active_model = self.fallback_model or active_model
+                active_model = fb_model
                 content, tool_calls, turn_usage = await active_provider.complete(
                     messages=messages,
                     tools=self.tools,
@@ -221,7 +244,7 @@ class Agent:
             total_usage = total_usage + turn_usage
             on_text_chunk = None
 
-            extra_blocks = getattr(active_provider, "consume_extra_blocks", lambda: [])()
+            extra_blocks = active_provider.consume_extra_blocks()
 
             assistant_content: Any = content
             if tool_calls or extra_blocks:

@@ -123,7 +123,9 @@ def test_convert_tool_result_list_content_joined():
     )
     items = _convert_tool_result(msg)
     assert items[0]["call_id"] == "tc-2"
-    assert items[0]["output"] == "a b"
+    # Multi-text blocks are byte-for-byte concatenated (matches Anthropic
+    # convention). Space-joining was BUG-8.
+    assert items[0]["output"] == "ab"
 
 
 def test_convert_tool_result_ignores_non_list_content():
@@ -214,3 +216,57 @@ def test_convert_messages_full_round_trip_with_tool_result():
     assert items[1]["encrypted_content"] == "E"
     assert items[3]["call_id"] == "t1"
     assert items[4]["output"] == "done"
+
+
+# ── BUG-5 regression: thinking_effort="none" honored (no reasoning block sent) ──
+
+
+def test_valid_efforts_includes_none():
+    from butterfly.llm_engine.providers.openai_responses import _VALID_EFFORTS
+    assert "none" in _VALID_EFFORTS
+
+
+import pytest
+
+
+@pytest.mark.asyncio
+async def test_complete_with_effort_none_omits_reasoning_block(monkeypatch):
+    """thinking=True but thinking_effort="none" must NOT send reasoning=..."""
+    from butterfly.llm_engine.providers import openai_responses as mod
+
+    provider = OpenAIResponsesProvider.__new__(OpenAIResponsesProvider)
+    provider.max_tokens = 100
+    provider._conversation_id = "test-conv"
+    provider._pending_reasoning = []
+
+    captured: dict = {}
+
+    async def fake_create(**kwargs):
+        captured.update(kwargs)
+
+        class _Response:
+            output = []
+            usage = None
+
+        return _Response()
+
+    class _Client:
+        class responses:
+            @staticmethod
+            async def create(**kwargs):
+                return await fake_create(**kwargs)
+
+    provider._client = _Client()
+
+    await provider.complete(
+        messages=[Message(role="user", content="hi")],
+        tools=[],
+        system_prompt="",
+        model="gpt-5",
+        thinking=True,
+        thinking_effort="none",
+    )
+
+    assert "reasoning" not in captured
+    assert "include" not in captured
+

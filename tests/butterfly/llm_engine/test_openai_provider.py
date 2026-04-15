@@ -571,3 +571,18 @@ def test_extract_usage_reports_reasoning_tokens():
     assert usage.output_tokens == 200
     assert usage.cache_read_tokens == 40
     assert usage.reasoning_tokens == 150
+
+
+# ── BUG-4 regression: _tc_map_to_list filters empty-name entries ──
+
+
+def test_tc_map_to_list_skips_unnamed_entries():
+    from butterfly.llm_engine.providers.openai_api import _tc_map_to_list
+
+    tc_map = {
+        0: {"id": "a", "name": "search", "arguments": "{}"},
+        1: {"id": "b", "name": "", "arguments": ""},  # malformed — drop
+        2: {"id": "c", "name": "bash", "arguments": "{}"},
+    }
+    out = _tc_map_to_list(tc_map)
+    assert [tc.name for tc in out] == ["search", "bash"]

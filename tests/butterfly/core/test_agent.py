@@ -52,3 +52,42 @@ class AgentUnitTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("full content: `cat core/memory/notes.md`", rendered)
         self.assertIn("5 lines omitted", rendered)
 
+
+
+# ── BUG-3 regression: fallback_model-only path reuses primary provider ──
+
+
+class FallbackProviderResolutionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_no_fallback_configured_returns_none(self) -> None:
+        agent = Agent(provider=_FakeProvider())
+        self.assertIsNone(agent._get_fallback_provider())
+
+    async def test_fallback_model_only_reuses_primary_provider(self) -> None:
+        primary = _FakeProvider()
+        agent = Agent(provider=primary, fallback_model="different-model")
+        fb = agent._get_fallback_provider()
+        self.assertIs(fb, primary)
+
+    async def test_fallback_model_only_triggers_retry_with_new_model(self) -> None:
+        """Primary fails once — loop must retry with the same provider but the fallback model."""
+        calls: list[tuple[str, str]] = []
+
+        class _FlakyProvider(Provider):
+            async def complete(self, messages, tools, system_prompt, model, **kwargs):
+                calls.append((type(self).__name__, model))
+                if model == "primary-model":
+                    raise RuntimeError("boom")
+                return "ok", [], TokenUsage(output_tokens=1)
+
+        agent = Agent(
+            provider=_FlakyProvider(),
+            model="primary-model",
+            fallback_model="fallback-model",
+        )
+        result = await agent.run("hi")
+
+        self.assertEqual(result.content, "ok")
+        self.assertEqual(
+            [model for _, model in calls],
+            ["primary-model", "fallback-model"],
+        )

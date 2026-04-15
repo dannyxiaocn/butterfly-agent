@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from butterfly.core.agent import Agent
+from butterfly.core.provider import Provider
 from butterfly.core.types import AgentResult, TokenUsage, ToolCall
 from butterfly.session_engine.session_config import read_config, write_config
 from butterfly.session_engine.task_cards import TaskCard, load_card, save_card, ensure_card
@@ -21,7 +22,7 @@ from butterfly.session_engine.task_cards import TaskCard, load_card, save_card, 
 # ── Helpers ────────────────────────────────────────────────────────
 
 
-class MockProvider:
+class MockProvider(Provider):
     """A mock provider that returns pre-configured responses."""
 
     def __init__(self, responses):

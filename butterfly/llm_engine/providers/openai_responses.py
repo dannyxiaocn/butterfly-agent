@@ -24,7 +24,7 @@ if TYPE_CHECKING:
     from butterfly.core.tool import Tool
 
 
-_VALID_EFFORTS = {"minimal", "low", "medium", "high", "xhigh"}
+_VALID_EFFORTS = {"none", "minimal", "low", "medium", "high", "xhigh"}
 
 
 class OpenAIResponsesProvider(Provider):
@@ -89,7 +89,7 @@ class OpenAIResponsesProvider(Provider):
             if cache_system_prefix
             else system_prompt
         )
-        effort = thinking_effort if thinking_effort in _VALID_EFFORTS else "high"
+        effort = thinking_effort if thinking_effort in _VALID_EFFORTS else "medium"
 
         kwargs: dict[str, Any] = {
             "model": model,
@@ -102,7 +102,10 @@ class OpenAIResponsesProvider(Provider):
         }
         if tools:
             kwargs["tools"] = [_tool_to_responses(t) for t in tools]
-        if thinking:
+        # effort=="none" means the caller explicitly wants no reasoning block —
+        # sending reasoning={"effort":"none"} would either 400 or still bill
+        # reasoning tokens depending on the model, so we just omit the field.
+        if thinking and effort != "none":
             kwargs["reasoning"] = {"effort": effort, "summary": "auto"}
             kwargs["include"] = ["reasoning.encrypted_content"]
 
@@ -301,7 +304,7 @@ def _convert_tool_result(msg: "Message") -> list[dict[str, Any]]:
             tool_use_id = block.get("tool_use_id", "")
             inner = block.get("content", "")
             if isinstance(inner, list):
-                text = " ".join(
+                text = "".join(
                     b.get("text", "") for b in inner
                     if isinstance(b, dict) and b.get("type") == "text"
                 )
