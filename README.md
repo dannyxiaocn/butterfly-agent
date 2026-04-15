@@ -7,11 +7,20 @@ Agent system that serves all humans.
 ```bash
 pip install -e .
 
-codex login                     # default entity uses codex-oauth / gpt-5.4
+# One-command login for the default provider (ChatGPT OAuth for Codex).
+# Runs `codex login` under the hood and verifies ~/.codex/auth.json.
+butterfly codex login
+
+# Or, if you prefer Kimi For Coding (Moonshot):
+#   prompts for your API key, writes it to .env (chmod 0600), and validates.
+butterfly kimi login
 
 butterfly-server                # auto-daemonizes
 butterfly chat "hello"          # auto-starts server if needed
 ```
+
+Both login commands are idempotent and print step-by-step tutorials if any
+dependency is missing (e.g. the `codex` CLI isn't on PATH yet).
 
 ## Using & Developing
 

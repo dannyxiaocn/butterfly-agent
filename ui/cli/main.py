@@ -953,6 +953,9 @@ def main() -> None:
             "Entity management:\n"
             "  butterfly entity new                 Scaffold entity interactively\n"
             "  butterfly entity new -n NAME         Scaffold entity by name\n\n"
+            "Provider login:\n"
+            "  butterfly codex login                OAuth flow for ChatGPT Codex\n"
+            "  butterfly kimi login                 Paste Kimi API key into .env\n\n"
             "Other:\n"
             "  butterfly server                     Start the server\n"
             "  butterfly web                        Start the web UI (monitoring)\n"
@@ -970,6 +973,9 @@ def main() -> None:
     _add_tasks_parser(subparsers)
     _add_panel_parser(subparsers)
     _add_entity_parser(subparsers)
+    from ui.cli.login import _add_codex_parser, _add_kimi_parser
+    _add_codex_parser(subparsers)
+    _add_kimi_parser(subparsers)
     _add_exec_parser(subparsers, "server", "Start the Butterfly server daemon.")
     _add_exec_parser(subparsers, "web",    "Start the web UI at http://localhost:7720 (monitoring).")
 

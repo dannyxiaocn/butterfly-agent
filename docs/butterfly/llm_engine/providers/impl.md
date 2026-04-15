@@ -14,7 +14,7 @@
 ## Provider Notes
 
 - **Anthropic**: thinking mode uses beta Messages namespace (`client.beta.messages`), not `client.messages`.
-- **Kimi**: same adapter shape as Anthropic but thinking via `extra_body={"thinking":{"type":"enabled"}}`, no beta namespace. Base URL overridable via `KIMI_BASE_URL`.
+- **Kimi**: same adapter shape as Anthropic but thinking via `extra_body={"thinking":{"type":"enabled"}}`, no beta namespace. Auth is limited to the **Kimi For Coding** path only: `KIMI_FOR_CODING_API_KEY` env var against Moonshot's `/coding/` endpoint. There are no `KIMI_API_KEY` / `MOONSHOT_API_KEY` fallbacks and no `KIMI_BASE_URL` override — if a proxy is required, edit `providers/kimi.py::_KIMI_BASE_URL`.
 - **OpenAI (Chat Completions)**: model-family-aware param scrubber (`_apply_model_specific_params`) routes reasoning models (`o*`, `gpt-5*`, `gpt-oss*`) to `max_completion_tokens` + `reasoning_effort`; legacy models keep `max_tokens`.
 - **OpenAI Responses**: Responses API path — flat tool schema, `instructions` field separate from `input`, `max_output_tokens`, `reasoning={"effort","summary":"auto"}`, `include=["reasoning.encrypted_content"]` when thinking. Replays reasoning items on subsequent turns (see below).
 - **Codex**: Responses-API over SSE against the ChatGPT-OAuth endpoint. Default model `gpt-5.4` (ChatGPT-OAuth rejects `gpt-5-codex` even though codex-rs defaults to it). The "use my default" signal is an explicit allow-list (`_is_codex_compatible_model` — `gpt-*`, `o\d+-*`, `codex-*`, `ft:gpt-*`), so Kimi/Gemini/typos no longer slip through to a 400. Token refresh is async (httpx) so it doesn't block the event loop, uses a module-level `asyncio.Lock` to serialize concurrent refreshes, and writes `~/.codex/auth.json` with `0o600`. Sends `max_output_tokens`, `prompt_cache_key`, and `session_id` header; **no cache_read_tokens have been observed in practice on the ChatGPT-OAuth backend** as of 2026-04-15, so the caching fields are best-effort. SSE parser caps buffer growth at 1 MiB. Stream error taxonomy: codes match an explicit enum (`context_length_exceeded`, `rate_limit_exceeded`, `invalid_api_key`, …) plus narrow message phrases — no loose substring matching. Reasoning items are replayed across turns with `summary: null` coerced to `[]`.
@@ -79,6 +79,17 @@ All providers accept `thinking_effort ∈ {"none", "minimal", "low", "medium", "
 - The primary provider instance itself when only `fallback_model` is set — the run loop then retries with the same provider class and the new model.
 
 The run loop blocks the retry only when both the provider class AND the model would be unchanged, so "same provider, different model" is a valid fallback path.
+
+## Login helpers (v2.0.7)
+
+Two CLI helpers live at `ui/cli/login.py` and are wired into the top-level `butterfly` entry point:
+
+- **`butterfly codex login`** — checks for the `codex` CLI on `PATH`, shells out to `codex login` (ChatGPT OAuth), then reads `~/.codex/auth.json` to confirm `access_token` / `refresh_token` are present and that `_extract_account_id` succeeds. If the CLI is missing, it prints install + re-verify instructions (`npm install -g @openai/codex`, then `butterfly codex login --skip-cli`). Flags: `--skip-cli` (verify only), `--no-verify` (run CLI only).
+- **`butterfly kimi login`** — prompts via `getpass.getpass` (hidden input) for a Kimi For Coding key (offering to reuse `KIMI_FOR_CODING_API_KEY` from the env if already set), writes it atomically into `<repo>/.env` with `0600` permissions (created via `os.open(..., O_CREAT|O_TRUNC, 0o600)` → `os.replace`, so the secrets file never exists on disk with broader perms — even in the window between creation and `chmod`), then pings the provider via a 16-token `complete()` call against `_KIMI_DEFAULT_VERIFY_MODEL` (currently `kimi-k2-turbo-preview`). Flags: `--env-file PATH`, `--key KEY` (non-interactive; empty string fails fast instead of falling through to `getpass`), `--no-verify` (skip ping).
+
+Both write exactly where the runtime already reads: `runtime/env.py::load_dotenv` picks up `.env` at repo root for Kimi, and `codex.py::_read_auth` reads `~/.codex/auth.json` for Codex. Neither helper introduces a new config source.
+
+Default Moonshot dashboard URL and verify-ping model are module-level constants in `butterfly/llm_engine/providers/kimi.py` (`_KIMI_DASHBOARD_URL`, `_KIMI_DEFAULT_VERIFY_MODEL`); `ui/cli/login.py` imports them. Move the dashboard or swap the verify model by editing `kimi.py`.
 
 ## Adding a New Provider
 

@@ -1,8 +1,10 @@
 """Comprehensive unit tests for KimiForCodingProvider.
 
 KimiForCodingProvider is a thin wrapper over AnthropicProvider that:
-- Resolves base_url from KIMI_BASE_URL env var (default https://api.kimi.com/coding/)
-- Resolves api_key from KIMI_FOR_CODING_API_KEY with KIMI_API_KEY fallback
+- Hardcodes base_url to ``_KIMI_BASE_URL`` (Moonshot's ``/coding/`` endpoint);
+  there is no ``KIMI_BASE_URL`` override and no constructor parameter.
+- Resolves api_key ONLY from ``KIMI_FOR_CODING_API_KEY``; there is no
+  ``KIMI_API_KEY`` / ``MOONSHOT_API_KEY`` fallback.
 - Uses extra_body for thinking (no betas header)
 - Disables cache_control
 """
@@ -85,11 +87,14 @@ def _dummy_tool(name: str = "search", desc: str = "Search") -> Tool:
     )
 
 
-# ── 1. Constructor: base_url resolution ───────────────────────────────────────
+# ── 1. Constructor: base_url is hardcoded ─────────────────────────────────────
 
 
-def test_kimi_default_base_url(monkeypatch):
-    monkeypatch.delenv("KIMI_BASE_URL", raising=False)
+def test_kimi_base_url_is_hardcoded(monkeypatch):
+    """``_KIMI_BASE_URL`` is always passed through — no env/ctor override exists."""
+    monkeypatch.setenv("KIMI_FOR_CODING_API_KEY", "k")
+    # Setting a stale KIMI_BASE_URL env var must have no effect (no longer read).
+    monkeypatch.setenv("KIMI_BASE_URL", "https://ignored.kimi.com/")
     captured = {}
 
     def _fake_init(self, *, api_key=None, max_tokens=8096, base_url=None):
@@ -100,48 +105,18 @@ def test_kimi_default_base_url(monkeypatch):
     assert captured["base_url"] == _KIMI_BASE_URL
 
 
-def test_kimi_base_url_from_env(monkeypatch):
-    monkeypatch.setenv("KIMI_BASE_URL", "https://custom.kimi.com/coding/")
-    captured = {}
-
-    def _fake_init(self, *, api_key=None, max_tokens=8096, base_url=None):
-        captured["base_url"] = base_url
-
-    monkeypatch.setattr(AnthropicProvider, "__init__", _fake_init)
-    KimiForCodingProvider()
-    assert captured["base_url"] == "https://custom.kimi.com/coding/"
+def test_kimi_ctor_rejects_base_url_kwarg(monkeypatch):
+    """The ``base_url`` constructor parameter was removed — passing it errors."""
+    monkeypatch.setenv("KIMI_FOR_CODING_API_KEY", "k")
+    with pytest.raises(TypeError):
+        KimiForCodingProvider(base_url="https://explicit.kimi.com/")  # type: ignore[call-arg]
 
 
-def test_kimi_base_url_explicit_overrides_env(monkeypatch):
-    monkeypatch.setenv("KIMI_BASE_URL", "https://env.kimi.com/")
-    captured = {}
-
-    def _fake_init(self, *, api_key=None, max_tokens=8096, base_url=None):
-        captured["base_url"] = base_url
-
-    monkeypatch.setattr(AnthropicProvider, "__init__", _fake_init)
-    KimiForCodingProvider(base_url="https://explicit.kimi.com/")
-    assert captured["base_url"] == "https://explicit.kimi.com/"
-
-
-def test_kimi_base_url_explicit_overrides_default_when_env_unset(monkeypatch):
-    monkeypatch.delenv("KIMI_BASE_URL", raising=False)
-    captured = {}
-
-    def _fake_init(self, *, api_key=None, max_tokens=8096, base_url=None):
-        captured["base_url"] = base_url
-
-    monkeypatch.setattr(AnthropicProvider, "__init__", _fake_init)
-    KimiForCodingProvider(base_url="https://proxy.kimi.com/")
-    assert captured["base_url"] == "https://proxy.kimi.com/"
-
-
-# ── 2. Constructor: API key resolution ────────────────────────────────────────
+# ── 2. Constructor: API key resolution (only KIMI_FOR_CODING_API_KEY) ─────────
 
 
 def test_kimi_api_key_explicit(monkeypatch):
     monkeypatch.delenv("KIMI_FOR_CODING_API_KEY", raising=False)
-    monkeypatch.delenv("KIMI_API_KEY", raising=False)
     captured = {}
 
     def _fake_init(self, *, api_key=None, max_tokens=8096, base_url=None):
@@ -152,9 +127,8 @@ def test_kimi_api_key_explicit(monkeypatch):
     assert captured["api_key"] == "explicit-key"
 
 
-def test_kimi_api_key_from_primary_env(monkeypatch):
+def test_kimi_api_key_from_env(monkeypatch):
     monkeypatch.setenv("KIMI_FOR_CODING_API_KEY", "primary-key")
-    monkeypatch.delenv("KIMI_API_KEY", raising=False)
     captured = {}
 
     def _fake_init(self, *, api_key=None, max_tokens=8096, base_url=None):
@@ -165,30 +139,19 @@ def test_kimi_api_key_from_primary_env(monkeypatch):
     assert captured["api_key"] == "primary-key"
 
 
-def test_kimi_api_key_fallback_env(monkeypatch):
+def test_kimi_api_key_legacy_env_var_is_ignored(monkeypatch):
+    """``KIMI_API_KEY`` used to be a fallback; it is NO LONGER honored.
+
+    The provider only supports the Kimi For Coding path. Setting the legacy
+    variable with the canonical one unset must raise ``AuthError`` (no silent
+    fallback to the legacy key).
+    """
     monkeypatch.delenv("KIMI_FOR_CODING_API_KEY", raising=False)
-    monkeypatch.setenv("KIMI_API_KEY", "fallback-key")
-    captured = {}
+    monkeypatch.setenv("KIMI_API_KEY", "legacy-value")
+    from butterfly.llm_engine.errors import AuthError
 
-    def _fake_init(self, *, api_key=None, max_tokens=8096, base_url=None):
-        captured["api_key"] = api_key
-
-    monkeypatch.setattr(AnthropicProvider, "__init__", _fake_init)
-    KimiForCodingProvider()
-    assert captured["api_key"] == "fallback-key"
-
-
-def test_kimi_api_key_primary_env_overrides_fallback(monkeypatch):
-    monkeypatch.setenv("KIMI_FOR_CODING_API_KEY", "primary-key")
-    monkeypatch.setenv("KIMI_API_KEY", "fallback-key")
-    captured = {}
-
-    def _fake_init(self, *, api_key=None, max_tokens=8096, base_url=None):
-        captured["api_key"] = api_key
-
-    monkeypatch.setattr(AnthropicProvider, "__init__", _fake_init)
-    KimiForCodingProvider()
-    assert captured["api_key"] == "primary-key"
+    with pytest.raises(AuthError):
+        KimiForCodingProvider()
 
 
 def test_kimi_api_key_explicit_overrides_env(monkeypatch):
@@ -207,6 +170,7 @@ def test_kimi_api_key_explicit_overrides_env(monkeypatch):
 
 
 def test_kimi_max_tokens_default(monkeypatch):
+    monkeypatch.setenv("KIMI_FOR_CODING_API_KEY", "k")
     captured = {}
 
     def _fake_init(self, *, api_key=None, max_tokens=8096, base_url=None):
@@ -218,6 +182,7 @@ def test_kimi_max_tokens_default(monkeypatch):
 
 
 def test_kimi_max_tokens_explicit(monkeypatch):
+    monkeypatch.setenv("KIMI_FOR_CODING_API_KEY", "k")
     captured = {}
 
     def _fake_init(self, *, api_key=None, max_tokens=8096, base_url=None):

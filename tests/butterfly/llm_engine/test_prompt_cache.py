@@ -92,22 +92,14 @@ def test_kimi_provider_does_not_support_cache_control():
     assert KimiForCodingProvider._supports_cache_control is False
 
 
-def test_kimi_provider_falls_back_to_legacy_kimi_api_key(monkeypatch):
+def test_kimi_provider_ignores_legacy_kimi_api_key(monkeypatch):
+    """``KIMI_API_KEY`` is NOT a fallback — the provider raises AuthError."""
     monkeypatch.delenv("KIMI_FOR_CODING_API_KEY", raising=False)
     monkeypatch.setenv("KIMI_API_KEY", "legacy-key")
+    from butterfly.llm_engine.errors import AuthError
 
-    captured = {}
-
-    def _fake_init(self, *, api_key=None, max_tokens=8096, base_url=None):
-        captured["api_key"] = api_key
-        captured["max_tokens"] = max_tokens
-        captured["base_url"] = base_url
-
-    monkeypatch.setattr(AnthropicProvider, "__init__", _fake_init)
-
-    KimiForCodingProvider()
-
-    assert captured["api_key"] == "legacy-key"
+    with pytest.raises(AuthError):
+        KimiForCodingProvider()
 
 
 @pytest.mark.asyncio
