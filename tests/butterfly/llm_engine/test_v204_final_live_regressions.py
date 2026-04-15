@@ -9,8 +9,9 @@ stand as ongoing regression coverage.
          ``CodexProvider()`` uses ``max_tokens=None``, which skips emission.
 
 - NEW-6: ``KimiForCodingProvider`` silently constructed with ``api_key=None``
-         when neither ``KIMI_FOR_CODING_API_KEY`` nor ``KIMI_API_KEY`` was
-         set. Fixed: the ctor now raises ``AuthError`` up-front.
+         when ``KIMI_FOR_CODING_API_KEY`` was not set. Fixed: the ctor now
+         raises ``AuthError`` up-front. (As of v2.0.7 only that one env var
+         is honored — the previous ``KIMI_API_KEY`` fallback was removed.)
 """
 from __future__ import annotations
 
@@ -57,29 +58,21 @@ def test_codex_explicit_max_tokens_is_forwarded():
 
 def test_kimi_ctor_fails_fast_when_no_api_key_available(monkeypatch):
     monkeypatch.delenv("KIMI_FOR_CODING_API_KEY", raising=False)
-    monkeypatch.delenv("KIMI_API_KEY", raising=False)
+    # Legacy fallback env vars must NOT be honored: setting them should not
+    # rescue the ctor. Pin that contract here.
+    monkeypatch.setenv("KIMI_API_KEY", "should-be-ignored")
     from butterfly.llm_engine.providers.kimi import KimiForCodingProvider
     from butterfly.llm_engine.errors import AuthError
 
     with pytest.raises(AuthError) as exc_info:
         KimiForCodingProvider()
-    # Message should be actionable — point the user at the env vars.
+    # Message should be actionable — point the user at the one supported env var.
     assert "KIMI_FOR_CODING_API_KEY" in str(exc_info.value)
 
 
 def test_kimi_ctor_accepts_explicit_api_key(monkeypatch):
     monkeypatch.delenv("KIMI_FOR_CODING_API_KEY", raising=False)
-    monkeypatch.delenv("KIMI_API_KEY", raising=False)
     from butterfly.llm_engine.providers.kimi import KimiForCodingProvider
 
     prov = KimiForCodingProvider(api_key="explicit-key")
-    assert prov is not None
-
-
-def test_kimi_ctor_accepts_fallback_env(monkeypatch):
-    monkeypatch.delenv("KIMI_FOR_CODING_API_KEY", raising=False)
-    monkeypatch.setenv("KIMI_API_KEY", "from-env")
-    from butterfly.llm_engine.providers.kimi import KimiForCodingProvider
-
-    prov = KimiForCodingProvider()
     assert prov is not None

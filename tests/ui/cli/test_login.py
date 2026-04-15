@@ -141,7 +141,6 @@ def test_kimi_login_writes_key_to_env(monkeypatch, tmp_path, capsys):
     env_file = tmp_path / ".env"
     # Ensure no pre-existing key so reuse prompt is skipped.
     monkeypatch.delenv(login_mod._KIMI_ENV_KEY, raising=False)
-    monkeypatch.delenv("KIMI_API_KEY", raising=False)
 
     rc = login_mod.cmd_kimi(_make_kimi_args(
         env_file=env_file,
@@ -182,7 +181,6 @@ def test_kimi_login_upserts_existing_key(tmp_path, monkeypatch):
 def test_kimi_login_empty_key_fails(monkeypatch, tmp_path, capsys):
     env_file = tmp_path / ".env"
     monkeypatch.delenv(login_mod._KIMI_ENV_KEY, raising=False)
-    monkeypatch.delenv("KIMI_API_KEY", raising=False)
     monkeypatch.setattr(login_mod, "_prompt_secret", lambda _msg: "   ")
 
     rc = login_mod.cmd_kimi(_make_kimi_args(env_file=env_file, no_verify=True))
@@ -205,7 +203,6 @@ def test_kimi_login_reuses_env_on_yes(monkeypatch, tmp_path):
 def test_kimi_login_verify_path_invokes_ping(monkeypatch, tmp_path, capsys):
     env_file = tmp_path / ".env"
     monkeypatch.delenv(login_mod._KIMI_ENV_KEY, raising=False)
-    monkeypatch.delenv("KIMI_API_KEY", raising=False)
 
     called: dict[str, object] = {}
 
@@ -229,7 +226,6 @@ def test_kimi_login_verify_path_invokes_ping(monkeypatch, tmp_path, capsys):
 def test_kimi_login_verify_failure_returns_1_but_keeps_key(monkeypatch, tmp_path, capsys):
     env_file = tmp_path / ".env"
     monkeypatch.delenv(login_mod._KIMI_ENV_KEY, raising=False)
-    monkeypatch.delenv("KIMI_API_KEY", raising=False)
 
     monkeypatch.setattr(
         login_mod,
@@ -287,7 +283,6 @@ def test_main_dispatches_kimi_login(monkeypatch, tmp_path, capsys):
 
     env_file = tmp_path / ".env"
     monkeypatch.delenv(login_mod._KIMI_ENV_KEY, raising=False)
-    monkeypatch.delenv("KIMI_API_KEY", raising=False)
     monkeypatch.setattr(sys, "argv", [
         "butterfly", "kimi", "login",
         "--env-file", str(env_file),

@@ -26,8 +26,14 @@ from pathlib import Path
 
 _CODEX_AUTH_PATH = Path.home() / ".codex" / "auth.json"
 _CODEX_INSTALL_HINT = "npm install -g @openai/codex"
-_KIMI_DASHBOARD_URL = "https://platform.moonshot.ai/console/api-keys"
-_KIMI_ENV_KEY = "KIMI_FOR_CODING_API_KEY"
+
+# Re-exported from the kimi provider so "where does the dashboard URL / env
+# var live?" has one answer. The CLI helper never hardcodes its own copy.
+from butterfly.llm_engine.providers.kimi import (  # noqa: E402
+    _KIMI_DASHBOARD_URL,
+    _KIMI_DEFAULT_VERIFY_MODEL,
+    _KIMI_ENV_KEY,
+)
 
 
 # ── `butterfly codex login` ──────────────────────────────────────────────────
@@ -158,7 +164,7 @@ def _verify_codex_auth() -> int:
         from butterfly.llm_engine.providers.codex import _extract_account_id
         account_id = _extract_account_id(access, tokens.get("id_token", ""))
     except Exception as exc:  # pragma: no cover — best-effort decorative info
-        print(f"Warning: could not extract account id: {exc}")
+        print(f"Warning: could not extract account id: {exc}", file=sys.stderr)
 
     print("Codex login verified.")
     print(f"  auth file:  {path}")
@@ -242,7 +248,7 @@ def _kimi_login(
         # Default: repo-root .env (same as runtime.env._REPO_ROOT heuristic).
         env_file = Path(__file__).resolve().parent.parent.parent / ".env"
 
-    existing = os.environ.get(_KIMI_ENV_KEY) or os.environ.get("KIMI_API_KEY")
+    existing = os.environ.get(_KIMI_ENV_KEY)
 
     print("Kimi For Coding — API key setup")
     print(f"  Dashboard: {_KIMI_DASHBOARD_URL}")
@@ -391,12 +397,13 @@ def _quote_env_value(value: str) -> str:
 
 
 def _verify_kimi_key(api_key: str) -> tuple[bool, str]:
-    """Best-effort validation ping against Kimi's Anthropic-compatible endpoint.
+    """Validation ping against Kimi's Anthropic-compatible endpoint.
 
-    Returns ``(True, info_msg)`` or ``(False, error_msg)``. Only network/auth
-    errors are reported as failure; any other exception is treated as a soft
-    warning so a working key isn't wrongly rejected because of (e.g.) a
-    proxy-level hiccup.
+    Returns ``(True, info_msg)`` or ``(False, error_msg)``. Any exception
+    raised by the provider — transport error, auth failure, rate limit,
+    schema mismatch — is treated as a failed verification. The caller still
+    leaves the key written to ``.env`` (the user can retry with
+    ``--no-verify``) so a transient hiccup isn't destructive.
     """
     try:
         from butterfly.llm_engine.providers.kimi import KimiForCodingProvider
@@ -415,7 +422,7 @@ def _verify_kimi_key(api_key: str) -> tuple[bool, str]:
                 messages=[Message(role="user", content="ping")],
                 tools=[],
                 system_prompt="Reply with one word.",
-                model="kimi-k2-turbo-preview",
+                model=_KIMI_DEFAULT_VERIFY_MODEL,
             )
             return True, f"({usage.input_tokens}→{usage.output_tokens} tokens)"
         except Exception as exc:  # noqa: BLE001 — surface any provider error

@@ -10,9 +10,9 @@ These cover bugs and gaps surfaced during the deep-test pass on PR #21:
    the secrets file is world-readable.
 3. ``butterfly kimi login --key ""`` silently falls through to an interactive
    ``getpass`` prompt instead of failing fast with the empty-key error.
-4. End-to-end coverage gaps: legacy ``KIMI_API_KEY`` reuse path, ``OSError``
-   on ``codex`` exec, and ``_extract_account_id`` raising shouldn't fail the
-   whole verify path (account id is decorative).
+4. End-to-end coverage gaps: ``OSError`` on ``codex`` exec, and
+   ``_extract_account_id`` raising shouldn't fail the whole verify path
+   (account id is decorative).
 5. Upsert preserves CRLF — file rewrite shouldn't silently normalise line
    endings on Windows-authored ``.env`` files.
 """
@@ -122,7 +122,6 @@ def test_kimi_login_empty_key_arg_fails_fast(tmp_path, monkeypatch, capsys):
     """
     env_file = tmp_path / ".env"
     monkeypatch.delenv(login_mod._KIMI_ENV_KEY, raising=False)
-    monkeypatch.delenv("KIMI_API_KEY", raising=False)
 
     # If we accidentally fall through to interactive, this would be invoked —
     # make it raise so the test fails loudly instead of hanging.
@@ -146,19 +145,30 @@ def test_kimi_login_empty_key_arg_fails_fast(tmp_path, monkeypatch, capsys):
 # ── 4. Coverage gaps from the audit ─────────────────────────────────────────
 
 
-def test_kimi_login_reuses_legacy_kimi_api_key(tmp_path, monkeypatch):
-    """Documented fallback: ``KIMI_API_KEY`` is honoured if the canonical var is unset."""
+def test_kimi_login_ignores_legacy_kimi_api_key(tmp_path, monkeypatch):
+    """``KIMI_API_KEY`` is NOT reused by the login helper (legacy-fallback removed).
+
+    With only the legacy variable set, the reuse prompt must not fire; the
+    helper must fall through to a secret prompt. We make that prompt return
+    empty so the command exits with rc=1 (empty key) — proving the legacy
+    value was never considered.
+    """
     env_file = tmp_path / ".env"
     monkeypatch.delenv(login_mod._KIMI_ENV_KEY, raising=False)
     monkeypatch.setenv("KIMI_API_KEY", "legacy-key-xyz")
-    # Auto-accept reuse prompt.
-    monkeypatch.setattr(login_mod, "_prompt", lambda _msg: "")
+    # Reuse prompt must NOT be invoked — fail loudly if it is.
+    monkeypatch.setattr(
+        login_mod, "_prompt",
+        lambda _msg: pytest.fail("legacy KIMI_API_KEY must not trigger reuse prompt"),
+    )
+    # Secret prompt returns empty → command exits with rc=1.
+    monkeypatch.setattr(login_mod, "_prompt_secret", lambda _msg: "")
 
     rc = login_mod.cmd_kimi(argparse.Namespace(
         kimi_cmd="login", env_file=env_file, key=None, no_verify=True,
     ))
-    assert rc == 0
-    assert "KIMI_FOR_CODING_API_KEY=legacy-key-xyz" in env_file.read_text(encoding="utf-8")
+    assert rc == 1
+    assert not env_file.exists()
 
 
 def test_codex_login_subprocess_oserror_returns_1(monkeypatch, capsys):

@@ -9,7 +9,7 @@
 | `anthropic` | `AnthropicProvider` | `ANTHROPIC_API_KEY` |
 | `openai` | `OpenAIProvider` (Chat Completions) | `OPENAI_API_KEY` |
 | `openai-responses` | `OpenAIResponsesProvider` | `OPENAI_API_KEY` |
-| `kimi-coding-plan` | `KimiForCodingProvider` | `KIMI_FOR_CODING_API_KEY` or `KIMI_API_KEY` |
+| `kimi-coding-plan` | `KimiForCodingProvider` | `KIMI_FOR_CODING_API_KEY` |
 | `codex-oauth` | `CodexProvider` | `codex login` → `~/.codex/auth.json` |
 
 Usage:
