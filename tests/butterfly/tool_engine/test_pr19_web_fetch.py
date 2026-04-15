@@ -12,7 +12,13 @@ from toolhub.web_fetch.httpx import HttpxFetcher
 
 @pytest.fixture(autouse=True)
 def _drop_proxy_env(monkeypatch):
-    """Tests hit 127.0.0.1 directly — inherited SOCKS/HTTP proxy env breaks httpx."""
+    """Tests hit 127.0.0.1 directly — inherited SOCKS/HTTP proxy env breaks httpx.
+
+    Also opts into the `BUTTERFLY_WEB_FETCH_ALLOW_LOOPBACK` escape hatch so the
+    SSRF guard (which correctly rejects 127.0.0.1 in production) lets the
+    local-httpd fixtures through. Private / reserved / metadata ranges remain
+    blocked even under this flag.
+    """
     for k in (
         "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
         "http_proxy", "https_proxy", "all_proxy",
@@ -20,6 +26,7 @@ def _drop_proxy_env(monkeypatch):
         monkeypatch.delenv(k, raising=False)
     # NO_PROXY covers the case where the user set a localhost allow-list.
     monkeypatch.setenv("NO_PROXY", "*")
+    monkeypatch.setenv("BUTTERFLY_WEB_FETCH_ALLOW_LOOPBACK", "1")
 
 
 _HTML = b"""<!doctype html>
@@ -95,24 +102,18 @@ async def test_web_fetch_bad_scheme() -> None:
 
 
 @pytest.mark.asyncio
-async def test_web_fetch_ssrf_localhost_regression(local_server) -> None:
-    """Cubic P1 (confirmed): web_fetch has no SSRF guard.
+async def test_web_fetch_ssrf_localhost_regression(local_server, monkeypatch) -> None:
+    """Cubic P1: verify the SSRF guard blocks `http://127.0.0.1/...`.
 
-    Today, `http://127.0.0.1:<port>/` is accepted — allowing an agent
-    steered by a malicious upstream to probe internal services or read
-    cloud-metadata endpoints (169.254.169.254). A hardened version
-    should refuse non-public hosts by default.
-
-    Documented as xfail so the suite stays green until the guard lands.
+    The autouse `_drop_proxy_env` fixture sets
+    `BUTTERFLY_WEB_FETCH_ALLOW_LOOPBACK=1` for the other tests in this file
+    (they hit local httpd fixtures). For this SSRF regression, we unset it
+    so the production default (block loopback) takes effect.
     """
+    monkeypatch.delenv("BUTTERFLY_WEB_FETCH_ALLOW_LOOPBACK", raising=False)
     out = await HttpxFetcher(timeout=5).execute(url=local_server + "/ok")
-    if "# Test Page" in out:
-        pytest.xfail(
-            "web_fetch follows http://127.0.0.1 URLs — no SSRF guard "
-            "(cubic P1, not fixed in PR #19)."
-        )
-    else:
-        assert out.startswith("Error:")
+    assert out.startswith("Error:"), f"expected SSRF guard to block, got: {out}"
+    assert "SSRF guard" in out or "loopback" in out or "localhost" in out
 
 
 @pytest.mark.asyncio

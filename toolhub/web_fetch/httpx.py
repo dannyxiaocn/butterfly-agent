@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import os
 import re
 import socket
 from typing import Optional
@@ -53,6 +54,17 @@ def _is_disallowed_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool
     )
 
 
+def _allow_loopback() -> bool:
+    """Escape hatch for test environments that spin up local httpd fixtures.
+
+    When set to `1` / `true` / `yes` (case-insensitive), the SSRF guard still
+    rejects metadata/private/reserved ranges but permits loopback + link-local.
+    **Do not set this in production** — it disables the core localhost block.
+    """
+    val = os.environ.get("BUTTERFLY_WEB_FETCH_ALLOW_LOOPBACK", "").strip().lower()
+    return val in {"1", "true", "yes", "on"}
+
+
 def _validate_url(url: str) -> tuple[bool, str]:
     """Return (ok, error_message). Resolves hostname and rejects SSRF targets."""
     try:
@@ -70,22 +82,32 @@ def _validate_url(url: str) -> tuple[bool, str]:
     if not host:
         return False, f"Error: URL {url!r} has no hostname"
 
-    if host.lower() in _BLOCKED_HOSTS:
+    # Test-only escape hatch: permit loopback + link-local when explicitly
+    # enabled via env. Private / reserved / multicast / unspecified remain
+    # rejected even in this mode.
+    loopback_ok = _allow_loopback()
+
+    if host.lower() in _BLOCKED_HOSTS and not loopback_ok:
         return False, (
             f"Error: refusing to fetch from {host!r} — localhost is blocked "
             "(SSRF guard)"
         )
 
+    def _check_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> tuple[bool, str]:
+        if loopback_ok and (ip.is_loopback or ip.is_link_local):
+            return True, ""
+        if _is_disallowed_ip(ip):
+            return False, (
+                f"Error: refusing to fetch from {ip} — address is "
+                "loopback/link-local/private/reserved (SSRF guard)"
+            )
+        return True, ""
+
     # If the host is already an IP literal, validate it directly.
     try:
         literal = ipaddress.ip_address(host)
-        if _is_disallowed_ip(literal):
-            return False, (
-                f"Error: refusing to fetch from {host} — address is "
-                "loopback/link-local/private/reserved (SSRF guard)"
-            )
-        # Literal IP passed — nothing else to resolve.
-        return True, ""
+        ok, err = _check_ip(literal)
+        return (True, "") if ok else (False, err)
     except ValueError:
         pass  # Not an IP literal; fall through to DNS resolution.
 
@@ -104,11 +126,9 @@ def _validate_url(url: str) -> tuple[bool, str]:
             ip = ipaddress.ip_address(ip_str)
         except ValueError:
             continue
-        if _is_disallowed_ip(ip):
-            return False, (
-                f"Error: refusing to fetch {url} — {host} resolves to {ip} "
-                "which is loopback/link-local/private/reserved (SSRF guard)"
-            )
+        ok, err = _check_ip(ip)
+        if not ok:
+            return False, err
     return True, ""
 
 
@@ -189,14 +209,19 @@ def _extract_naive(html: str) -> tuple[Optional[str], str]:
 
 
 def _extract(html: str, url: str) -> tuple[Optional[str], str]:
-    title, body = _extract_with_trafilatura(html, url)
+    # Always prefer the HTML `<title>` tag for the title — it's deterministic
+    # across environments. Trafilatura's metadata.title sometimes picks an
+    # <h1> instead, which differs between test runs depending on whether
+    # trafilatura is installed. Fall back to extractor metadata if no <title>.
+    html_title = _extract_title_naive(html)
+    _traf_title, body = _extract_with_trafilatura(html, url)
     if body:
-        return title, body
-    t2, body = _extract_with_bs4(html)
+        return (html_title or _traf_title), body
+    _bs4_title, body = _extract_with_bs4(html)
     if body:
-        return (title or t2), body
-    t3, body = _extract_naive(html)
-    return (title or t3), body
+        return (html_title or _bs4_title), body
+    _naive_title, body = _extract_naive(html)
+    return (html_title or _naive_title), body
 
 
 # ── Fetch ─────────────────────────────────────────────────────────────────────

@@ -72,11 +72,11 @@ async def test_backgroundable_call_with_spawner_returns_placeholder() -> None:
 
 @pytest.mark.asyncio
 async def test_backgroundable_call_without_spawner_falls_through() -> None:
-    """Cubic P2: control flags leak into sync execution when no spawner wired.
-
-    Today, bash's executor uses `**kwargs` so unknown keys are silently
-    dropped. This test nails down the observable behaviour so a future
-    refactor that strips the flags at the agent layer won't surprise us.
+    """Cubic P2 (fixed): when no spawner is wired, the agent layer strips
+    `run_in_background` and `polling_interval` before calling the tool
+    executor. Previously those flags leaked through and only survived
+    because bash accepts `**kwargs`; a backgroundable tool with an explicit
+    signature would have raised TypeError. This pins the corrected contract.
     """
     rec = _RecordingFunc()
     tool = Tool(
@@ -96,9 +96,10 @@ async def test_backgroundable_call_without_spawner_falls_through() -> None:
     results = await _execute_tools(calls, {"bash": tool}, background_spawn=None)
     # Executor WAS called (sync fallback).
     assert len(rec.calls) == 1
-    # Current behaviour: control flags leak through. Pin the contract.
-    assert "run_in_background" in rec.calls[0]
-    assert "polling_interval" in rec.calls[0]
+    # Control flags are stripped before reaching the tool executor.
+    assert "run_in_background" not in rec.calls[0]
+    assert "polling_interval" not in rec.calls[0]
+    assert rec.calls[0] == {"command": "echo hi"}
     assert results[0]["content"] == "sync-ok"
 
 
