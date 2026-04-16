@@ -1,6 +1,6 @@
 import { api } from '../api';
 import { store } from '../store';
-import { sessionTone, toneColor } from '../types';
+import { Session, sessionTone, toneColor } from '../types';
 import { attachSession } from '../main';
 
 export function createSidebar(): HTMLElement {
@@ -14,30 +14,64 @@ export function createSidebar(): HTMLElement {
     const current = store.currentSessionId;
 
     const weixinSession = store.weixinStatus.status === 'running' ? (store.weixinStatus.session ?? null) : null;
-    const listHtml = sessions.map(s => {
+
+    // Group by parent_session_id so children render indented under their
+    // parent (markdown-list style). Orphans (parent missing from current
+    // list) fall back to root so they remain reachable.
+    const byParent = new Map<string, Session[]>();
+    const ids = new Set(sessions.map(s => s.id));
+    const roots: Session[] = [];
+    for (const s of sessions) {
+      const parent = s.parent_session_id;
+      if (parent && ids.has(parent)) {
+        const arr = byParent.get(parent) ?? [];
+        arr.push(s);
+        byParent.set(parent, arr);
+      } else {
+        roots.push(s);
+      }
+    }
+    // Stable child order: oldest first so newer sub-agents fall to the bottom.
+    for (const arr of byParent.values()) {
+      arr.sort((a, b) => (a.created_at ?? '').localeCompare(b.created_at ?? ''));
+    }
+
+    function renderSession(s: Session, depth: number): string {
       const tone = sessionTone(s);
       const color = toneColor(tone);
       const active = s.id === current ? ' active' : '';
       const isRunning = tone === 'running' && s.id === current;
       const pulseClass = isRunning ? ' running-pulse' : '';
       const dotPulse = tone === 'running' ? ' pulse' : '';
-      // Derive a short entity label
+      const childClass = depth > 0 ? ' child' : '';
       const entityLabel = s.entity.replace(/^entity\//, '');
       const isWeixinLinked = s.id === weixinSession;
-      // Weixin-linked session: replace breathing dot with solid green ⇄ symbol
       const dotHtml = isWeixinLinked
         ? `<span class="session-dot weixin-dot" title="WeChat linked">⇄</span>`
         : `<span class="session-dot${dotPulse}" style="background:${color}"></span>`;
-      return `
-        <div class="session-item${active}${pulseClass}" data-id="${escHtml(s.id)}" title="${escHtml(s.id)} · ${escHtml(s.entity)}">
+      const modeChip = s.mode
+        ? `<span class="session-mode-chip" title="sub-agent mode">${escHtml(s.mode)}</span>`
+        : '';
+      const indent = depth > 0
+        ? `<span class="session-indent" aria-hidden="true">↳</span>`
+        : '';
+      const own = `
+        <div class="session-item${active}${pulseClass}${childClass}" data-id="${escHtml(s.id)}" data-depth="${depth}" title="${escHtml(s.id)} · ${escHtml(s.entity)}">
+          ${indent}
           ${dotHtml}
           <span class="session-item-info">
-            <span class="session-item-name">${escHtml(s.id)}</span>
+            <span class="session-item-name">${escHtml(s.id)}${modeChip}</span>
             <span class="session-item-entity">${escHtml(entityLabel)}</span>
           </span>
         </div>
       `;
-    }).join('');
+      const kids = (byParent.get(s.id) ?? [])
+        .map(child => renderSession(child, depth + 1))
+        .join('');
+      return own + kids;
+    }
+
+    const listHtml = roots.map(s => renderSession(s, 0)).join('');
 
     el.innerHTML = `
       <div class="sidebar-header">

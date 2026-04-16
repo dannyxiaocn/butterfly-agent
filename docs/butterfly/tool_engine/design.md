@@ -23,6 +23,7 @@ The catalog is split into **toolhub tools** (declared in `toolhub/<name>/`) and 
 | Name | Purpose | Backgroundable | Agent sees |
 |---|---|---|---|
 | `bash` | One-shot shell command, fresh process every call | **Yes** | `command, timeout?, stdin?, run_in_background?, polling_interval?` |
+| `sub_agent` | Spawn a child session (same entity), return its FINAL reply | **Yes** | `task, mode (explorer\|executor), timeout_seconds?, run_in_background?, polling_interval?` |
 | `session_shell` | Persistent long-lived shell, `cd`/env survive across calls | No | `command, timeout?, reset?` |
 | `read` | Read file contents (paginated) | No | `path, offset?, limit?` |
 | `write` | Write/overwrite a file | No | `path, content` |
@@ -281,3 +282,103 @@ Agents can still create `.json` + `.sh` pairs in `core/tools/`; the `.sh` script
 ## 11. Backward compatibility
 
 **None.** v2.0.5 is a breaking release; `shell`, `manage_task`, `reload_capabilities` are removed. Entities (`entity/agent`, `entity/butterfly_dev`) have their `tools.md` rewritten as part of this release. Sessions created before v2.0.5 will fail to load removed tools — users must create new sessions or manually edit their session `core/tools.md`.
+
+---
+
+## 12. Sub-agent tool (v2.0.13)
+
+`sub_agent` is a backgroundable tool that spawns a **child session** of the
+same entity as the parent. It exists so a parent can delegate context-heavy
+work (research, sandboxed experiments, large refactors) without polluting
+its own conversation history.
+
+### Semantics
+
+- **The parent only ever sees the child's FINAL reply.** Intermediate tool
+  calls, partial messages, and thinking blocks stay in the child session
+  (visible via the sidebar / panel). This is a hard contract — the
+  description in `toolhub/sub_agent/tool.json` and the mode prompts state
+  it explicitly so the LLM doesn't expect a transcript.
+- Sync mode (`run_in_background=false`, default): the parent's turn blocks
+  until the child replies or `timeout_seconds` elapses. On timeout, the
+  child keeps running.
+- Background mode (`run_in_background=true`): identical to bash bg —
+  parent gets a `task_id=…` placeholder immediately and continues; the
+  child's completion arrives later as a `user_input` notification appended
+  to the parent's `context.jsonl` (with the child's full reply inline).
+
+### Modes
+
+| Mode | Permission | Use when |
+|---|---|---|
+| `explorer` | Sandboxed: writes only inside child's `playground/`. Reads anywhere. Bash cwd pinned to playground. | Research, untrusted exploration, parallel investigations. |
+| `executor` | No sandbox. Same tool surface as parent. | The child legitimately needs to modify shared files. |
+
+The mode prompt (`toolhub/sub_agent/<mode>.md`) is copied to the child's
+`core/mode.md` at `init_session` time and folded into the child's static
+system prompt by `Session._load_session_capabilities` (between `system.md`
+and `env.md`).
+
+### Implementation split
+
+- `butterfly/tool_engine/sub_agent.py` — both `SubAgentTool` (sync executor)
+  and `SubAgentRunner` (background runner). Shared helper `_spawn_child`
+  factors out the `init_session(...)` call so both paths agree on
+  child-id format, manifest layout, and message composition.
+- `toolhub/sub_agent/executor.py` — re-exports the canonical classes so
+  the `ToolLoader` can find `SubAgentTool` via the conventional discovery
+  path.
+- `toolhub/sub_agent/{tool.json,explorer.md,executor.md}` — schema +
+  mode prompts.
+
+### Parent-side observability
+
+When the runner is in background mode it owns a `PanelEntry` of type
+`sub_agent` (constant `panel.TYPE_SUB_AGENT`). The runner stamps:
+
+- `meta.child_session_id` — for sidebar pivot + "Open child session" link.
+- `meta.mode` — for the mode chip.
+- `meta.last_child_state` — refreshed every `polling_interval` seconds by
+  tailing the child's `events.jsonl`. Drives the `tool_progress` event
+  the parent's chat UI uses to keep the tool cell yellow with a live
+  summary.
+- `meta.result` / `meta.result_text` — populated on completion.
+
+Web UI (see `ui/web/frontend/src/components/{chat,sidebar,panel}.ts`):
+
+- Chat HUD shows `⚙ N sub-agents running` while any sub_agent panel
+  entry is non-terminal.
+- The chat-side tool cell stays yellow ("working") until the matching
+  `tool_finalize` event arrives (also fixes the prior bash-bg bug where
+  the cell flashed green immediately on the spawn placeholder).
+- The parent's panel renders the sub_agent card with a thumbnail
+  (current activity) and an expandable view of the child's last 5
+  events (via `GET /api/sessions/{child_id}/events_tail?n=5`).
+- The sidebar indents the child session under its parent (markdown-list
+  style) keyed off the new `parent_session_id` field in `manifest.json`.
+
+---
+
+## 13. Generalized BackgroundTaskManager (v2.0.13)
+
+v2.0.5 introduced `BackgroundTaskManager` for bash. v2.0.13 splits the
+manager into two orthogonal halves so any backgroundable tool can plug in:
+
+- **The manager** owns: tid generation, `PanelEntry` lifecycle, the
+  `BackgroundEvent` queue, `sweep_restart` for orphan recovery, and the
+  terminal-event emission contract.
+- **A `BackgroundRunner`** owns: "what does this tool actually do in the
+  background?" Plus per-tool `validate(input)` (run synchronously at
+  `spawn()` time so misconfiguration surfaces immediately), `run(ctx, tid,
+  entry, input, polling_interval)`, and `kill(ctx, tid)`.
+
+Bash is registered automatically as the default runner (`BashRunner`); it
+implements the same subprocess + drain logic that lived inline before.
+Sub_agent registers `SubAgentRunner` from `Session.__init__`. New
+backgroundable tools can register their own runner without touching the
+manager.
+
+`spawn(tool_name, input, polling_interval)` defaults `entry_type` to
+`TYPE_SUB_AGENT` when `tool_name == "sub_agent"`, else `TYPE_PENDING_TOOL`.
+This lets the UI render the two card types differently without runners
+having to know about panel taxonomy.

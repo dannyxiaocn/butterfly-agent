@@ -164,12 +164,17 @@ def create_pending_tool_entry(
     input: dict[str, Any],
     polling_interval: int | None = None,
     meta: dict[str, Any] | None = None,
+    entry_type: str = TYPE_PENDING_TOOL,
 ) -> PanelEntry:
-    """Create + persist a new pending_tool entry. Returns the entry."""
+    """Create + persist a new panel entry. Returns the entry.
+
+    `entry_type` defaults to TYPE_PENDING_TOOL for back-compat with the original
+    bash background flow; sub-agent spawns pass TYPE_SUB_AGENT.
+    """
     now = time.time()
     entry = PanelEntry(
         tid=new_tid("bg"),
-        type=TYPE_PENDING_TOOL,
+        type=entry_type,
         tool_name=tool_name,
         input=input,
         status=STATUS_RUNNING,

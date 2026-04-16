@@ -21,6 +21,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from butterfly.core.guardian import Guardian
 from butterfly.core.tool import Tool
 from butterfly.tool_engine.executor.base import BaseExecutor
 
@@ -67,8 +68,13 @@ async def _run_subprocess(
     stdin: str | None,
     max_output: int,
     tool_results_dir: Path | None,
+    env_extras: dict[str, str] | None = None,
 ) -> str:
     env = _venv_env()
+    if env_extras:
+        if env is None:
+            env = os.environ.copy()
+        env.update(env_extras)
     proc = await asyncio.create_subprocess_shell(
         command,
         stdin=asyncio.subprocess.PIPE if stdin is not None else None,
@@ -114,17 +120,26 @@ class BashExecutor(BaseExecutor):
         workdir: str | None = None,
         max_output: int = _MAX_OUTPUT,
         tool_results_dir: Path | None = None,
+        guardian: Guardian | None = None,
     ) -> None:
         self._timeout = timeout
         self._workdir = workdir
         self._max_output = max_output
         self._tool_results_dir = tool_results_dir
+        self._guardian = guardian
 
     async def execute(self, **kwargs: Any) -> str:
         command: str = kwargs["command"]
         timeout = float(kwargs.get("timeout") or self._timeout)
         workdir = kwargs.get("workdir") or self._workdir
         stdin = kwargs.get("stdin")
+        env_extras: dict[str, str] | None = None
+        if self._guardian is not None:
+            # Pin cwd to the guardian root so command-relative paths can't
+            # escape, and surface the boundary as an env var the agent's
+            # mode prompt explicitly references.
+            workdir = str(self._guardian.root)
+            env_extras = {"BUTTERFLY_GUARDIAN_ROOT": str(self._guardian.root)}
         # run_in_background / polling_interval are consumed by the agent loop
         # before reaching the executor, so we simply ignore them here.
         return await _run_subprocess(
@@ -134,6 +149,7 @@ class BashExecutor(BaseExecutor):
             stdin,
             self._max_output,
             self._tool_results_dir,
+            env_extras,
         )
 
 
@@ -142,6 +158,7 @@ def create_bash_tool(
     workdir: str | None = None,
     max_output: int = _MAX_OUTPUT,
     tool_results_dir: Path | None = None,
+    guardian: Guardian | None = None,
 ) -> Tool:
     """Return a bash Tool pre-configured with defaults.
 
@@ -153,6 +170,7 @@ def create_bash_tool(
         workdir=workdir,
         max_output=max_output,
         tool_results_dir=tool_results_dir,
+        guardian=guardian,
     )
 
     async def bash(**kwargs: Any) -> str:

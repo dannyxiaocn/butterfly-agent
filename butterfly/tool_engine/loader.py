@@ -26,6 +26,7 @@ import sys
 from pathlib import Path
 from typing import Any, Callable
 
+from butterfly.core.guardian import Guardian
 from butterfly.core.skill import Skill
 from butterfly.core.tool import Tool
 
@@ -96,6 +97,16 @@ class ToolLoader:
         toolhub_dir: Path | None = None,
         # Legacy compatibility
         impl_registry: dict[str, Callable] | None = None,
+        # Guardian — when set, write/edit/bash run inside a path boundary
+        # (used by sub-agent's explorer mode).
+        guardian: "Guardian | None" = None,
+        # Sub-agent context — needed by toolhub/sub_agent so the spawned child
+        # lands in the right sessions/_sessions trees and is recorded as a
+        # child of the calling session.
+        parent_session_id: str | None = None,
+        sessions_base: Path | None = None,
+        system_sessions_base: Path | None = None,
+        entity_base: Path | None = None,
     ) -> None:
         self._default_workdir = default_workdir
         self._skills = list(skills or [])
@@ -106,6 +117,11 @@ class ToolLoader:
         self._tool_results_dir = tool_results_dir
         self._toolhub_dir = toolhub_dir or _TOOLHUB_DIR
         self._impl_registry = impl_registry or {}
+        self._guardian = guardian
+        self._parent_session_id = parent_session_id
+        self._sessions_base = sessions_base
+        self._system_sessions_base = system_sessions_base
+        self._entity_base = entity_base
 
     def _create_executor(self, tool_name: str) -> Callable | None:
         """Create an executor callable for a toolhub tool."""
@@ -124,6 +140,7 @@ class ToolLoader:
                 executor = executor_cls(
                     workdir=self._default_workdir,
                     tool_results_dir=self._tool_results_dir,
+                    guardian=self._guardian,
                 )
                 async def _impl(**kwargs: Any) -> str:
                     return await executor.execute(**kwargs)
@@ -168,6 +185,19 @@ class ToolLoader:
                 executor = executor_cls(
                     workdir=self._default_workdir,
                     venv_env_provider=_venv_env_provider,
+                )
+                async def _impl(**kwargs: Any) -> str:
+                    return await executor.execute(**kwargs)
+                return _impl
+
+        elif tool_name == "sub_agent":
+            executor_cls = getattr(mod, "SubAgentTool", None)
+            if executor_cls:
+                executor = executor_cls(
+                    parent_session_id=self._parent_session_id,
+                    sessions_base=self._sessions_base,
+                    system_sessions_base=self._system_sessions_base,
+                    entity_base=self._entity_base,
                 )
                 async def _impl(**kwargs: Any) -> str:
                     return await executor.execute(**kwargs)
@@ -264,7 +294,10 @@ class ToolLoader:
         elif tool_name == "write":
             executor_cls = getattr(mod, "WriteExecutor", None)
             if executor_cls:
-                executor = executor_cls(workdir=self._default_workdir)
+                executor = executor_cls(
+                    workdir=self._default_workdir,
+                    guardian=self._guardian,
+                )
                 async def _impl(**kwargs: Any) -> str:
                     return await executor.execute(**kwargs)
                 return _impl
@@ -272,7 +305,10 @@ class ToolLoader:
         elif tool_name == "edit":
             executor_cls = getattr(mod, "EditExecutor", None)
             if executor_cls:
-                executor = executor_cls(workdir=self._default_workdir)
+                executor = executor_cls(
+                    workdir=self._default_workdir,
+                    guardian=self._guardian,
+                )
                 async def _impl(**kwargs: Any) -> str:
                     return await executor.execute(**kwargs)
                 return _impl

@@ -130,3 +130,51 @@ Main `memory.md` itself is edited via `edit` / `write` like any other file — n
 - `Session._load_session_capabilities` stops populating `self._agent.memory_layers` from `core/memory/*.md`. The attribute is removed from the `Agent` class.
 - System-prompt assembly (in `Agent`) drops the `memory_layers` rendering block.
 - `recall_memory` and `update_memory` tool executors share a `memory_dir` + `main_memory_path` context injected by `ToolLoader`.
+
+---
+
+## Sub-agent identity (v2.0.13)
+
+`init_session()` accepts three additional keyword args used by the
+`sub_agent` tool when it spawns a child:
+
+- `parent_session_id: str | None` — recorded in `manifest.json` so the
+  sidebar can group child sessions under their parent.
+- `mode: "explorer" | "executor" | None` — when set, the matching
+  `toolhub/sub_agent/<mode>.md` is copied to the child's
+  `core/mode.md`. The mode name is also persisted to the manifest.
+- `initial_message_id: str | None` — lets the caller pre-pick the UUID for
+  the seeded `user_input` event so it can later call
+  `BridgeSession.async_wait_for_reply(msg_id)` and correlate the response.
+
+### Manifest schema (additive)
+
+```jsonc
+{
+  "session_id": "2026-04-16_21-30-11-abcd",
+  "entity": "agent",
+  "created_at": "...",
+  // present only on sub-agent children:
+  "parent_session_id": "<parent id>",
+  "mode": "explorer"
+}
+```
+
+The manifest-last invariant from v2.0.8 is preserved — these new fields
+are written in the same final payload, not in a separate file.
+
+### Mode prompt slot
+
+`Session._load_session_capabilities` reads `core/mode.md` after `system.md`
+and concatenates: `system_prompt = system_md + "\n\n---\n\n" + mode_md`
+(or just `system_md` when `mode.md` is absent). The mode prompt thus lives
+inside the cacheable static prefix Anthropic ephemeral-caches; it is not
+re-rendered per turn.
+
+### Guardian wiring
+
+When `manifest.mode == "explorer"`, `Session.__init__` constructs
+`Guardian(playground_dir)` and threads it through `ToolLoader` into the
+Write / Edit / Bash executors. See `docs/butterfly/core/guardian.md` for
+the boundary contract and `docs/butterfly/tool_engine/design.md` §12 for
+the broader sub-agent flow.

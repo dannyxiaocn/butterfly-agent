@@ -17,3 +17,4 @@ task_finish
 task_pause
 task_resume
 task_list
+sub_agent

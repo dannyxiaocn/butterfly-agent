@@ -28,6 +28,8 @@ _REPO_ROOT = Path(__file__).parent.parent.parent
 _DEFAULT_SESSIONS_BASE = _REPO_ROOT / "sessions"
 _DEFAULT_SYSTEM_SESSIONS_BASE = _REPO_ROOT / "_sessions"
 _DEFAULT_ENTITY_BASE = _REPO_ROOT / "entity"
+_TOOLHUB_DIR = _REPO_ROOT / "toolhub"
+_VALID_MODES = frozenset({"explorer", "executor"})
 
 
 def _write_if_absent(path: Path, content: str) -> None:
@@ -81,6 +83,9 @@ def init_session(
     system_sessions_base: Path | None = None,
     entity_base: Path | None = None,
     initial_message: str | None = None,
+    initial_message_id: str | None = None,
+    parent_session_id: str | None = None,
+    mode: str | None = None,
 ) -> str:
     """Create a new session on disk from an entity, ready for the server to pick up.
 
@@ -93,7 +98,20 @@ def init_session(
         system_sessions_base: Root of _sessions/ directory.
         entity_base:         Root of entity/ directory.
         initial_message:     Optional first user message to write to context.jsonl.
+        initial_message_id:  Optional UUID for the initial message — lets the
+                              caller correlate the eventual reply (sub_agent
+                              uses this to call BridgeSession.async_wait_for_reply).
+        parent_session_id:   Optional parent session — recorded in manifest so
+                              sidebar/services can render the session hierarchy.
+        mode:                Optional sub-agent mode: "explorer" | "executor".
+                              When set, ``toolhub/sub_agent/<mode>.md`` is
+                              copied to the child's ``core/mode.md`` and the
+                              mode name is recorded in the manifest. The mode
+                              prompt is folded into the system prompt by
+                              ``Session._build_system_parts``.
     """
+    if mode is not None and mode not in _VALID_MODES:
+        raise ValueError(f"init_session: invalid mode {mode!r}; expected one of {sorted(_VALID_MODES)}")
     s_base = sessions_base or _DEFAULT_SESSIONS_BASE
     sys_base = system_sessions_base or _DEFAULT_SYSTEM_SESSIONS_BASE
     ent_base = entity_base or _DEFAULT_ENTITY_BASE
@@ -255,15 +273,28 @@ def init_session(
 
     ensure_session_status(system_dir)
 
+    # Mode prompt — copy toolhub/sub_agent/<mode>.md into core/mode.md so
+    # Session._build_system_parts folds it into the static (cacheable) system
+    # prefix. Skipped silently if the toolhub asset is not present yet
+    # (e.g. on bare repos or during early bootstrap before sub_agent ships).
+    if mode is not None:
+        mode_src = _TOOLHUB_DIR / "sub_agent" / f"{mode}.md"
+        if mode_src.exists():
+            _write_if_absent(core_dir / "mode.md", mode_src.read_text(encoding="utf-8"))
+
     # Publish manifest LAST (see NOTE above about watcher race):
     # by the time manifest.json is visible to the watcher, sessions/<id>/core/
     # has a fully-populated config.yaml, so Session.__init__'s ensure_config
     # is a no-op instead of clobbering model/provider with DEFAULT_CONFIG.
-    manifest = {
+    manifest: dict = {
         "session_id": session_id,
         "entity": entity_name,
         "created_at": datetime.now().isoformat(),
     }
+    if parent_session_id is not None:
+        manifest["parent_session_id"] = parent_session_id
+    if mode is not None:
+        manifest["mode"] = mode
     (system_dir / "manifest.json").write_text(
         json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
     )
@@ -274,7 +305,7 @@ def init_session(
         event = {
             "type": "user_input",
             "content": initial_message,
-            "id": str(uuid.uuid4()),
+            "id": initial_message_id or str(uuid.uuid4()),
             "ts": datetime.now().isoformat(),
         }
         with context_path.open("a", encoding="utf-8") as f:

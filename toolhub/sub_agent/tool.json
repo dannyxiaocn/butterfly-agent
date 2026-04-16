@@ -1,0 +1,24 @@
+{
+  "name": "sub_agent",
+  "description": "Spawn a child session (same entity as you) to handle a delegated task. The child runs in its OWN isolated session — its intermediate tool calls, thinking, and partial messages are NOT forwarded to your context. You only see its FINAL reply. To inspect mid-run progress, open the child session in the sidebar (it appears indented under yours). Use 'explorer' mode for investigation tasks (read-only outside the child's playground/; safe defaults), and 'executor' mode when the child needs full write access (no sandbox). Set run_in_background=true to fire-and-forget; otherwise this call blocks until the child replies or the timeout fires.",
+  "backgroundable": true,
+  "input_schema": {
+    "type": "object",
+    "required": ["task", "mode"],
+    "properties": {
+      "task": {
+        "type": "string",
+        "description": "The task for the child agent. This becomes the child's first user_input — write it as you would write a clear, complete prompt to a fresh agent. Cite paths and constraints; do not assume the child has any context from your conversation."
+      },
+      "mode": {
+        "type": "string",
+        "enum": ["explorer", "executor"],
+        "description": "explorer = sandboxed (writes only inside the child's playground/; safe for research and untrusted exploration). executor = no sandbox; use only when the child legitimately needs to modify shared files."
+      },
+      "timeout_seconds": {
+        "type": "integer",
+        "description": "Sync-mode wait timeout (default 600s). On timeout the child keeps running — open it in the sidebar to retrieve the result."
+      }
+    }
+  }
+}

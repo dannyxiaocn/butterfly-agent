@@ -289,6 +289,106 @@ html, body {
   margin-top: 1px;
 }
 
+/* Sub-agent child session: indented under parent (markdown-list style). */
+.session-item.child {
+  margin-left: 18px;
+  border-left: 2px solid var(--border);
+  padding-left: 8px;
+}
+
+.session-item.child[data-depth="2"] { margin-left: 36px; }
+.session-item.child[data-depth="3"] { margin-left: 54px; }
+
+.session-indent {
+  color: var(--muted);
+  font-size: 11px;
+  flex-shrink: 0;
+  margin-right: -2px;
+}
+
+.session-mode-chip {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 5px;
+  font-size: 9px;
+  line-height: 14px;
+  border-radius: 7px;
+  background: var(--bg3);
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  vertical-align: 1px;
+}
+
+/* Sub-agent panel card. Shares structure with .panel-row but adds a
+   recent-activity block when expanded. */
+.sub-agent-row .sub-agent-detail {
+  padding: 8px 10px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.sub-agent-detail-row {
+  font-size: 11px;
+  color: var(--muted);
+}
+.sub-agent-recent {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: var(--bg2);
+  border-radius: 4px;
+  padding: 6px 8px;
+}
+.sub-agent-recent-empty {
+  font-size: 11px;
+  color: var(--muted);
+  font-style: italic;
+}
+.sub-agent-evt {
+  font-size: 11px;
+  color: var(--text);
+  line-height: 1.5;
+}
+.sub-agent-evt code {
+  background: var(--bg3);
+  padding: 0 4px;
+  border-radius: 3px;
+  font-size: 10px;
+}
+.sub-agent-evt-icon {
+  color: var(--accent);
+  margin-right: 4px;
+}
+.sub-agent-evt-quiet {
+  color: var(--muted);
+  font-size: 10px;
+}
+.sub-agent-result {
+  margin-top: 4px;
+}
+.sub-agent-result summary {
+  font-size: 11px;
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+}
+.sub-agent-result pre {
+  margin: 6px 0 0;
+  background: var(--bg2);
+  padding: 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  white-space: pre-wrap;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+/* HUD sub-agent badge */
+.hud-subagent .hud-subagent-text {
+  color: var(--accent);
+}
+
 .sidebar-footer {
   display: flex;
   gap: 4px;

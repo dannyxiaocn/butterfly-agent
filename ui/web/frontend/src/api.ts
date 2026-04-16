@@ -90,4 +90,9 @@ export const api = {
 
   killPanelEntry: (id: string, tid: string): Promise<{ status: string }> =>
     request('POST', `/api/sessions/${encodeURIComponent(id)}/panel/${encodeURIComponent(tid)}/kill`),
+
+  /** Last `n` events from a session's events.jsonl. Used by the sub-agent
+   *  panel card to show what the child is doing right now. */
+  getEventsTail: (id: string, n: number = 5): Promise<Array<Record<string, unknown>>> =>
+    request('GET', `/api/sessions/${encodeURIComponent(id)}/events_tail?n=${encodeURIComponent(n)}`),
 };

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from butterfly.core.agent import Agent
+from butterfly.core.guardian import Guardian
 from butterfly.core.hook import OnLoopEnd, OnLoopStart, OnTextChunk, OnToolCall, OnToolDone
 from butterfly.core.tool import Tool
 from butterfly.core.types import AgentResult
@@ -32,6 +33,21 @@ if TYPE_CHECKING:
 SESSIONS_DIR = Path(__file__).parent.parent.parent / "sessions"
 _SYSTEM_SESSIONS_DIR = Path(__file__).parent.parent.parent / "_sessions"
 SESSION_FINISHED = "SESSION_FINISHED"
+
+# Background-spawn placeholder pattern. Agent.py returns this string from
+# ``_execute_tools`` when a tool was routed to BackgroundTaskManager.spawn;
+# Session._make_tool_done_callback parses the embedded tid so the UI can
+# match the eventual tool_finalize event.
+import re as _re
+_BG_PLACEHOLDER_TID_RE = _re.compile(r'task_id="([^"]+)"')
+
+
+def _parse_background_tid(result: str) -> str | None:
+    """Return the tid embedded in a background-spawn placeholder result, else None."""
+    if not isinstance(result, str) or "task_id=" not in result:
+        return None
+    m = _BG_PLACEHOLDER_TID_RE.search(result)
+    return m.group(1) if m else None
 
 
 class Session:
@@ -135,6 +151,23 @@ class Session:
         ensure_session_status(self.system_dir)
         ensure_config(self.session_dir)
 
+        # Sub-agent identity from manifest. `mode` (explorer/executor) and
+        # `parent_session_id` are written by init_session; mode drives the
+        # Guardian wired into write/edit/bash via ToolLoader.
+        self._mode: str | None = None
+        self._parent_session_id: str | None = None
+        self._guardian: Guardian | None = None
+        manifest_path = self.system_dir / "manifest.json"
+        if manifest_path.exists():
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                self._mode = manifest.get("mode")
+                self._parent_session_id = manifest.get("parent_session_id")
+            except (json.JSONDecodeError, OSError):
+                pass
+        if self._mode == "explorer":
+            self._guardian = Guardian(self.playground_dir)
+
         # Non-blocking tool infrastructure — one BackgroundTaskManager per session.
         # The manager is wired into the Agent so backgroundable tool calls with
         # run_in_background=true get routed here instead of executed inline.
@@ -151,6 +184,17 @@ class Session:
             venv_env_provider=_venv_env_provider,
         )
         self._agent.background_spawn = self._bg_manager.spawn
+
+        # Sub-agent runner: lets ``sub_agent`` calls with run_in_background=true
+        # flow through the same panel + events plumbing as bash. Sync calls
+        # use SubAgentTool directly via ToolLoader.
+        from butterfly.tool_engine.sub_agent import SubAgentRunner
+        self._bg_manager.register_runner("sub_agent", SubAgentRunner(
+            parent_session_id=self._session_id,
+            sessions_base=self._base_dir,
+            system_sessions_base=self._system_base,
+            entity_base=self._base_dir.parent / "entity",
+        ))
 
     # ── Capability loading ─────────────────────────────────────────
 
@@ -187,8 +231,15 @@ class Session:
         # 2. prompts from core/
         system_md = self._read_core_text("system.md")
         env_md = self._read_core_text("env.md")
+        # Sub-agent mode prompt — folded into the static (cacheable) system
+        # prefix so explorer/executor identity is established before env_context.
+        # Empty string when this isn't a sub-agent session.
+        mode_md = self._read_core_text("mode.md")
 
-        self._agent.system_prompt = system_md
+        if mode_md:
+            self._agent.system_prompt = f"{system_md}\n\n---\n\n{mode_md}" if system_md else mode_md
+        else:
+            self._agent.system_prompt = system_md
         self._agent.env_context = (
             env_md.replace("{session_id}", self._session_id) if env_md else ""
         )
@@ -242,6 +293,11 @@ class Session:
                 main_memory_path=self.memory_path,
                 panel_dir=self.panel_dir,
                 tool_results_dir=self.tool_results_dir,
+                guardian=self._guardian,
+                parent_session_id=self._session_id,
+                sessions_base=self._base_dir,
+                system_sessions_base=self._system_base,
+                entity_base=self._base_dir.parent / "entity",
             )
             # Load tools from tools.md (toolhub), fallback to legacy tool.md
             tools_md_path = self.core_dir / "tools.md"
@@ -1031,17 +1087,27 @@ class Session:
                 return
 
             entry = evt.entry
+            is_sub_agent = entry.tool_name == "sub_agent"
             # Build the human-readable notification text. Kept concise on
             # purpose — bulk output is fetchable via tool_output(task_id=...).
             if evt.kind == "completed":
                 duration = ""
                 if entry.finished_at and entry.started_at:
                     duration = f" in {entry.finished_at - entry.started_at:.1f}s"
-                msg = (
-                    f"Background task {entry.tid} ({entry.tool_name}) completed "
-                    f"with exit {entry.exit_code}{duration}. {entry.output_bytes}B output.\n"
-                    f'Fetch full output: tool_output(task_id="{entry.tid}").'
-                )
+                if is_sub_agent:
+                    # Sub-agent contract: parent only ever sees the child's
+                    # final reply. The runner stuffs that into entry.meta.result.
+                    sub_result = (entry.meta or {}).get("result") or "(empty reply)"
+                    msg = (
+                        f"sub_agent task {entry.tid} completed{duration}.\n\n"
+                        f"{sub_result}"
+                    )
+                else:
+                    msg = (
+                        f"Background task {entry.tid} ({entry.tool_name}) completed "
+                        f"with exit {entry.exit_code}{duration}. {entry.output_bytes}B output.\n"
+                        f'Fetch full output: tool_output(task_id="{entry.tid}").'
+                    )
             elif evt.kind == "stalled":
                 msg = (
                     f"Background task {entry.tid} ({entry.tool_name}) has produced "
@@ -1064,29 +1130,71 @@ class Session:
             else:
                 msg = f"Background task {entry.tid} event: {evt.kind}"
 
-            event = {
-                "type": "user_input",
-                "content": msg,
-                "id": str(uuid.uuid4()),
-                "caller": "system",
-                "source": "panel",
-                # Per spec: background-tool notifications default to interrupt
-                # so the agent surfaces a completed/stalled job promptly even
-                # if it was mid-loop on something else. The dispatcher's
-                # uncommitted-merge rule folds the cancelled in-flight input
-                # back together when no LLM response was committed yet, so
-                # this never produces consecutive user messages on the API.
-                "mode": "interrupt",
-                "tid": entry.tid,
-                "kind": evt.kind,
-            }
-            self._append_context(event)
+            # For sub_agent, the parent only cares about the FINAL reply —
+            # progress lines would just spam the context window. Skip the
+            # context append for progress; let the panel + tool_progress
+            # events carry that information to the UI only.
+            skip_context = is_sub_agent and evt.kind in ("progress", "stalled")
+            if not skip_context:
+                event = {
+                    "type": "user_input",
+                    "content": msg,
+                    "id": str(uuid.uuid4()),
+                    "caller": "system",
+                    "source": "panel",
+                    # Per spec: background-tool notifications default to interrupt
+                    # so the agent surfaces a completed/stalled job promptly even
+                    # if it was mid-loop on something else. The dispatcher's
+                    # uncommitted-merge rule folds the cancelled in-flight input
+                    # back together when no LLM response was committed yet, so
+                    # this never produces consecutive user messages on the API.
+                    "mode": "interrupt",
+                    "tid": entry.tid,
+                    "kind": evt.kind,
+                }
+                self._append_context(event)
             self._append_event({
                 "type": "panel_update",
                 "tid": entry.tid,
                 "kind": evt.kind,
                 "status": entry.status,
             })
+
+            # Bridge events for the chat-side tool cell: progress keeps the
+            # cell yellow with a refreshed summary; terminal kinds flip it
+            # to done. Frontend keys both by tid (set on the immediate
+            # placeholder tool_done) so this works for any backgroundable tool.
+            if evt.kind == "progress":
+                summary = ""
+                if is_sub_agent:
+                    summary = (entry.meta or {}).get("last_child_state", "") or ""
+                else:
+                    summary = (evt.delta_text or "").strip().splitlines()[-1] if evt.delta_text else ""
+                self._append_event({
+                    "type": "tool_progress",
+                    "tid": entry.tid,
+                    "name": entry.tool_name,
+                    "summary": summary,
+                })
+            elif evt.kind in ("completed", "stalled", "killed", "killed_by_restart"):
+                # tool_finalize tells the chat cell to leave the working
+                # state and render terminal styling.
+                duration_ms = 0
+                if entry.finished_at and entry.started_at:
+                    duration_ms = int((entry.finished_at - entry.started_at) * 1000)
+                self._append_event({
+                    "type": "tool_finalize",
+                    "tid": entry.tid,
+                    "name": entry.tool_name,
+                    "kind": evt.kind,
+                    "duration_ms": duration_ms,
+                    "exit_code": entry.exit_code,
+                })
+
+            # HUD sub-agent counter: any sub_agent state change re-broadcasts
+            # the running tally (panel is the source of truth).
+            if is_sub_agent:
+                self._emit_sub_agent_count()
 
     def _set_model_status(self, state: str, source: str) -> str:
         ts = datetime.now().isoformat()
@@ -1126,15 +1234,45 @@ class Session:
         Emits a ``tool_done`` event to events.jsonl after each tool execution,
         giving the UI visibility into tool results. Composes with the external
         on_tool_done hook if set.
+
+        When the result is a background-spawn placeholder (``"task_id=…"``), the
+        event carries ``is_background=true`` plus the parsed ``tid`` so the
+        frontend keeps the yellow "working" cell in place and waits for the
+        matching ``tool_finalize`` event from ``_drain_background_events``.
         """
         ext = self.on_tool_done
 
         def on_tool_done(name: str, input: dict, result: str) -> None:
-            self._append_event({"type": "tool_done", "name": name, "result_len": len(result)})
+            payload = {"type": "tool_done", "name": name, "result_len": len(result)}
+            tid = _parse_background_tid(result)
+            if tid is not None:
+                payload["is_background"] = True
+                payload["tid"] = tid
+            self._append_event(payload)
+            # Newly-spawned sub_agent → bump HUD count immediately. Final
+            # decrement happens in _drain_background_events when the runner
+            # emits the terminal event.
+            if name == "sub_agent" and tid is not None:
+                self._emit_sub_agent_count()
             if ext:
                 ext(name, input, result)
 
         return on_tool_done
+
+    def _emit_sub_agent_count(self) -> None:
+        """Re-broadcast the running sub_agent tally as a HUD-side event."""
+        from butterfly.session_engine.panel import (
+            list_entries as _list_entries,
+            TYPE_SUB_AGENT as _TYPE_SUB_AGENT,
+        )
+        running = sum(
+            1 for e in _list_entries(self.panel_dir)
+            if e.type == _TYPE_SUB_AGENT and not e.is_terminal()
+        )
+        self._append_event({
+            "type": "sub_agent_count",
+            "running": running,
+        })
 
     def _make_loop_start_callback(self):
         """Return a composed on_loop_start callback.
