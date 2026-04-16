@@ -281,6 +281,26 @@ def init_session(
 
     ensure_session_status(system_dir)
 
+    # Parent playground hand-off (sub-agent only). When a child is spawned
+    # by sub_agent, we surface the parent's playground inside the child's
+    # own playground as a symlink — ``playground/parent/`` → parent's
+    # playground. The child can READ those files freely (Guardian only
+    # blocks writes); explorer-mode writes resolve through the symlink to
+    # the parent's tree, which is OUTSIDE the child's Guardian root, so
+    # they are denied. Reuses the existing playground bound — no extra
+    # contract needed. (PR #28 review Gap #6.)
+    if parent_session_id is not None:
+        parent_playground = s_base / parent_session_id / "playground"
+        if parent_playground.is_dir():
+            link_target = session_dir / "playground" / "parent"
+            if not link_target.exists() and not link_target.is_symlink():
+                try:
+                    link_target.symlink_to(parent_playground.resolve(), target_is_directory=True)
+                except OSError:
+                    # Symlink creation may fail on exotic filesystems; the
+                    # child will still work, just without the convenience link.
+                    pass
+
     # Mode prompt — copy toolhub/sub_agent/<mode>.md into core/mode.md.
     # Session._load_session_capabilities folds it into the static
     # (cacheable) system prefix consumed by Agent._build_system_parts.

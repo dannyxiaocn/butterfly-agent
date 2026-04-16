@@ -196,6 +196,7 @@ class Session:
             panel_dir=self.panel_dir,
             tool_results_dir=self.tool_results_dir,
             venv_env_provider=_venv_env_provider,
+            guardian=self._guardian,
         )
         self._agent.background_spawn = self._bg_manager.spawn
 

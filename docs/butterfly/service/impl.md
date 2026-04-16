@@ -45,3 +45,9 @@ CLI and Web should only call these functions, never access IPC/status files dire
   JSON list. Used by the parent's panel card to render the last 5
   events of the sub-agent child on expand; clamped to `1 ≤ n ≤ 100`.
   Returns `[]` if the session has no events yet (rather than 404).
+- `hud_service.get_hud()` payload now includes ``sub_agents_running`` —
+  derived from on-disk `core/panel/*.json` entries with
+  `type == TYPE_SUB_AGENT` and a non-terminal status. Lets the chat HUD
+  restore the badge after a page refresh, since the SSE stream only
+  re-broadcasts ``sub_agent_count`` on state change (PR #28 round 2
+  Gap #7).

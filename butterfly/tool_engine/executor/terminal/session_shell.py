@@ -40,6 +40,7 @@ import time
 from collections import deque
 from typing import Any, Callable, Optional
 
+from butterfly.core.guardian import Guardian
 from butterfly.tool_engine.executor.base import BaseExecutor
 
 _MAX_OUTPUT = 10_000
@@ -59,7 +60,16 @@ class SessionShellExecutor(BaseExecutor):
         workdir: str | None = None,
         venv_env_provider: Optional[Callable[[], Optional[dict[str, str]]]] = None,
         max_output: int = _MAX_OUTPUT,
+        guardian: Guardian | None = None,
     ) -> None:
+        # Guardian (sub-agent explorer mode) overrides workdir to the
+        # boundary root so the persistent shell can never start outside
+        # the sandbox. Without this, an explorer-mode child would reach
+        # session_shell unconstrained — equivalent to a Guardian bypass.
+        # (PR #28 review Bug #4.)
+        self._guardian = guardian
+        if guardian is not None:
+            workdir = str(guardian.root)
         self._workdir = workdir
         self._venv_env_provider = venv_env_provider
         self._max_output = max_output
@@ -80,6 +90,10 @@ class SessionShellExecutor(BaseExecutor):
             env = os.environ.copy()
         # Don't pollute ~/.bash_history with agent commands
         env["HISTFILE"] = ""
+        # Surface the Guardian boundary so the agent's mode prompt can
+        # reason about it from inside the persistent shell.
+        if self._guardian is not None:
+            env["BUTTERFLY_GUARDIAN_ROOT"] = str(self._guardian.root)
         return env
 
     async def _spawn(self) -> None:

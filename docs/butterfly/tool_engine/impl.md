@@ -98,3 +98,19 @@ tools = loader.load_from_tool_md(Path("core/tool.md"))
   `PermissionError` if the resolved target (symlinks resolved) escapes the
   root. Write/Edit surface it as `Error: Failed to {write,edit} <path>: …`;
   bash sets subprocess cwd to the root and exports `BUTTERFLY_GUARDIAN_ROOT`.
+
+### Guardian coverage on every shell path (PR #28 round 2 review)
+
+The Guardian is wired through *all four* surfaces an agent can shell out:
+
+| Surface | Wiring point |
+|---|---|
+| `bash` (inline) | `BashExecutor(workdir=…, guardian=…)` — pins cwd, exports env. |
+| `bash` (background, `run_in_background=true`) | `BashRunner.run` reads `ctx.guardian` from `BackgroundContext`; same pin + env logic. The `BackgroundTaskManager` accepts `guardian=` and threads it into the shared context. |
+| `session_shell` (persistent shell) | `SessionShellExecutor(workdir=…, guardian=…)` — Guardian overrides workdir at construction so the long-lived shell can never spawn outside the boundary; `_build_env` injects `BUTTERFLY_GUARDIAN_ROOT`. |
+| `write` / `edit` | Hard `Guardian.check_write(path)` returning `Error: Failed to …: guardian: …` on violation. |
+
+Without these the explorer-mode contract was a sieve — `session_shell`
+or `bash + run_in_background` would let a child spawn a shell with cwd
+anywhere on disk. Each is exercised by
+`tests/butterfly/tool_engine/test_pr28_review_round2.py`.

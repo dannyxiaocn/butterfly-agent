@@ -169,3 +169,11 @@ Each task card is a `.json` file in `core/tasks/`:
   is wired in `__init__`; agent.py's `run_in_background=true` routing
   dispatches the sub_agent call through the same lifecycle plumbing as
   the bash background flow.
+- `Session.__init__` now also passes `guardian=self._guardian` to
+  `BackgroundTaskManager` so background-mode bash inherits the same
+  boundary as inline bash (PR #28 round 2 Bug #5).
+- `init_session` adds a parent-playground hand-off for sub-agent
+  children: when `parent_session_id` is set, it creates the symlink
+  `sessions/<child>/playground/parent → sessions/<parent>/playground/`.
+  Reads work; writes through the link resolve outside the child's
+  Guardian root and are denied (PR #28 round 2 Gap #6).

@@ -483,6 +483,11 @@ export function createChat(): HTMLElement {
         tokEl.textContent = '—';
         tokEl.title = 'no usage yet';
       }
+      // Restore the sub-agent badge on attach / page refresh — derived
+      // from the on-disk panel by the HUD endpoint, since the SSE stream
+      // only re-broadcasts sub_agent_count when a child changes state.
+      const subAgentsRunning = (data as { sub_agents_running?: number }).sub_agents_running ?? 0;
+      updateHudSubAgents(subAgentsRunning);
     } catch {
       // ignore — HUD is best-effort
     }

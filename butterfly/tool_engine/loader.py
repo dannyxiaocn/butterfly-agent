@@ -185,6 +185,7 @@ class ToolLoader:
                 executor = executor_cls(
                     workdir=self._default_workdir,
                     venv_env_provider=_venv_env_provider,
+                    guardian=self._guardian,
                 )
                 async def _impl(**kwargs: Any) -> str:
                     return await executor.execute(**kwargs)

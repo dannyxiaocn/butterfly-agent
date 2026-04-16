@@ -67,6 +67,12 @@ class BackgroundContext:
     tool_results_dir: Path
     venv_env_provider: Callable[[], dict[str, str] | None] | None
     _emit: Callable[[BackgroundEvent], None]
+    # Optional path boundary for sub-agent's explorer mode. Runners that
+    # spawn shells (BashRunner, future SessionShellRunner) MUST pin cwd to
+    # ``guardian.root`` and export ``BUTTERFLY_GUARDIAN_ROOT`` when set.
+    # PR #28 review Bug #5: without this, ``run_in_background=true`` on
+    # ``bash`` would let an explorer-mode child write outside its sandbox.
+    guardian: "object | None" = None
 
     def emit(self, evt: BackgroundEvent) -> None:
         self._emit(evt)
@@ -144,6 +150,19 @@ class BashRunner:
         workdir = input.get("workdir")
         stdin = input.get("stdin")
         env = ctx.venv_env_provider() if ctx.venv_env_provider else None
+
+        # Guardian (sub-agent explorer mode) overrides cwd to the boundary
+        # root and exports BUTTERFLY_GUARDIAN_ROOT — same contract the
+        # inline BashExecutor enforces. Without this, run_in_background=true
+        # would let an explorer-mode child execute bash with cwd anywhere
+        # (PR #28 review Bug #5).
+        if ctx.guardian is not None:
+            guardian_root = str(ctx.guardian.root)
+            workdir = guardian_root
+            if env is None:
+                env = os.environ.copy()
+            env = dict(env)  # don't mutate venv_env_provider's return
+            env["BUTTERFLY_GUARDIAN_ROOT"] = guardian_root
 
         output_file = ctx.tool_results_dir / f"{tid}.txt"
         output_file.parent.mkdir(parents=True, exist_ok=True)
@@ -319,6 +338,7 @@ class BackgroundTaskManager:
         panel_dir: Path,
         tool_results_dir: Path,
         venv_env_provider: Callable[[], dict[str, str] | None] | None = None,
+        guardian: "object | None" = None,
     ) -> None:
         self._panel_dir = panel_dir
         self._tool_results_dir = tool_results_dir
@@ -334,6 +354,7 @@ class BackgroundTaskManager:
             tool_results_dir=tool_results_dir,
             venv_env_provider=venv_env_provider,
             _emit=self._emit_event,
+            guardian=guardian,
         )
         # Auto-register bash so existing callers (Session, agent.py) work
         # without explicit registration.
