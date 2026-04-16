@@ -33,8 +33,12 @@ export const api = {
   deleteSession: (id: string): Promise<void> =>
     request('DELETE', `/api/sessions/${encodeURIComponent(id)}`),
 
-  sendMessage: (id: string, content: string): Promise<{ id: string }> =>
-    request('POST', `/api/sessions/${encodeURIComponent(id)}/messages`, { content }),
+  sendMessage: (
+    id: string,
+    content: string,
+    mode: 'interrupt' | 'wait' = 'interrupt',
+  ): Promise<{ id: string; mode: string }> =>
+    request('POST', `/api/sessions/${encodeURIComponent(id)}/messages`, { content, mode }),
 
   getHistory: (id: string, contextSince = 0): Promise<{ events: DisplayEvent[]; context_offset: number; events_offset: number }> =>
     request('GET', `/api/sessions/${encodeURIComponent(id)}/history?context_since=${contextSince}`),

@@ -283,6 +283,14 @@ class Agent:
 
             messages.append(Message(role="assistant", content=assistant_content))
             all_tool_calls.extend(tool_calls)
+            # v2.0.12: commit per-iteration so a CancelledError mid-loop
+            # preserves whatever the agent has already produced. Without this,
+            # cancellation would silently discard committed assistant turns
+            # and the orchestrator (Session dispatcher) cannot tell whether
+            # the cancelled run was "uncommitted" (safe to merge new input
+            # into the original user message) or "committed" (must be sent
+            # as a fresh user turn).
+            self._history = list(messages)
 
             if not tool_calls:
                 break
@@ -298,6 +306,7 @@ class Agent:
                 background_spawn=self.background_spawn,
             )
             messages.append(Message(role="tool", content=tool_results))
+            self._history = list(messages)
 
         self._history = list(messages)
 

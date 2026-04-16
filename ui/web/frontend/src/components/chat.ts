@@ -36,17 +36,14 @@ export function createChat(): HTMLElement {
       <span class="hud-sep hud-tokens-sep">·</span>
       <span class="hud-item hud-tokens"><span class="hud-tokens-text">…</span></span>
     </div>
-    <div id="pending-bar" class="pending-bar hidden">
-      <span class="pending-label">queued</span>
-      <span class="pending-preview"></span>
-      <span class="pending-timer"></span>
-      <button id="btn-send-now" class="btn-sm btn-primary" title="Send queued messages immediately">Send now</button>
-      <button id="btn-interrupt-send" class="btn-sm btn-warn hidden" title="Cancel current agent run and send">Interrupt &amp; send</button>
-    </div>
     <div id="chat-input-area" class="chat-input-area">
-      <textarea id="chat-input" placeholder="Type a message… (Shift+Enter for newline, Enter to send — messages are merged over a 5 s window)" rows="3"></textarea>
+      <textarea id="chat-input" placeholder="Type a message… (Enter = send, Shift+Enter = newline, Alt/⌥+Enter = wait-mode)" rows="3"></textarea>
       <div class="chat-input-actions">
-        <button id="btn-interrupt" class="btn-sm btn-warn" title="Interrupt current turn">⚡ Interrupt</button>
+        <button id="btn-interrupt" class="btn-sm btn-warn" title="Bare interrupt — cancel current run, send nothing">⚡ Interrupt</button>
+        <label class="send-mode-toggle" title="Wait: queue behind in-flight run instead of interrupting it">
+          <input type="checkbox" id="chk-wait-mode" />
+          <span>wait</span>
+        </label>
         <div class="chat-input-actions-right">
           <button id="btn-send" class="btn-primary">Send</button>
         </div>
@@ -58,11 +55,7 @@ export function createChat(): HTMLElement {
   const inputEl = el.querySelector('#chat-input') as HTMLTextAreaElement;
   const sendBtn = el.querySelector('#btn-send') as HTMLButtonElement;
   const interruptBtn = el.querySelector('#btn-interrupt') as HTMLButtonElement;
-  const pendingBar = el.querySelector('#pending-bar') as HTMLDivElement;
-  const pendingPreview = el.querySelector('.pending-preview') as HTMLSpanElement;
-  const pendingTimerEl = el.querySelector('.pending-timer') as HTMLSpanElement;
-  const sendNowBtn = el.querySelector('#btn-send-now') as HTMLButtonElement;
-  const interruptSendBtn = el.querySelector('#btn-interrupt-send') as HTMLButtonElement;
+  const waitModeChk = el.querySelector('#chk-wait-mode') as HTMLInputElement;
 
   // Track in-flight tool by name so the HUD can show "▶ bash" during a call.
   // Also held per msg-tool DOM node for the running/finished state transition.
@@ -151,10 +144,11 @@ export function createChat(): HTMLElement {
           if (isStreaming) removeStreamingBubble();
           store.modelState = { state: 'idle', source: null };
           updateHudDot('idle');
-          // Agent idled: flush any pending merged message accumulated while streaming.
-          if (pendingMessages.length > 0 && !sendTimer) {
-            void flushPendingMessages();
-          }
+          // v2.0.12: backend dispatcher owns the queue/merge logic now,
+          // so the frontend has no pending buffer to flush here. The 5 s
+          // merge window was removed (see PR review note: keeping merging
+          // server-side avoids a stale per-tab buffer when multiple
+          // browsers send concurrently).
         }
         store.emit('modelState');
         break;
@@ -421,158 +415,46 @@ export function createChat(): HTMLElement {
   (el as HTMLElement & ChatMethods).handleEvent = handleEvent;
   (el as HTMLElement & ChatMethods).refreshHud = refreshHud;
 
-  // ==================== 5-s user-input merge window ====================
+  // ==================== Send (delegates merge/cancel to backend) ============
   //
-  // State machine (web UI only; CLI is untouched):
+  // v2.0.12: the 5 s frontend merge window + pending bar are gone. The
+  // backend dispatcher (Session._consumer_loop) owns merging and
+  // interruption — see docs/butterfly/session_engine/design.md §"Input
+  // dispatcher". Each Enter sends one POST /messages with a mode field;
+  // the daemon decides whether to interrupt+merge, queue, or wait-merge.
   //
-  //   IDLE  ──[user types+Enter]──▶  PENDING(timer=5s)
+  // UI conventions:
+  //   • Default ``Send`` (Enter / button) → mode=interrupt. Sends with
+  //     interrupt semantics: cancels the in-flight run when uncommitted
+  //     and merges the cancelled input with the new one server-side.
+  //   • Wait toggle / Alt+Enter → mode=wait. Queues behind the in-flight
+  //     run; consecutive wait sends collapse into a single user turn.
+  //   • The bare ⚡ Interrupt button cancels with nothing in its place
+  //     (POST /interrupt) — distinct from a chat-with-mode=interrupt.
   //
-  //   PENDING  ──[timer fires, agent idle]──▶  flush → IDLE
-  //   PENDING  ──[timer fires, agent running]──▶  BUFFERED_WHILE_STREAMING
-  //   PENDING  ──[another message typed]──▶  append to buffer, reset 5s timer
-  //   PENDING  ──["Send now"]──▶  flush → IDLE
-  //   PENDING  ──["Interrupt & send"]──▶  /interrupt + flush → IDLE
-  //
-  //   BUFFERED_WHILE_STREAMING  ──[model_status=idle]──▶  flush → IDLE
-  //   BUFFERED_WHILE_STREAMING  ──[another message]──▶  append to buffer
-  //                                                      (no timer — waits on agent)
-  //   BUFFERED_WHILE_STREAMING  ──["Send now"]──▶  flush → IDLE
-  //   BUFFERED_WHILE_STREAMING  ──["Interrupt & send"]──▶  /interrupt + flush
-  //
-  // Task-layer messages (scheduled duty fires) bypass this entirely — they
-  // go directly to the backend via the task runtime, not through this path.
-  // CLI chat also bypasses; this merge is strictly front-end driven.
-  //
-  // Auto-interrupt heuristic: if the buffered content starts with a
-  // correction phrase ("stop", "wait", "no", "cancel"), promote the pending
-  // "Send now" into an "Interrupt & send". Otherwise default to merge-and-send.
-  const MERGE_WINDOW_MS = 5000;
-  // Bilingual correction phrases — project is EN/ZH per memory. Word boundary
-  // only applies to ASCII; CJK terms fall back to plain prefix match.
-  const INTERRUPT_PHRASES = /^\s*(stop|wait|no|cancel|nope|hold on|等等|等一下|停|取消|别|算了)/i;
+  // No per-tab pending buffer / timer is kept anymore: a stale buffer
+  // bound to a tab's `pendingSessionId` was the source of the multi-tab
+  // footgun flagged in PR #24 review — moving merge to the daemon
+  // sidesteps that whole class of bug.
 
-  let pendingMessages: string[] = [];
-  let pendingSessionId: string | null = null;
-  let sendTimer: ReturnType<typeof setTimeout> | null = null;
-  let timerDeadline = 0;
-  let timerTickHandle: ReturnType<typeof setInterval> | null = null;
-
-  function isAgentRunning(): boolean {
-    return store.modelState.state === 'running';
-  }
-
-  function updatePendingBar() {
-    if (pendingMessages.length === 0) {
-      pendingBar.classList.add('hidden');
-      if (timerTickHandle) { clearInterval(timerTickHandle); timerTickHandle = null; }
-      return;
-    }
-    pendingBar.classList.remove('hidden');
-    const combined = pendingMessages.join('\n');
-    const preview = combined.length > 80 ? combined.slice(0, 80) + '…' : combined;
-    pendingPreview.textContent = preview;
-
-    if (isAgentRunning()) {
-      pendingTimerEl.textContent = 'waiting for agent…';
-      interruptSendBtn.classList.remove('hidden');
-      if (timerTickHandle) { clearInterval(timerTickHandle); timerTickHandle = null; }
-    } else if (timerDeadline > 0) {
-      const remaining = Math.max(0, Math.ceil((timerDeadline - Date.now()) / 1000));
-      pendingTimerEl.textContent = `sending in ${remaining}s`;
-      interruptSendBtn.classList.add('hidden');
-    }
-
-    // Auto-interrupt heuristic
-    if (INTERRUPT_PHRASES.test(combined) && isAgentRunning()) {
-      interruptSendBtn.classList.add('pulse');
-    } else {
-      interruptSendBtn.classList.remove('pulse');
-    }
-  }
-
-  function startTimerTick() {
-    if (timerTickHandle) clearInterval(timerTickHandle);
-    timerTickHandle = setInterval(updatePendingBar, 500);
-  }
-
-  async function flushPendingMessages() {
-    if (pendingMessages.length === 0) return;
-    const combined = pendingMessages.join('\n');
-    const sessId = pendingSessionId;
-    pendingMessages = [];
-    pendingSessionId = null;
-    timerDeadline = 0;
-    if (sendTimer) { clearTimeout(sendTimer); sendTimer = null; }
-    updatePendingBar();
-    if (!sessId) return;
-    try {
-      await api.sendMessage(sessId, combined);
-    } catch (e) {
-      console.error('Failed to send merged user message:', e);
-      appendEvent({ type: 'error', content: `Failed to send: ${e}` });
-    }
-  }
-
-  async function interruptAndFlush() {
-    const sessId = pendingSessionId ?? store.currentSessionId;
-    if (!sessId) return;
-    try {
-      await api.interruptSession(sessId);
-    } catch (e) {
-      console.error('Interrupt failed:', e);
-    }
-    await flushPendingMessages();
-  }
-
-  async function sendMessage() {
+  async function sendMessage(modeOverride?: 'interrupt' | 'wait') {
     const content = inputEl.value.trim();
     if (!content || !store.currentSessionId) return;
     const sess = store.currentSession;
     if (sess?.id.endsWith('_meta') || sess?.params?.is_meta_session) return;
-    const sessId = store.currentSessionId; // capture NOW, not at flush time
+    const sessId = store.currentSessionId;
+    const mode: 'interrupt' | 'wait' = modeOverride ?? (waitModeChk.checked ? 'wait' : 'interrupt');
     inputEl.value = '';
     inputEl.style.height = 'auto';
-    // If session changed mid-batch, flush previous batch to its original session first
-    if (pendingSessionId && pendingSessionId !== sessId) {
-      if (sendTimer) { clearTimeout(sendTimer); sendTimer = null; }
-      void flushPendingMessages();
+    try {
+      await api.sendMessage(sessId, content, mode);
+    } catch (e) {
+      console.error('Failed to send user message:', e);
+      appendEvent({ type: 'error', content: `Failed to send: ${e}` });
     }
-    pendingMessages.push(content);
-    pendingSessionId = sessId;
-
-    if (isAgentRunning()) {
-      // Agent is mid-reply — hold the buffer, don't arm the 5s timer.
-      // It will be flushed on model_status=idle.
-      if (sendTimer) { clearTimeout(sendTimer); sendTimer = null; }
-      timerDeadline = 0;
-    } else {
-      // Agent idle — arm or reset the 5s merge timer.
-      if (sendTimer) clearTimeout(sendTimer);
-      timerDeadline = Date.now() + MERGE_WINDOW_MS;
-      sendTimer = setTimeout(() => {
-        sendTimer = null;
-        timerDeadline = 0;
-        // Re-check: by the time the timer fires, the agent might have started.
-        if (isAgentRunning()) {
-          updatePendingBar();
-          return;
-        }
-        void flushPendingMessages();
-      }, MERGE_WINDOW_MS);
-      startTimerTick();
-    }
-    updatePendingBar();
   }
 
-  sendBtn.addEventListener('click', sendMessage);
-  sendNowBtn.addEventListener('click', () => {
-    if (sendTimer) { clearTimeout(sendTimer); sendTimer = null; }
-    void flushPendingMessages();
-  });
-  interruptSendBtn.addEventListener('click', () => {
-    if (sendTimer) { clearTimeout(sendTimer); sendTimer = null; }
-    void interruptAndFlush();
-  });
+  sendBtn.addEventListener('click', () => { void sendMessage(); });
 
   // Chinese IME: track composition state so Enter that confirms a candidate
   // does not also trigger message send.
@@ -583,7 +465,8 @@ export function createChat(): HTMLElement {
   inputEl.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey && !isComposing) {
       e.preventDefault();
-      sendMessage();
+      // Alt/⌥+Enter: explicit one-shot wait-mode send (independent of toggle)
+      void sendMessage(e.altKey ? 'wait' : undefined);
     }
   });
   inputEl.addEventListener('input', () => {
@@ -596,24 +479,14 @@ export function createChat(): HTMLElement {
     await api.interruptSession(store.currentSessionId).catch(console.error);
   });
 
-  // Update input disabled state for meta sessions. Also flush any pending
-  // buffer that belongs to a DIFFERENT session — otherwise switching mid-5s
-  // window leaves a stale pending bar visible on the new session that
-  // targets the previous session ("Send now" / "Interrupt & send" would act
-  // on the wrong session — silent footgun flagged in PR #24 review).
   store.on('currentSession', () => {
     const sess = store.currentSession;
-    const newSessionId = sess?.id ?? null;
-    if (pendingSessionId && pendingSessionId !== newSessionId) {
-      if (sendTimer) { clearTimeout(sendTimer); sendTimer = null; }
-      // Fire-and-forget: the send targets the original session id captured
-      // in pendingSessionId, not the newly-selected one.
-      void flushPendingMessages();
-    }
     const isMeta = sess?.id.endsWith('_meta') || sess?.params?.is_meta_session;
     inputEl.disabled = !!isMeta;
     sendBtn.disabled = !!isMeta;
-    inputEl.placeholder = isMeta ? 'Direct chat with meta sessions is disabled.' : 'Type a message… (Shift+Enter for newline, Enter to send)';
+    inputEl.placeholder = isMeta
+      ? 'Direct chat with meta sessions is disabled.'
+      : 'Type a message… (Enter = send, Shift+Enter = newline, Alt/⌥+Enter = wait-mode)';
   });
 
   return el;

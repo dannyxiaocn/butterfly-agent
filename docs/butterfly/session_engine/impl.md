@@ -11,28 +11,50 @@
 | `session_config.py` | Reads/writes `core/config.yaml` with defaults |
 | `session_status.py` | Reads/writes `_sessions/<id>/status.json` |
 | `task_cards.py` | Per-task `.json` files in `core/tasks/` with scheduling and status management |
-| `session.py` | `Session` class — wraps Agent with persistent file-backed behavior |
+| `pending_inputs.py` | `ChatItem` / `TaskItem` dataclasses for the v2.0.12 input dispatcher inbox; `default_mode_for_source` and `merge_chat_content` helpers |
+| `session.py` | `Session` class — wraps Agent with persistent file-backed behavior + dispatcher consumer |
 
-## Session.run_daemon_loop()
+## Session.run_daemon_loop() — v2.0.12 dispatcher
 
 ```
-loop (0.5s sleep):
-  ├─ _emit_version_notice_if_stale()  ← once on startup; emits system_notice if meta is newer
-  ├─ poll_inputs() → new user_input → chat(message)
-  ├─ poll_interrupt() → interrupt → stop current run
-  └─ check due task cards → tick(card)
+producer loop (0.5s sleep):
+  ├─ _emit_version_notice_if_stale()  ← once on startup
+  ├─ _drain_background_events()       ← bg-tool notifs → user_input(mode=interrupt)
+  ├─ poll_interrupt()                 ← bare interrupt → cancel run + drop inbox
+  ├─ poll_inputs() → for each msg:    ← reads mode field; default by source
+  │     await self._enqueue(ChatItem(...))
+  └─ check due task cards:
+        await self._enqueue(TaskItem(card))   (if not already in _scheduled_task_names)
 
-chat(message):
-  1. _load_session_capabilities()  ← re-read core/ from disk
-  2. agent.run(messages, tools)    ← LLM loop
-  3. append turn to context.jsonl
+consumer loop (started lazily on first enqueue):
+  while inbox:
+    item = inbox.pop(0)
+    if isinstance(item, ChatItem):
+      # greedy wait-tail merge
+      while inbox[0] is wait-mode ChatItem:
+        item.merge_after(inbox.pop(0))
+    await _dispatch_one(item)
 
-tick(card):
-  1. Build prompt from card + task.md
-  2. agent.run(...)
-  3. Mark card done (recurring → pending with updated last_finished_at)
-  4. On error: mark_pending() (not paused) so task retries next cycle
+_dispatch_one(item):
+  if TaskItem: _do_tick(item.card)
+  else:
+    self._run_task = create_task(_do_chat(item))
+    try: await self._run_task → item.resolve(result)
+    except CancelledError:
+      committed = len(history) > baseline
+      if not committed:
+        # fold cancelled content into next interrupt-mode item
+        for nxt in inbox:
+          if isinstance(nxt, ChatItem) and nxt.mode == 'interrupt':
+            nxt.merge_before(item); break
+      else:
+        # partial turn already saved by _do_chat; reject caller
+        item.reject(CancelledError())
 ```
+
+`_do_chat` and `_do_tick` carry the prior `chat()` / `tick()` bodies; the public `chat()` / `tick()` are thin facades that build a queue item, await its future, and delegate to the dispatcher.
+
+`Agent.run()` writes `self._history = list(messages)` after every iteration's assistant append (and again after a tool-result append) so the dispatcher can distinguish "cancelled before the LLM committed" (history unchanged → fold-merge) from "cancelled after at least one assistant turn" (history grew → save `interrupted: True` partial turn, run new chat fresh).
 
 ## init_session() Flow
 

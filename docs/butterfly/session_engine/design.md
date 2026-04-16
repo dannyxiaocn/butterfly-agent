@@ -44,6 +44,35 @@ Each entity has a meta session (`<entity>_meta`) that:
 
 When a child session starts its daemon loop, it compares its `agent_version` against the meta session's current version. If meta has advanced, a `system_notice` event is emitted — rendered in both web UI and CLI — suggesting the user start a new session to pick up the latest configuration.
 
+### Input dispatcher — interrupt / wait modes (v2.0.12)
+
+`Session` no longer drives the agent loop straight from `chat()`. Every chat call, every drained background-tool notification, and every due task card is enqueued into a single in-memory inbox; a dedicated consumer task drains it serially. The two modes the queue supports correspond exactly to the user-visible verbs the web UI used to fake on the frontend:
+
+| Mode | Producer defaults | Effect on inbox / running run |
+| --- | --- | --- |
+| `interrupt` | chat from UI/CLI; background-tool notifications (`source=panel`) | Cancel the in-flight run if any; append to inbox. If the cancelled run had not yet committed an assistant turn, the consumer folds the cancelled item's content into this item via `merge_before` so the LLM only sees one user turn (no consecutive `user` messages). |
+| `wait` | task wakeups (`source=task`); explicit `mode=wait` chats | Append to inbox without cancelling. If the trailing inbox entry is itself a wait-mode `ChatItem`, merge into it via `merge_after` so a burst of "...also" sends collapses into one user turn. |
+
+A bare `send_interrupt()` (the explicit ⚡ Interrupt button) cancels the in-flight run **and** drops the entire inbox — it is not a chat-with-mode; it just stops.
+
+#### Why the cancelled-merge rule is non-negotiable
+
+`Agent.run()` builds `messages = [..._history, user_message]` and writes nothing to `_history` until after each iteration commits an assistant turn. Cancellation mid-`provider.complete()` therefore leaves history clean — the user turn was never durably appended. If the dispatcher then sent the new content as a fresh user message, the next agent run would still build `[..._history, new_user]`, but the **prior on-disk state** (any earlier turns) would still end with whatever was last committed; the *intended* user turn for the cancelled chat is lost. By folding the cancelled content into the new chat (`merged = old + new`), the LLM receives the full intent without any consecutive-user-message violation.
+
+For the symmetric case — cancellation **after** at least one iteration commits — `_do_chat` writes a `turn` event with `interrupted: True` carrying just the committed prefix. The new chat then runs as a fresh user turn (history already ends with the committed assistant message, so consecutive-user-message is impossible).
+
+#### Per-iteration history commits (`Agent.run`)
+
+The dispatcher's "uncommitted vs committed" decision needs a sharp signal. `Agent.run()` therefore writes `self._history = list(messages)` after each iteration's assistant append (and again after the tool-result append), so cancellation at any point reflects exactly what the LLM has produced. The trailing `self._history = list(messages)` after the loop is now redundant but harmless.
+
+#### Task-card scheduling
+
+Task cards enter the inbox as `TaskItem(card=...)`. `_scheduled_task_names` is a guard the daemon uses to skip a card it has already enqueued so the same wakeup isn't queued every 0.5 s while it sits behind a chat. `TaskItem` never merges with chat items — task wakeups have their own prompt template and `mark_working` / `mark_finished` bookkeeping. If a wait-mode chat arrives while a task is queued behind a chat, both run in their own activations, in order.
+
+#### Frontend implications
+
+The 5 s pending bar (PR #24) is removed. The dispatcher owns merging, so each Enter sends one `POST /messages` with a `mode` field — default `interrupt`. The Alt/⌥+Enter shortcut (and a small `wait` checkbox) sends with `mode=wait`. There is no per-tab buffer to go stale across tabs, which fixes the silent-cross-session footgun that PR #24 review flagged.
+
 ### `init_session()` invariant — manifest.json is the watcher's discovery signal
 
 `_sessions/<id>/manifest.json` is what `SessionWatcher._scan()` checks to decide whether to spawn a `Session` task for a given session_id. Therefore:

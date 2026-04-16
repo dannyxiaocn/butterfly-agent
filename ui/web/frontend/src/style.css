@@ -1449,53 +1449,24 @@ button:disabled {
   font-weight: 500;
 }
 
-/* ====== Pending user-input bar (v2.0.9) ====== */
-.pending-bar {
-  display: flex;
+/* ====== Send-mode toggle (v2.0.12) — wait checkbox in chat input bar ===== */
+/* Replaces the v2.0.9 5 s pending-bar UI; backend dispatcher now owns
+   queue / merge / interrupt semantics, so the per-tab pending buffer is
+   gone. */
+.send-mode-toggle {
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 16px;
-  background: rgba(210,153,34,0.08);
-  border-top: 1px solid rgba(210,153,34,0.25);
-  font-size: 12px;
-  color: var(--muted);
-  flex-shrink: 0;
-}
-.pending-label {
-  font-size: 10px;
-  letter-spacing: 0.6px;
+  gap: 4px;
+  font-size: 11px;
+  letter-spacing: 0.4px;
   text-transform: uppercase;
-  color: var(--yellow);
-  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
 }
-.pending-preview {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  font-family: var(--mono);
-  font-size: 12px;
-  color: var(--text2);
-  opacity: 0.75;
-  font-style: italic;
-}
-.pending-timer {
-  color: var(--dimmed);
-  font-family: var(--mono);
-  font-size: 11px;
-  white-space: nowrap;
-}
-.pending-bar .btn-sm {
-  padding: 3px 8px;
-  font-size: 11px;
-}
-.pending-bar .pulse {
-  animation: pending-pulse 1s ease-in-out infinite;
-}
-@keyframes pending-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(248,81,73,0.4); }
-  50% { box-shadow: 0 0 0 4px rgba(248,81,73,0); }
+.send-mode-toggle input[type="checkbox"] {
+  margin: 0;
+  accent-color: var(--yellow);
 }
 
 /* ====== Tool compact row (v2.0.9) ====== */

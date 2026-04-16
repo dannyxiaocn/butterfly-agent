@@ -13,9 +13,14 @@ Two files per session:
                    Consumed by the SSE stream; never used by load_history().
 
 context.jsonl event types:
-  user_input   — UI → daemon: {"type": "user_input", "content": "...", "id": "...", "ts": "..."}
+  user_input   — UI → daemon: {"type": "user_input", "content": "...", "id": "...",
+                               "ts": "...", "mode": "interrupt|wait" (optional, default
+                               via pending_inputs.default_mode_for_source: user/panel
+                               → interrupt, task → wait)}
   turn         — daemon → UI: {"type": "turn", "triggered_by": "user|task:<name>",
-                               "messages": [...], "ts": "..."}
+                               "messages": [...], "ts": "...",
+                               "merged_user_input_ids": [...] (optional; set when more
+                               than one user_input event was merged into the turn)}
 
 events.jsonl event types:
   model_status       — {"type": "model_status", "state": "running|idle", "source": "...", "ts": "..."}

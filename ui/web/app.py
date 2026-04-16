@@ -182,18 +182,30 @@ def create_app(sessions_dir: Path, system_sessions_dir: Path | None = None) -> F
     async def send_message(session_id: str, body: dict):
         if service_is_meta_session(session_id):
             raise HTTPException(403, "Direct chat with meta sessions is disabled.")
+        # mode: "interrupt" (default — cancel in-flight + merge if uncommitted)
+        # or "wait" (queue + merge with the trailing wait-mode chat input).
+        mode = body.get("mode", "interrupt")
+        if mode not in ("interrupt", "wait"):
+            raise HTTPException(400, f"invalid mode: {mode!r}")
         try:
-            msg_id = service_send_message(session_id, body.get("content", ""), system_sessions_dir)
+            msg_id = service_send_message(
+                session_id,
+                body.get("content", ""),
+                system_sessions_dir,
+                mode=mode,
+            )
         except (FileNotFoundError, ValueError) as exc:
             _raise_session_error(exc, session_id)
-        return {"id": msg_id}
+        return {"id": msg_id, "mode": mode}
 
     @app.post("/api/sessions/{session_id}/interrupt")
     async def interrupt_session_handler(session_id: str):
-        """Send a soft interrupt to the session.
+        """Bare interrupt — cancel the in-flight run AND drop the inbox.
 
-        Drains any pending queued inputs and defers the next task tick.
-        In-progress turns run to completion.
+        v2.0.12: this is the explicit ⚡ interrupt button. It differs from
+        sending a chat with ``mode=interrupt`` (which cancels and runs the
+        new content): a bare interrupt just stops, with nothing to run in
+        its place.
         """
         try:
             service_interrupt_session(session_id, system_sessions_dir)

@@ -94,35 +94,46 @@ class BridgeSession:
 
     # ── Write ────────────────────────────────────────────────────────────────
 
-    def send_message(self, content: str, *, caller: str = "human") -> str:
+    def send_message(
+        self,
+        content: str,
+        *,
+        caller: str = "human",
+        mode: str = "interrupt",
+    ) -> str:
         """Write a user_input event to context.jsonl. Returns the message ID.
 
         The message ID links the input to the responding turn (user_input_id
         field). Use async_wait_for_reply() with this ID to block until the
         agent finishes.
+
+        Args:
+            mode: ``interrupt`` (default) cancels the current agent run if
+                any; the new content is merged with the cancelled input when
+                the cancelled run had not yet committed an assistant turn.
+                ``wait`` queues the message behind in-flight / earlier
+                queued work; consecutive wait-mode chat inputs collapse into
+                a single user message before the agent fires.
         """
+        if mode not in ("interrupt", "wait"):
+            raise ValueError(f"invalid mode: {mode!r} (expected interrupt|wait)")
         msg_id = str(uuid.uuid4())
         self._ipc.append_context({
             "type": "user_input",
             "content": content,
             "id": msg_id,
             "caller": caller,
+            "mode": mode,
         })
         return msg_id
 
     def send_interrupt(self) -> None:
-        """Write an interrupt control event to events.jsonl.
+        """Write an explicit interrupt control event to events.jsonl.
 
-        The session's run_daemon_loop sees this and:
-          1. Drains (discards) pending queued user_input events.
-          2. Skips the next scheduled task tick.
-          3. Emits {"type": "interrupted"} back to events.jsonl so the
-             frontend knows the interrupt was acknowledged.
-
-        In-progress turns run to completion (soft interrupt — no mid-turn
-        cancellation). This mirrors claude-code's interrupt control_request
-        semantics where the server acks but the current LLM call is not
-        aborted at the API level.
+        The session daemon drains pending queued user_input events and
+        cancels the in-progress agent loop. Distinct from ``mode=interrupt``
+        on a chat: a chat-with-interrupt cancels then runs the new content;
+        a bare interrupt cancels and runs nothing.
         """
         self._ipc.append_event({"type": "interrupt"})
 
