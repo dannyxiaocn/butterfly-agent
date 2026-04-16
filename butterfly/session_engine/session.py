@@ -898,9 +898,14 @@ class Session:
         chat with ``mode=interrupt``. A bare interrupt clears everything
         and runs nothing in its place.
         """
+        # Seed the lock now so subsequent ``_enqueue`` calls share the same
+        # instance. ``self._inbox_lock or asyncio.Lock()`` would have created
+        # a throwaway lock here that doesn't synchronize with the producer's
+        # in-progress _enqueue on a racing daemon tick (cubic review P2).
+        self._ensure_inbox_primitives()
         cancelled_run = False
         dropped = 0
-        async with (self._inbox_lock or asyncio.Lock()):
+        async with self._inbox_lock:  # type: ignore[arg-type]
             if self._run_task is not None and not self._run_task.done():
                 self._run_task.cancel()
                 cancelled_run = True

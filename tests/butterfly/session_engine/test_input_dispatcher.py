@@ -361,6 +361,33 @@ async def test_explicit_interrupt_drops_inbox_and_cancels_run(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_explicit_interrupt_before_any_enqueue_seeds_shared_lock(tmp_path):
+    """Cubic review P2: when ⚡ Interrupt fires before the dispatcher has
+    ever been touched, ``_handle_explicit_interrupt`` must seed
+    ``_inbox_lock`` rather than acquire a throwaway lock. Otherwise a
+    concurrent ``_enqueue`` would synthesize a different lock instance
+    and the two would not mutually exclude."""
+    provider = RecordingProvider([("ok", [])])
+    agent = Agent(provider=provider)
+    session = make_session(tmp_path, agent, session_id="lock-seed")
+
+    # Fresh session: inbox primitives haven't been created yet.
+    assert session._inbox_lock is None
+
+    await session._handle_explicit_interrupt(0)
+    # After the handler, the lock exists and is the same instance the
+    # next _enqueue will acquire.
+    assert session._inbox_lock is not None
+    seeded = session._inbox_lock
+
+    # Now drive a normal chat; _enqueue must observe the SAME lock,
+    # not construct a new one via _ensure_inbox_primitives().
+    result = await session.chat("hi")
+    assert result.content == "ok"
+    assert session._inbox_lock is seeded
+
+
+@pytest.mark.asyncio
 async def test_send_message_records_mode_in_context(tmp_path):
     """BridgeSession.send_message writes the mode field so the daemon knows
     which queue semantics to apply."""
