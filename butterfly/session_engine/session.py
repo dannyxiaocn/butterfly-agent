@@ -68,6 +68,9 @@ class Session:
     creation is idempotent (existing files are never overwritten).
     """
 
+    _INPUT_POLL_INTERVAL = 0.05
+    _TASK_POLL_INTERVAL = 0.5
+
     def __init__(
         self,
         agent: Agent,
@@ -791,10 +794,12 @@ class Session:
     async def run_daemon_loop(self, ipc: "FileIPC", stop_event: asyncio.Event | None = None) -> None:
         """Run as a server-managed session.
 
-        Polls ``context.jsonl`` for user_input events every 0.5 s and the
-        background-task event queue plus due task cards each cycle. Each
-        signal is enqueued into the dispatcher inbox; the consumer loop
-        runs them serially with the merge / interrupt semantics in
+        Polls ``context.jsonl`` for user_input / interrupt events on a tight
+        cadence (default 50 ms) so a human follow-up can cancel the in-flight
+        run before a fast provider finishes. Slower housekeeping work (stopped
+        auto-expiry + due task scheduling) stays on a coarser cadence. Each
+        signal is enqueued into the dispatcher inbox; the consumer loop runs
+        them serially with the merge / interrupt semantics in
         ``pending_inputs.py``.
 
         v2.0.12: the daemon loop no longer awaits ``self.chat()`` /
@@ -812,6 +817,8 @@ class Session:
 
         input_offset = ipc.context_size()
         interrupt_offset = ipc.events_size()
+        loop = asyncio.get_running_loop()
+        next_housekeeping_at = loop.time()
 
         try:
             while True:
@@ -825,57 +832,59 @@ class Session:
                     inputs, input_offset = ipc.poll_inputs(input_offset)
                     discarded = len(inputs)
                     await self._handle_explicit_interrupt(discarded)
-                    await asyncio.sleep(0.5)
-                    continue
+                else:
+                    inputs, input_offset = ipc.poll_inputs(input_offset)
+                    for msg in inputs:
+                        content = msg.get("content", "")
+                        msg_id = msg.get("id")
+                        caller_type = msg.get("caller", "human")
+                        source = msg.get("source") or ("user" if caller_type == "human" else "user")
+                        mode = msg.get("mode") or default_mode_for_source(source)
+                        if mode not in ("interrupt", "wait"):
+                            mode = default_mode_for_source(source)
+                        if self.is_stopped():
+                            self.set_status("active")
+                            self._append_event({"type": "status", "value": "resumed"})
+                        item = ChatItem(
+                            content=content,
+                            mode=mode,
+                            source=source,
+                            caller_type=caller_type,
+                            user_input_ids=[msg_id] if msg_id else [],
+                        )
+                        await self._enqueue(item)
 
-                inputs, input_offset = ipc.poll_inputs(input_offset)
-                for msg in inputs:
-                    content = msg.get("content", "")
-                    msg_id = msg.get("id")
-                    caller_type = msg.get("caller", "human")
-                    source = msg.get("source") or ("user" if caller_type == "human" else "user")
-                    mode = msg.get("mode") or default_mode_for_source(source)
-                    if mode not in ("interrupt", "wait"):
-                        mode = default_mode_for_source(source)
+                now = loop.time()
+                if now >= next_housekeeping_at:
                     if self.is_stopped():
-                        self.set_status("active")
-                        self._append_event({"type": "status", "value": "resumed"})
-                    item = ChatItem(
-                        content=content,
-                        mode=mode,
-                        source=source,
-                        caller_type=caller_type,
-                        user_input_ids=[msg_id] if msg_id else [],
-                    )
-                    await self._enqueue(item)
+                        st = read_session_status(self.system_dir)
+                        stopped_at_str = st.get("stopped_at")
+                        if stopped_at_str:
+                            try:
+                                stopped_at = datetime.fromisoformat(stopped_at_str)
+                                current = datetime.now(stopped_at.tzinfo) if stopped_at.tzinfo is not None else datetime.now()
+                                elapsed = (current - stopped_at).total_seconds()
+                                if elapsed >= 5 * 3600:
+                                    clear_all_cards(self.tasks_dir)
+                                    write_session_status(self.system_dir, status="active", stopped_at=None)
+                                    self._append_event({"type": "status", "value": "auto-expired after 5h stopped"})
+                            except Exception:
+                                pass
 
-                if self.is_stopped():
-                    st = read_session_status(self.system_dir)
-                    stopped_at_str = st.get("stopped_at")
-                    if stopped_at_str:
-                        try:
-                            stopped_at = datetime.fromisoformat(stopped_at_str)
-                            now = datetime.now(stopped_at.tzinfo) if stopped_at.tzinfo is not None else datetime.now()
-                            elapsed = (now - stopped_at).total_seconds()
-                            if elapsed >= 5 * 3600:
-                                clear_all_cards(self.tasks_dir)
-                                write_session_status(self.system_dir, status="active", stopped_at=None)
-                                self._append_event({"type": "status", "value": "auto-expired after 5h stopped"})
-                        except Exception:
-                            pass
+                    # Task card scheduling — enqueue at most once per card while
+                    # it sits in the inbox or is currently running.
+                    if not self.is_stopped():
+                        due_cards = load_due_cards(self.tasks_dir)
+                        for card in due_cards:
+                            if card.name in self._scheduled_task_names:
+                                continue
+                            await self._enqueue(TaskItem(card=card))
 
-                # Task card scheduling — enqueue at most once per card while
-                # it sits in the inbox or is currently running.
-                if not self.is_stopped():
-                    due_cards = load_due_cards(self.tasks_dir)
-                    for card in due_cards:
-                        if card.name in self._scheduled_task_names:
-                            continue
-                        await self._enqueue(TaskItem(card=card))
+                    next_housekeeping_at = now + self._TASK_POLL_INTERVAL
 
                 if stop_event is not None and stop_event.is_set():
                     break
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(self._INPUT_POLL_INTERVAL)
 
         except asyncio.CancelledError:
             self._set_model_status("idle", "system")

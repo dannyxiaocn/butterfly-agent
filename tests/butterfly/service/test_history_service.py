@@ -5,7 +5,12 @@ import json
 import pytest
 
 from butterfly.runtime.ipc import FileIPC
-from butterfly.service.history_service import get_history, get_pending_inputs
+from butterfly.service.history_service import (
+    get_history,
+    get_log_turns,
+    get_pending_inputs,
+    get_token_report,
+)
 from butterfly.session_engine.session_status import write_session_status
 
 
@@ -59,6 +64,56 @@ def test_get_pending_inputs_respects_limit(tmp_path):
         {"ts": "2026-03-25 10:01", "user": "second"},
         {"ts": "2026-03-25 10:02", "user": "third"},
     ]
+
+
+def test_get_pending_inputs_excludes_all_ids_consumed_by_merged_turn(tmp_path):
+    _, system_sessions_dir = _seed_context(
+        tmp_path,
+        "pending-session",
+        [
+            {"type": "user_input", "id": "u1", "content": "first", "ts": "2026-03-25T10:00:00"},
+            {"type": "user_input", "id": "u2", "content": "second", "ts": "2026-03-25T10:01:00"},
+            {
+                "type": "turn",
+                "user_input_id": "u2",
+                "merged_user_input_ids": ["u1", "u2"],
+                "ts": "2026-03-25T10:01:05",
+                "messages": [{"role": "assistant", "content": "merged"}],
+            },
+            {"type": "user_input", "id": "u3", "content": "third", "ts": "2026-03-25T10:02:00"},
+        ],
+    )
+
+    rows = get_pending_inputs("pending-session", system_sessions_dir)
+
+    assert rows == [{"ts": "2026-03-25 10:02", "user": "third"}]
+
+
+def test_get_log_turns_and_token_report_use_merged_user_content(tmp_path):
+    _, system_sessions_dir = _seed_context(
+        tmp_path,
+        "history-session",
+        [
+            {"type": "user_input", "id": "u1", "content": "first", "ts": "2026-03-25T10:00:00"},
+            {"type": "user_input", "id": "u2", "content": "second", "ts": "2026-03-25T10:01:00"},
+            {
+                "type": "turn",
+                "user_input_id": "u2",
+                "merged_user_input_ids": ["u1", "u2"],
+                "ts": "2026-03-25T10:01:05",
+                "usage": {"input": 12, "output": 3},
+                "messages": [{"role": "assistant", "content": "merged"}],
+            },
+        ],
+    )
+
+    rows = get_log_turns("history-session", system_sessions_dir)
+    report = get_token_report("history-session", system_sessions_dir)
+
+    assert rows[0]["ts"] == "2026-03-25 10:00"
+    assert rows[0]["user"] == "first\n\nsecond"
+    assert report[0]["ts"] == "2026-03-25 10:00"
+    assert report[0]["trigger"] == "first\n\nsecond"
 
 
 def test_get_pending_inputs_raises_for_missing_session(tmp_path):

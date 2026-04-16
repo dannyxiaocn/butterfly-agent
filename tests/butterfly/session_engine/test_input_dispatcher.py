@@ -474,6 +474,61 @@ async def test_daemon_loop_routes_panel_user_input_through_queue(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_daemon_interrupt_poll_is_fast_enough_to_merge_human_followup(tmp_path):
+    """Regression: daemon-side polling must be tight enough that a human's
+    quick second send lands while the first run is still in flight.
+
+    With the old 0.5 s loop, both user_input events could sit on disk until the
+    same poll cycle, so the first run never became cancellable and the daemon
+    produced two separate turns. A sub-100 ms input poll is enough for the
+    first message to start, the second to cancel it, and the merged run to fire.
+    """
+    from butterfly.runtime.bridge import BridgeSession
+    from butterfly.runtime.ipc import FileIPC
+
+    observed: list[str] = []
+    slow = SlowProvider(delay=5.0, observed_user_messages=observed)
+    agent = Agent(provider=slow)
+    session = make_session(tmp_path, agent, session_id="daemon-fast-interrupt")
+    ipc = FileIPC(session.system_dir)
+    stop_event = asyncio.Event()
+
+    daemon_task = asyncio.create_task(session.run_daemon_loop(ipc, stop_event=stop_event))
+    bridge = BridgeSession(session.system_dir)
+    try:
+        await asyncio.sleep(0.02)
+        bridge.send_message("first", mode="interrupt")
+        # Slightly above the new 50 ms poll and far below the previous 500 ms poll.
+        await asyncio.sleep(0.08)
+        bridge.send_message("second", mode="interrupt")
+        agent._provider = RecordingProvider([("merged-ok", [])], observed_user_messages=observed)
+
+        for _ in range(80):
+            turns = [
+                e for e in read_jsonl(session.system_dir / "context.jsonl")
+                if e.get("type") == "turn"
+            ]
+            if turns:
+                break
+            await asyncio.sleep(0.05)
+        else:
+            pytest.fail("expected merged turn to be written")
+    finally:
+        stop_event.set()
+        await daemon_task
+
+    turns = [
+        e for e in read_jsonl(session.system_dir / "context.jsonl")
+        if e.get("type") == "turn"
+    ]
+    assert len(turns) == 1
+    assert turns[0]["messages"][0]["content"] == "first\n\nsecond"
+    assert len(turns[0]["merged_user_input_ids"]) == 2
+    assert turns[0]["merged_user_input_ids"][-1] == turns[0]["user_input_id"]
+    assert observed == ["first", "first\n\nsecond"]
+
+
+@pytest.mark.asyncio
 async def test_merged_user_input_ids_recorded_on_turn(tmp_path):
     """When a wait-merged turn fires, the resulting turn event records
     every contributing msg_id in ``merged_user_input_ids``."""
