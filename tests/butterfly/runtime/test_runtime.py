@@ -67,6 +67,35 @@ class RuntimeTest(unittest.TestCase):
                 os.environ.pop("KEEP", None)
                 os.environ.pop("NEW", None)
 
+    def test_bridge_wait_for_reply_matches_merged_id(self) -> None:
+        import asyncio
+        with TemporaryDirectory() as tmp:
+            system_dir = Path(tmp) / "_sessions" / "demo"
+            system_dir.mkdir(parents=True)
+            ipc = FileIPC(system_dir)
+            first_id = "id-first"
+            second_id = "id-second"
+            ipc.append_context({"type": "user_input", "id": first_id, "content": "first"})
+            ipc.append_context({"type": "user_input", "id": second_id, "content": "second"})
+            bridge = BridgeSession(system_dir)
+
+            async def _inject():
+                await asyncio.sleep(0.1)
+                ipc.append_context({
+                    "type": "turn",
+                    "user_input_id": second_id,
+                    "merged_user_input_ids": [first_id, second_id],
+                    "messages": [{"role": "assistant", "content": "merged reply"}],
+                })
+
+            async def _run():
+                asyncio.create_task(_inject())
+                reply = await bridge.async_wait_for_reply(first_id, timeout=2.0)
+                return reply
+
+            reply = asyncio.run(_run())
+            self.assertEqual(reply, "merged reply")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -214,7 +214,7 @@ class BridgeSession:
         timeout: float = 120.0,
         poll_interval: float = 0.5,
     ) -> str | None:
-        """Async wait until the agent emits a turn with user_input_id == msg_id.
+        """Async wait until the agent emits a turn whose user_input_id or merged_user_input_ids contains msg_id.
 
         Returns the assistant's final text, or None if timeout is reached.
         """
@@ -244,7 +244,8 @@ class BridgeSession:
                         continue
                     if event.get("type") != "turn":
                         continue
-                    if event.get("user_input_id") != msg_id:
+                    merged_ids = event.get("merged_user_input_ids") or []
+                    if event.get("user_input_id") != msg_id and msg_id not in merged_ids:
                         continue
                     for msg in reversed(event.get("messages", [])):
                         if msg.get("role") == "assistant":
