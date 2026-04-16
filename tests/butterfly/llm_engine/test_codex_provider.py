@@ -380,6 +380,108 @@ async def test_parse_sse_stream_handles_split_events_across_chunks():
     assert text == "split"
 
 
+# ── thinking routing: v2.0.11 regression coverage ───────────────────
+
+
+@pytest.mark.asyncio
+async def test_output_text_delta_inside_reasoning_item_routes_to_thinking():
+    """Backend wraps reasoning summary in a reasoning output_item but streams
+    body via output_text.delta — must not leak into assistant text."""
+    from butterfly.llm_engine.providers.codex import _parse_sse_stream
+
+    chunks = [
+        _sse_event({
+            "type": "response.output_item.added",
+            "item": {"type": "reasoning", "id": "rs_1"},
+        }),
+        _sse_event({"type": "response.output_text.delta", "delta": "**Plan**\n\n"}),
+        _sse_event({"type": "response.output_text.delta", "delta": "do X then Y"}),
+        _sse_event({
+            "type": "response.output_item.done",
+            "item": {"type": "reasoning", "id": "rs_1", "summary": [
+                {"type": "summary_text", "text": "**Plan**\n\ndo X then Y"},
+            ]},
+        }),
+        _sse_event({
+            "type": "response.output_item.added",
+            "item": {"type": "message"},
+        }),
+        _sse_event({"type": "response.output_text.delta", "delta": "Done."}),
+        _sse_event({
+            "type": "response.output_item.done",
+            "item": {"type": "message"},
+        }),
+        _sse_event({"type": "response.completed", "response": {"usage": {}}}),
+    ]
+    text_chunks: list[str] = []
+    thinking_bodies: list[str] = []
+    started: list[bool] = []
+    text, _, _, reasoning_items = await _parse_sse_stream(
+        _FakeSSEResponse(chunks),
+        text_chunks.append,
+        on_thinking_start=lambda: started.append(True),
+        on_thinking_end=thinking_bodies.append,
+    )
+    assert text == "Done."
+    assert text_chunks == ["Done."]
+    assert thinking_bodies == ["**Plan**\n\ndo X then Y"]
+    assert started == [True]
+    assert len(reasoning_items) == 1
+
+
+@pytest.mark.asyncio
+async def test_reasoning_item_done_falls_back_to_summary_text():
+    """When no streaming deltas arrive (encrypted-only path or unknown
+    delta etype), thinking body is extracted from item.summary."""
+    from butterfly.llm_engine.providers.codex import _parse_sse_stream
+
+    chunks = [
+        _sse_event({
+            "type": "response.output_item.done",
+            "item": {
+                "type": "reasoning",
+                "id": "rs_2",
+                "summary": [
+                    {"type": "summary_text", "text": "first thought"},
+                    {"type": "summary_text", "text": "second thought"},
+                ],
+                "encrypted_content": "OPAQUE",
+            },
+        }),
+        _sse_event({"type": "response.completed", "response": {"usage": {}}}),
+    ]
+    bodies: list[str] = []
+    await _parse_sse_stream(
+        _FakeSSEResponse(chunks),
+        None,
+        on_thinking_start=lambda: None,
+        on_thinking_end=bodies.append,
+    )
+    assert bodies == ["first thought\n\nsecond thought"]
+
+
+@pytest.mark.asyncio
+async def test_unknown_reasoning_etype_routes_to_thinking():
+    """Catch-all: any response.reasoning* event variant routes to thinking."""
+    from butterfly.llm_engine.providers.codex import _parse_sse_stream
+
+    chunks = [
+        _sse_event({"type": "response.reasoning_summary.delta", "delta": "hmm"}),
+        _sse_event({"type": "response.reasoning_summary_part.done",
+                    "part": {"text": " more"}}),
+        _sse_event({"type": "response.completed", "response": {"usage": {}}}),
+    ]
+    bodies: list[str] = []
+    text, _, _, _ = await _parse_sse_stream(
+        _FakeSSEResponse(chunks),
+        None,
+        on_thinking_start=lambda: None,
+        on_thinking_end=bodies.append,
+    )
+    assert text == ""
+    assert bodies == ["hmm more"]
+
+
 # ── request body: prompt_cache_key absence ──────────────────────────
 
 

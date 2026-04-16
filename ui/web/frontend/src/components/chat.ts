@@ -347,6 +347,20 @@ export function createChat(): HTMLElement {
     }
   }
 
+  function formatHudUsageTooltip(u: NonNullable<DisplayEvent['usage']>): string {
+    // Usage is summed across all LLM calls in the turn — cache_read in
+    // particular accumulates the same cached prefix N times, so a 30k input
+    // turn with 12 iterations can show 200k+ cache_read. Label it explicitly
+    // so the number isn't misread as a single-call figure.
+    const full: string[] = [];
+    if (u.input) full.push(`in:${u.input}`);
+    if (u.output) full.push(`out:${u.output}`);
+    if (u.cache_read) full.push(`cache_read:${u.cache_read}`);
+    if (u.cache_write) full.push(`cache_write:${u.cache_write}`);
+    if (u.reasoning) full.push(`reasoning:${u.reasoning}`);
+    return full.length ? `turn total (sum of all LLM calls)\n${full.join(' · ')}` : 'no usage';
+  }
+
   function updateHudTokens(usage: NonNullable<DisplayEvent['usage']>) {
     const hudBar = el.querySelector('#hud-bar') as HTMLElement | null;
     if (!hudBar) return;
@@ -355,12 +369,7 @@ export function createChat(): HTMLElement {
     const inK = usage.input ? (usage.input / 1000).toFixed(1) + 'k' : '—';
     const outK = usage.output ? (usage.output / 1000).toFixed(1) + 'k' : '—';
     tokEl.textContent = `${inK}↓ ${outK}↑`;
-    const full: string[] = [];
-    if (usage.input) full.push(`in:${usage.input}`);
-    if (usage.output) full.push(`out:${usage.output}`);
-    if (usage.cache_read) full.push(`cache_read:${usage.cache_read}`);
-    if (usage.cache_write) full.push(`cache_write:${usage.cache_write}`);
-    tokEl.title = full.join(' · ');
+    tokEl.title = formatHudUsageTooltip(usage);
   }
 
   async function refreshHud(sessionId: string) {
@@ -390,12 +399,7 @@ export function createChat(): HTMLElement {
         const inK = u.input ? (u.input / 1000).toFixed(1) + 'k' : '—';
         const outK = u.output ? (u.output / 1000).toFixed(1) + 'k' : '—';
         tokEl.textContent = `${inK}↓ ${outK}↑`;
-        const full: string[] = [];
-        if (u.input) full.push(`in:${u.input}`);
-        if (u.output) full.push(`out:${u.output}`);
-        if (u.cache_read) full.push(`cache_read:${u.cache_read}`);
-        if (u.cache_write) full.push(`cache_write:${u.cache_write}`);
-        tokEl.title = full.join(' · ');
+        tokEl.title = formatHudUsageTooltip(u);
       } else {
         tokEl.textContent = '—';
         tokEl.title = 'no usage yet';

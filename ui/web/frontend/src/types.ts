@@ -104,6 +104,7 @@ export interface DisplayEvent {
     output?: number;
     cache_read?: number;
     cache_write?: number;
+    reasoning?: number;
   };
   result_len?: number;
   iterations?: number;

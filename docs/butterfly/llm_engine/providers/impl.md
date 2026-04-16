@@ -40,6 +40,16 @@ When `thinking=True`, the provider sends `include=["reasoning.encrypted_content"
 
 Every concrete provider inherits `Provider.consume_extra_blocks()` from the ABC (default: empty list), so the agent loop calls it directly.
 
+### Codex SSE: defending against summary leak (v2.0.11)
+
+The ChatGPT-OAuth backend has been observed to deliver reasoning summary content via `response.output_text.delta` events nested inside a `reasoning` output_item — not via the spec'd `response.reasoning_summary_text.delta` channel. Without defenses, that content leaks into `text_parts` and the assistant message buffer (visible as the model "narrating" its plan in the final reply, with no Thinking… cell ever opening).
+
+`_parse_sse_stream` defends with three layered fixes:
+
+1. **`current_output_item_type` tracking** — set on `response.output_item.added`, cleared on `.done`. When `response.output_text.delta` fires while the open item is `reasoning`, the delta routes to `thinking_parts`, not `text_parts`.
+2. **`item.summary[].text` fallback** — on `response.output_item.done` for a reasoning item, if `thinking_parts` is empty (no streamed deltas captured) the body is extracted from `item.summary` via `_extract_summary_text` and emitted as the thinking block, so the UI never gets an empty Thought-for-Xs cell.
+3. **Catch-all for `response.reasoning*` / `*summary*` etypes** — any unknown variant routes its `delta` / `text` (or nested `part.text` / `item.summary`) to thinking. Set `BUTTERFLY_CODEX_DEBUG=1` to print the names of unhandled etypes for backend-change diagnosis.
+
 ## Error taxonomy
 
 `butterfly/llm_engine/errors.py` exposes a normalized taxonomy providers should raise from recognizable error conditions:

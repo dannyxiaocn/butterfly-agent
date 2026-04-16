@@ -567,6 +567,24 @@ def _convert_tool_result(msg: "Message") -> list[dict[str, Any]]:
 # ======================================================================
 
 
+def _extract_summary_text(item: dict[str, Any]) -> str:
+    """Pull joined summary text out of a Codex reasoning item.
+
+    Reasoning items end with a ``summary`` array of ``{type, text}`` parts.
+    Returns the joined text body, or empty string if no summary is present.
+    """
+    parts = item.get("summary") or []
+    if not isinstance(parts, list):
+        return ""
+    pieces: list[str] = []
+    for p in parts:
+        if isinstance(p, dict):
+            text = p.get("text", "")
+            if text:
+                pieces.append(text)
+    return "\n\n".join(pieces)
+
+
 async def _parse_sse_stream(
     resp: Any,
     on_text_chunk: Callable[[str], None] | None,
@@ -577,6 +595,12 @@ async def _parse_sse_stream(
     text_parts: list[str] = []
     tc_map: dict[str, dict[str, str]] = {}
     current_tc_id: str | None = None
+    # Track the open output_item's type so output_text.delta events fired
+    # inside a "reasoning" item can be routed to thinking instead of leaking
+    # into the assistant text channel. The backend has been observed to
+    # stream reasoning summary via output_text.delta inside a wrapping
+    # reasoning item rather than via reasoning_summary_text.delta.
+    current_output_item_type: str | None = None
     reasoning_items: list[dict[str, Any]] = []
     usage = TokenUsage()
     # Thinking block lifecycle: buffer reasoning deltas locally; deliver as
@@ -584,6 +608,7 @@ async def _parse_sse_stream(
     # into on_text_chunk (which must remain assistant-text only).
     thinking_parts: list[str] = []
     thinking_active = False
+    debug_etypes = os.environ.get("BUTTERFLY_CODEX_DEBUG") == "1"
 
     def _start_thinking() -> None:
         nonlocal thinking_active
@@ -612,7 +637,7 @@ async def _parse_sse_stream(
 
     def _process_block(block: str) -> None:
         """Parse one SSE block (text up to a \\n\\n boundary) and apply events."""
-        nonlocal current_tc_id, usage
+        nonlocal current_tc_id, current_output_item_type, usage
         data_lines = [
             line[5:].strip()
             for line in block.splitlines()
@@ -631,6 +656,7 @@ async def _parse_sse_stream(
             if etype == "response.output_item.added":
                 item = event.get("item", {})
                 itype = item.get("type")
+                current_output_item_type = itype
                 if itype == "function_call":
                     call_id = item.get("call_id", str(uuid.uuid4()))
                     tc_map[call_id] = {"name": item.get("name", ""), "args": ""}
@@ -666,14 +692,31 @@ async def _parse_sse_stream(
                     # still gets a "Thought for Xs" pill.
                     if not thinking_active:
                         _start_thinking()
+                    # Fallback: if no streaming reasoning deltas arrived (or
+                    # they came on an unrecognized etype), pull the body
+                    # directly from item.summary[].text so the UI gets the
+                    # full thinking content rather than an empty cell.
+                    if not thinking_parts:
+                        extracted = _extract_summary_text(item)
+                        if extracted:
+                            thinking_parts.append(extracted)
                     _end_thinking()
+                current_output_item_type = None
 
             elif etype == "response.output_text.delta":
                 delta = event.get("delta", "")
                 if delta:
-                    text_parts.append(delta)
-                    if on_text_chunk:
-                        on_text_chunk(delta)
+                    # When the open output_item is a reasoning wrapper, route
+                    # this delta to thinking — backend has been observed to
+                    # stream reasoning summary content through this channel.
+                    if current_output_item_type == "reasoning":
+                        if not thinking_active:
+                            _start_thinking()
+                        thinking_parts.append(delta)
+                    else:
+                        text_parts.append(delta)
+                        if on_text_chunk:
+                            on_text_chunk(delta)
 
             elif etype == "response.reasoning_text.delta":
                 delta = event.get("delta", "")
@@ -711,6 +754,28 @@ async def _parse_sse_stream(
 
             elif etype in ("error", "response.failed"):
                 _raise_stream_error(event)
+
+            elif etype.startswith("response.reasoning") or "summary" in etype:
+                # Catch-all for reasoning/summary event variants we don't
+                # explicitly handle (backend has shipped new event names
+                # historically). Pull a delta or text body from common fields
+                # and route to thinking; never leak to assistant text.
+                delta = event.get("delta", "") or event.get("text", "")
+                if not delta:
+                    part = event.get("part") or event.get("item") or {}
+                    if isinstance(part, dict):
+                        delta = part.get("text", "") or _extract_summary_text(part)
+                if delta:
+                    if not thinking_active:
+                        _start_thinking()
+                    thinking_parts.append(delta)
+                if debug_etypes:
+                    print(f"[codex catch-all reasoning] {etype}", flush=True)
+
+            elif debug_etypes:
+                # Surface any unhandled event type when debugging is on, so a
+                # backend change can be diagnosed without invasive logging.
+                print(f"[codex unhandled etype] {etype}", flush=True)
 
     buffer = ""
     async for raw_chunk in resp.aiter_bytes():
