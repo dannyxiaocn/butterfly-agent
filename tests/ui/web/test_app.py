@@ -276,103 +276,14 @@ class WebUnitTests(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         payload = resp.json()
         self.assertIn("providers", payload)
-        self.assertIn("thinking_efforts", payload)
         names = {p["provider"] for p in payload["providers"]}
-        # The 4 CLI-supported providers (plus openai-responses) must all be listed.
         self.assertIn("anthropic", names)
         self.assertIn("openai", names)
         self.assertIn("kimi-coding-plan", names)
         self.assertIn("codex-oauth", names)
         for p in payload["providers"]:
-            self.assertIn("models", p)
-            self.assertIsInstance(p["models"], list)
-            self.assertTrue(p["models"], f"{p['provider']} has no models")
-            self.assertIn(p["default_model"], p["models"])
-
-    def test_get_config_yaml_returns_raw_yaml_text(self) -> None:
-        with TemporaryDirectory() as td:
-            root = _make_session(Path(td))
-            # Seed a config.yaml with a recognisable marker.
-            cfg_path = root / "sessions" / "test-session" / "core" / "config.yaml"
-            cfg_path.write_text("name: demo\nmodel: gpt-5.4\nprovider: codex-oauth\n", encoding="utf-8")
-            app = create_app(root / "sessions", root / "_sessions")
-            with TestClient(app) as client:
-                resp = client.get("/api/sessions/test-session/config/yaml")
-
-        self.assertEqual(resp.status_code, 200)
-        text = resp.json()["yaml"]
-        self.assertIn("name: demo", text)
-        self.assertIn("model: gpt-5.4", text)
-
-    def test_put_config_yaml_round_trips(self) -> None:
-        with TemporaryDirectory() as td:
-            root = _make_session(Path(td))
-            app = create_app(root / "sessions", root / "_sessions")
-            with TestClient(app) as client:
-                put_resp = client.put(
-                    "/api/sessions/test-session/config/yaml",
-                    json={"yaml": "name: x\nmodel: claude-sonnet-4-6\nprovider: anthropic\n"},
-                )
-                self.assertEqual(put_resp.status_code, 200)
-                saved = put_resp.json()["params"]
-                self.assertEqual(saved["model"], "claude-sonnet-4-6")
-                self.assertEqual(saved["provider"], "anthropic")
-                # YAML round-trip: subsequent GET surfaces the written fields.
-                get_resp = client.get("/api/sessions/test-session/config/yaml")
-                self.assertEqual(get_resp.status_code, 200)
-                self.assertIn("claude-sonnet-4-6", get_resp.json()["yaml"])
-
-    def test_put_config_yaml_rejects_malformed_yaml(self) -> None:
-        with TemporaryDirectory() as td:
-            root = _make_session(Path(td))
-            app = create_app(root / "sessions", root / "_sessions")
-            with TestClient(app) as client:
-                resp = client.put(
-                    "/api/sessions/test-session/config/yaml",
-                    json={"yaml": "name: [unterminated"},
-                )
-            self.assertEqual(resp.status_code, 400)
-
-    def test_put_config_yaml_rejects_non_mapping(self) -> None:
-        with TemporaryDirectory() as td:
-            root = _make_session(Path(td))
-            app = create_app(root / "sessions", root / "_sessions")
-            with TestClient(app) as client:
-                resp = client.put(
-                    "/api/sessions/test-session/config/yaml",
-                    json={"yaml": "- just\n- a\n- list\n"},
-                )
-            self.assertEqual(resp.status_code, 400)
-
-    def test_put_config_yaml_drops_unknown_keys(self) -> None:
-        """v2.0.9 review fix: YAML PUT must whitelist-filter against DEFAULT_CONFIG.
-
-        Previously the body was forwarded verbatim into write_config, so a
-        client could persist arbitrary keys that then round-tripped via
-        read_config's merge-over-defaults path.
-        """
-        with TemporaryDirectory() as td:
-            root = _make_session(Path(td))
-            app = create_app(root / "sessions", root / "_sessions")
-            with TestClient(app) as client:
-                put_resp = client.put(
-                    "/api/sessions/test-session/config/yaml",
-                    json={
-                        "yaml": (
-                            "model: claude-sonnet-4-6\n"
-                            "provider: anthropic\n"
-                            "malicious_key: injected\n"
-                            "__proto__: nope\n"
-                        )
-                    },
-                )
-                self.assertEqual(put_resp.status_code, 200)
-                saved = put_resp.json()["params"]
-                self.assertNotIn("malicious_key", saved)
-                self.assertNotIn("__proto__", saved)
-                # Subsequent GET surfaces the same filtered view.
-                get_resp = client.get("/api/sessions/test-session/config/yaml")
-                self.assertNotIn("malicious_key", get_resp.json()["yaml"])
+            self.assertIn("default_model", p)
+            self.assertTrue(p["default_model"], f"{p['provider']} has no default_model")
 
     def test_put_config_json_drops_unknown_keys(self) -> None:
         """Same whitelist applies to the legacy JSON /config endpoint."""
@@ -386,54 +297,6 @@ class WebUnitTests(unittest.TestCase):
                 )
                 self.assertEqual(resp.status_code, 200)
                 self.assertNotIn("bogus_field", resp.json()["params"])
-
-    def test_json_and_yaml_put_coexist_without_stepping_on_each_other(self) -> None:
-        """Alternating JSON and YAML PUTs must each preserve the other's writes."""
-        with TemporaryDirectory() as td:
-            root = _make_session(Path(td))
-            app = create_app(root / "sessions", root / "_sessions")
-            with TestClient(app) as client:
-                r1 = client.put(
-                    "/api/sessions/test-session/config",
-                    json={"params": {"provider": "anthropic", "model": "claude-sonnet-4-6"}},
-                )
-                self.assertEqual(r1.status_code, 200)
-                r2 = client.put(
-                    "/api/sessions/test-session/config/yaml",
-                    json={"yaml": "name: renamed\n"},
-                )
-                self.assertEqual(r2.status_code, 200)
-                saved = r2.json()["params"]
-                # Write 2 (yaml) updated 'name' but must not wipe Write 1's model.
-                self.assertEqual(saved["name"], "renamed")
-                self.assertEqual(saved["model"], "claude-sonnet-4-6")
-                self.assertEqual(saved["provider"], "anthropic")
-
-    def test_models_catalog_default_model_is_in_supported_list(self) -> None:
-        """Catalog invariant: every provider's default_model must appear in its
-        models list AND its supported_efforts must be consistent with the
-        thinking_style (effort-style providers have a non-empty list;
-        budget/none-style providers have an empty list).
-        """
-        with TemporaryDirectory() as td:
-            root = Path(td)
-            app = create_app(root / "sessions", root / "_sessions")
-            with TestClient(app) as client:
-                resp = client.get("/api/models")
-            payload = resp.json()
-            for p in payload["providers"]:
-                self.assertIn(p["default_model"], p["models"], p["provider"])
-                style = p.get("thinking_style")
-                supported = p.get("supported_efforts", [])
-                if style == "effort":
-                    self.assertTrue(supported, f"{p['provider']} effort-style but empty supported_efforts")
-                else:
-                    self.assertEqual(supported, [], f"{p['provider']} non-effort style must have empty supported_efforts")
-            # xhigh is codex-only.
-            codex = next(p for p in payload["providers"] if p["provider"] == "codex-oauth")
-            responses = next(p for p in payload["providers"] if p["provider"] == "openai-responses")
-            self.assertIn("xhigh", codex["supported_efforts"])
-            self.assertNotIn("xhigh", responses["supported_efforts"])
 
     def test_create_session_same_second_does_not_silently_reuse_existing_id(self) -> None:
         fixed = datetime(2026, 4, 10, 23, 30, 0)

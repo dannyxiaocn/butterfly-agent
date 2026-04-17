@@ -7,7 +7,6 @@ from tempfile import TemporaryDirectory
 
 from butterfly.core.skill import Skill
 from butterfly.tool_engine.loader import ToolLoader
-from butterfly.tool_engine.registry import list_providers, resolve_tool_impl
 
 
 # Note: butterfly.tool_engine.reload and its create_reload_tool / _summarize_names
@@ -75,11 +74,6 @@ class ToolEngineTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Loaded skill: creator-mode", output)
         self.assertIn("Topic: testing", output)
         self.assertIn("notes.txt", output)
-
-    def test_registry_helpers_report_available_providers(self) -> None:
-        self.assertIn("brave", list_providers("web_search"))
-        self.assertIsNone(resolve_tool_impl("web_search", "missing"))
-
 
 if __name__ == "__main__":
     unittest.main()

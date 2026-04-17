@@ -56,7 +56,7 @@ def _atomic_write_text(path: Path, text: str) -> None:
 # User-configurable defaults. Agent config.yaml and session core/config.yaml
 # share the same schema — agent defines defaults, session inherits and can override.
 DEFAULT_CONFIG: dict[str, Any] = {
-    "name": "",
+    "agent": "",
     "description": "",
     "model": None,
     "provider": None,
@@ -66,7 +66,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "thinking": False,
     "thinking_budget": 8000,
     "thinking_effort": "high",
-    "tool_providers": {"web_search": "brave"},
     "prompts": {
         "system": "system.md",
         "task": "task.md",

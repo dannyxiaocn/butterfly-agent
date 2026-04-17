@@ -1,4 +1,4 @@
-name: butterfly_dev
+agent: butterfly_dev
 version: "1.0.0"
 description: Development assistant with butterfly project context.
 model: gpt-5.4
@@ -9,8 +9,6 @@ max_iterations: 1000
 thinking: true
 thinking_budget: 8000
 thinking_effort: high
-tool_providers:
-  web_search: brave
 prompts:
   system: prompts/system.md
   task: prompts/task.md

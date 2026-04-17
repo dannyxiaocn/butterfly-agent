@@ -74,21 +74,6 @@ class TestMemoryRecallExecutor:
         assert "name" not in required
 
 
-# ── web_search executor ──────────────────────────────────────────────────────
-
-
-class TestWebSearchExecutor:
-    def test_web_search_executor_instantiates(self):
-        from toolhub.web_search.executor import WebSearchExecutor
-        executor = WebSearchExecutor(provider="brave")
-        assert executor._provider == "brave"
-
-    def test_web_search_executor_default_brave(self):
-        from toolhub.web_search.executor import WebSearchExecutor
-        executor = WebSearchExecutor()
-        assert executor._provider == "brave"
-
-
 # ── ToolLoader toolhub integration ───────────────────────────────────────────
 
 

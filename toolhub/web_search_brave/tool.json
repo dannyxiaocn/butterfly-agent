@@ -1,5 +1,5 @@
 {
-  "name": "web_search",
+  "name": "web_search_brave",
   "description": "Search the web using Brave Search. Returns titles, URLs, and descriptions. Requires BRAVE_API_KEY environment variable.",
   "input_schema": {
     "type": "object",

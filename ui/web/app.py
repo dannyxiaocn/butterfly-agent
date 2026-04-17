@@ -29,21 +29,24 @@ from butterfly.service import (
     iter_events as service_iter_events,
     create_session as service_create_session,
     delete_session as service_delete_session,
+    get_asset_md as service_get_asset_md,
     get_config as service_get_config,
-    get_config_yaml as service_get_config_yaml,
     get_history as service_get_history,
     get_hud as service_get_hud,
     get_models_catalog as service_get_models_catalog,
+    get_prompt_md as service_get_prompt_md,
     get_session as service_get_session,
     get_tasks as service_get_tasks,
     interrupt_session as service_interrupt_session,
     is_meta_session as service_is_meta_session,
+    list_agents as service_list_agents,
     list_sessions as service_list_sessions,
     send_message as service_send_message,
     start_session as service_start_session,
     stop_session as service_stop_session,
+    update_asset_md as service_update_asset_md,
     update_config as service_update_config,
-    update_config_yaml as service_update_config_yaml,
+    update_prompt_md as service_update_prompt_md,
     upsert_task as service_upsert_task,
     delete_task as service_delete_task,
 )
@@ -484,37 +487,62 @@ def create_app(sessions_dir: Path, system_sessions_dir: Path | None = None) -> F
             _raise_session_error(exc, session_id)
         return {"ok": True, "params": saved}
 
-    @app.get("/api/sessions/{session_id}/config/yaml")
-    async def get_config_yaml(session_id: str):
-        """Return raw YAML text of the session's config.yaml.
-
-        Web UI uses this for the raw-YAML editor tab so it can round-trip the
-        on-disk file byte-for-byte (comments stripped by PyYAML, but field
-        order and quoting semantics preserved).
-        """
+    @app.get("/api/sessions/{session_id}/assets/{name}")
+    async def get_asset(session_id: str, name: str):
         try:
-            text = service_get_config_yaml(session_id, sessions_dir, system_sessions_dir)
-        except (FileNotFoundError, ValueError) as exc:
-            _raise_session_error(exc, session_id)
-        return {"yaml": text}
-
-    @app.put("/api/sessions/{session_id}/config/yaml")
-    async def set_config_yaml(session_id: str, body: dict):
-        text = body.get("yaml")
-        if not isinstance(text, str):
-            raise HTTPException(400, "Body must include 'yaml' string")
-        try:
-            saved = service_update_config_yaml(session_id, sessions_dir, system_sessions_dir, text)
-        except (FileNotFoundError,) as exc:
+            text = service_get_asset_md(session_id, sessions_dir, system_sessions_dir, name)
+        except FileNotFoundError as exc:
             _raise_session_error(exc, session_id)
         except ValueError as exc:
             raise HTTPException(400, str(exc))
-        return {"ok": True, "params": saved}
+        return {"text": text}
+
+    @app.put("/api/sessions/{session_id}/assets/{name}")
+    async def set_asset(session_id: str, name: str, body: dict):
+        text = body.get("text")
+        if not isinstance(text, str):
+            raise HTTPException(400, "Body must include 'text' string")
+        try:
+            saved = service_update_asset_md(session_id, sessions_dir, system_sessions_dir, name, text)
+        except FileNotFoundError as exc:
+            _raise_session_error(exc, session_id)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        return {"ok": True, "text": saved}
+
+    @app.get("/api/sessions/{session_id}/prompts/{name}")
+    async def get_prompt(session_id: str, name: str):
+        try:
+            text = service_get_prompt_md(session_id, sessions_dir, system_sessions_dir, name)
+        except FileNotFoundError as exc:
+            _raise_session_error(exc, session_id)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        return {"text": text}
+
+    @app.put("/api/sessions/{session_id}/prompts/{name}")
+    async def set_prompt(session_id: str, name: str, body: dict):
+        text = body.get("text")
+        if not isinstance(text, str):
+            raise HTTPException(400, "Body must include 'text' string")
+        try:
+            saved = service_update_prompt_md(session_id, sessions_dir, system_sessions_dir, name, text)
+        except FileNotFoundError as exc:
+            _raise_session_error(exc, session_id)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        return {"ok": True, "text": saved}
 
     @app.get("/api/models")
     async def get_models():
         """Return the provider → models catalog used by the config editor."""
         return service_get_models_catalog()
+
+    @app.get("/api/agents")
+    async def get_agents():
+        """Return the list of agenthub/ agents with config.yaml."""
+        agenthub_dir = Path(__file__).parent.parent.parent / "agenthub"
+        return {"agents": service_list_agents(agenthub_dir)}
 
     @app.delete("/api/sessions/{session_id}")
     async def delete_session(session_id: str):

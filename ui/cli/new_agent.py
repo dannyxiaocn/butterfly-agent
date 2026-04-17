@@ -22,7 +22,7 @@ from pathlib import Path
 # ── YAML template ─────────────────────────────────────────────────────────────
 
 _CONFIG_YAML_EMPTY = """\
-name: {name}
+agent: {name}
 description: ""
 model: claude-sonnet-4-6
 provider: anthropic
@@ -30,8 +30,6 @@ max_iterations: 1000
 thinking: false
 thinking_budget: 8000
 thinking_effort: high
-tool_providers:
-  web_search: brave
 prompts:
   system: prompts/system.md
   task: prompts/task.md

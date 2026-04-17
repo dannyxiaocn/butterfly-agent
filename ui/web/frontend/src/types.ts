@@ -25,7 +25,6 @@ export interface Params {
   provider: string | null;
   fallback_model: string | null;
   fallback_provider: string | null;
-  tool_providers: Record<string, string>;
   thinking: boolean;
   thinking_budget: number;
   thinking_effort: string;
@@ -82,17 +81,11 @@ export interface ProviderCatalogEntry {
   label: string;
   env: string[];
   supports_thinking: boolean;
-  thinking_style: 'budget' | 'effort' | 'extra_body' | null;
-  /** Effort vocabulary this provider accepts. Empty for providers using
-   *  budget / no thinking style (Anthropic, Kimi, plain OpenAI). */
-  supported_efforts: string[];
   default_model: string;
-  models: string[];
 }
 
 export interface ModelsCatalog {
   providers: ProviderCatalogEntry[];
-  thinking_efforts: string[];
 }
 
 export interface DisplayEvent {
@@ -113,6 +106,8 @@ export interface DisplayEvent {
     reasoning?: number;
   };
   result_len?: number;
+  result?: string;
+  result_truncated?: boolean;
   iterations?: number;
   id?: string;
   card?: string;

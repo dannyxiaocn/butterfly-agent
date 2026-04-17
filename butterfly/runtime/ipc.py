@@ -75,37 +75,46 @@ def _context_event_to_display(event: dict, *, for_history: bool = False) -> list
 
     if etype == "turn":
         result: list[dict] = []
-        persisted = event.get("thinking_blocks") or []
-        has_persisted = isinstance(persisted, list) and bool(persisted)
+        persisted_raw = event.get("thinking_blocks") or []
+        persisted = [b for b in persisted_raw if isinstance(b, dict) and b.get("text")] \
+            if isinstance(persisted_raw, list) else []
+        has_persisted = bool(persisted)
         has_streaming_tools = event.get("has_streaming_tools", False)
         has_streaming_thinking = event.get("has_streaming_thinking", False)
         usage = event.get("usage")
 
         # ── Persisted thinking_blocks (v2.0.17+) ──────────────────────
         # Server-captured list of ``{block_id, text, duration_ms, ts}`` dicts
-        # from the session's on_thinking_end callback. Emitted first because
-        # we don't know their position within message.content (providers like
-        # codex don't round-trip thinking through content at all). Skipped on
-        # live SSE — the thinking_start/thinking_done events on events.jsonl
-        # already painted the cell.
+        # from the session's on_thinking_end callback. Interleaved with the
+        # tool/text blocks below by timestamp so the history-replay order
+        # matches live playback (think → tool → think → tool → text). Pre-
+        # v2.0.19 we dumped them all up front, which grouped every "Thought"
+        # before every tool cell on reload. Skipped on live SSE — the
+        # thinking_start/thinking_done events on events.jsonl already
+        # painted those cells.
+        pending_thinking: list[dict] = []
         if has_persisted and for_history:
             for i, block in enumerate(persisted):
-                if not isinstance(block, dict):
-                    continue
-                text = block.get("text", "")
-                if not text:
-                    continue
+                block_ts = block.get("ts") or ts
                 thinking_ev: dict = {
                     "type": "thinking",
-                    "content": text,
-                    "ts": block.get("ts") or ts,
+                    "content": block.get("text", ""),
+                    "ts": block_ts,
                     "id": f"thinking:{ts}:persisted:{i}",
                 }
                 if block.get("duration_ms") is not None:
                     thinking_ev["duration_ms"] = block["duration_ms"]
                 if block.get("block_id"):
                     thinking_ev["block_id"] = block["block_id"]
-                result.append(thinking_ev)
+                pending_thinking.append(thinking_ev)
+            # Stable sort by ts (string-sortable ISO-8601) so earlier
+            # thinking fires before later ones.
+            pending_thinking.sort(key=lambda ev: ev.get("ts") or "")
+
+        def _flush_thinking_before(block_ts: str) -> None:
+            """Emit any persisted thinking whose ts precedes (or equals) block_ts."""
+            while pending_thinking and (pending_thinking[0].get("ts") or "") <= (block_ts or ""):
+                result.append(pending_thinking.pop(0))
 
         # ── Tool + text + legacy thinking: iterate in message order ──
         # This preserves interleaved-mode sequencing (think → tool → text →
@@ -127,6 +136,7 @@ def _context_event_to_display(event: dict, *, for_history: bool = False) -> list
             # (no block structure). Treat it as a single text block.
             if isinstance(content, str):
                 if content:
+                    _flush_thinking_before(msg_ts)
                     ev: dict = {"type": "agent", "content": content, "ts": msg_ts}
                     if not for_history:
                         ev["id"] = f"turn:{ts}:{agent_idx}"
@@ -165,22 +175,31 @@ def _context_event_to_display(event: dict, *, for_history: bool = False) -> list
 
                 elif btype == "tool_use":
                     if for_history or not has_streaming_tools:
+                        block_ts = block.get("ts", msg_ts)
+                        _flush_thinking_before(block_ts)
                         result.append({
                             "type": "tool",
                             "name": block["name"],
                             "input": block.get("input", {}),
-                            "ts": block.get("ts", msg_ts),
+                            "ts": block_ts,
                         })
 
                 elif btype == "text":
                     text = block.get("text", "")
                     if text:
+                        _flush_thinking_before(msg_ts)
                         ev = {"type": "agent", "content": text, "ts": msg_ts}
                         if not for_history:
                             ev["id"] = f"turn:{ts}:{agent_idx}"
                         agent_idx += 1
                         agent_events.append(ev)
                         result.append(ev)
+
+        # Any persisted thinking whose ts is later than every content block
+        # (or whose ts is blank and thus never flushed) lands at the tail.
+        if pending_thinking:
+            result.extend(pending_thinking)
+            pending_thinking.clear()
 
         # ── Usage attaches to LAST agent event ────────────────────────
         # Turn usage is cumulative for the whole run; we surface it on the

@@ -115,10 +115,10 @@ def test_ensure_config_accepts_custom_defaults(tmp_path):
 def test_default_config_has_expected_keys():
     """DEFAULT_CONFIG has all expected keys."""
     expected = {
-        "name", "description", "model", "provider",
+        "agent", "description", "model", "provider",
         "fallback_model", "fallback_provider",
         "max_iterations", "thinking", "thinking_budget", "thinking_effort",
-        "tool_providers", "prompts", "tools", "skills", "duty",
+        "prompts", "tools", "skills", "duty",
     }
     assert set(DEFAULT_CONFIG.keys()) == expected
 

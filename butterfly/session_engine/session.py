@@ -334,23 +334,6 @@ class Session:
             print(f"[session] Warning: failed to load tools: {e}")
             tools = []
 
-        # Apply tool_providers overrides (e.g. web_search → brave/tavily)
-        tool_providers = cfg.get("tool_providers") or {}
-        if tool_providers:
-            from butterfly.tool_engine.registry import resolve_tool_impl
-            for i, t in enumerate(tools):
-                if t.name in tool_providers:
-                    tool_provider_key = tool_providers[t.name]
-                    impl = resolve_tool_impl(t.name, tool_provider_key)
-                    if impl:
-                        tools[i] = Tool(
-                            name=t.name,
-                            description=t.description,
-                            func=impl,
-                            schema=t.schema,
-                            backgroundable=t.backgroundable,
-                        )
-
         self._agent.tools = tools
 
     # ── History persistence ────────────────────────────────────────
@@ -1300,7 +1283,20 @@ class Session:
         ext = self.on_tool_done
 
         def on_tool_done(name: str, input: dict, result: str) -> None:
-            payload = {"type": "tool_done", "name": name, "result_len": len(result)}
+            # Cap the result text we ship through events.jsonl so huge tool
+            # outputs (bash screenfuls, file reads) don't bloat the SSE
+            # stream. Full output is still available via the Panel tab.
+            _MAX = 8000
+            result_str = result if isinstance(result, str) else str(result)
+            truncated = len(result_str) > _MAX
+            payload = {
+                "type": "tool_done",
+                "name": name,
+                "result_len": len(result_str),
+                "result": result_str[:_MAX],
+            }
+            if truncated:
+                payload["result_truncated"] = True
             tid = _parse_background_tid(result)
             if tid is not None:
                 payload["is_background"] = True

@@ -71,14 +71,23 @@ export const api = {
   setConfig: (id: string, params: Params): Promise<{ ok: boolean; params: Params }> =>
     request('PUT', `/api/sessions/${encodeURIComponent(id)}/config`, { params }),
 
-  getConfigYaml: (id: string): Promise<{ yaml: string }> =>
-    request('GET', `/api/sessions/${encodeURIComponent(id)}/config/yaml`),
+  getAssetMd: (id: string, name: 'tools' | 'skills'): Promise<{ text: string }> =>
+    request('GET', `/api/sessions/${encodeURIComponent(id)}/assets/${name}`),
 
-  setConfigYaml: (id: string, yamlText: string): Promise<{ ok: boolean; params: Params }> =>
-    request('PUT', `/api/sessions/${encodeURIComponent(id)}/config/yaml`, { yaml: yamlText }),
+  setAssetMd: (id: string, name: 'tools' | 'skills', text: string): Promise<{ ok: boolean; text: string }> =>
+    request('PUT', `/api/sessions/${encodeURIComponent(id)}/assets/${name}`, { text }),
+
+  getPromptMd: (id: string, name: 'system' | 'task' | 'env'): Promise<{ text: string }> =>
+    request('GET', `/api/sessions/${encodeURIComponent(id)}/prompts/${name}`),
+
+  setPromptMd: (id: string, name: 'system' | 'task' | 'env', text: string): Promise<{ ok: boolean; text: string }> =>
+    request('PUT', `/api/sessions/${encodeURIComponent(id)}/prompts/${name}`, { text }),
 
   getModels: (): Promise<ModelsCatalog> =>
     request('GET', '/api/models'),
+
+  listAgents: (): Promise<{ agents: string[] }> =>
+    request('GET', '/api/agents'),
 
   startSession: (id: string): Promise<{ ok: boolean }> =>
     request('POST', `/api/sessions/${encodeURIComponent(id)}/start`),

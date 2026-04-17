@@ -2,7 +2,6 @@
 - Agent-created (session-scoped) tools in sessions/<id>/core/tools/
 - Session skills in sessions/<id>/core/skills/
 - Memory injection from sessions/<id>/core/memory.md
-- Tool-provider switching via config.yaml tool_providers
 - No duplication on repeated capability reloads
 """
 import json
@@ -286,85 +285,6 @@ def test_memory_updated_reflects_on_next_load(tmp_path):
 # See toolhub/memory_recall/ and tests/butterfly/tool_engine/test_toolhub.py
 # (TestMemoryRecallExecutor) for the new surface.
 
-
-# ── Tool-provider override ────────────────────────────────────────────────────
-
-def test_tool_provider_override_switches_impl(tmp_path, monkeypatch):
-    """config.yaml tool_providers field replaces the tool's implementation callable."""
-    import butterfly.tool_engine.registry as _registry
-
-    call_log: list[str] = []
-
-    async def fake_tavily(**kwargs) -> str:
-        call_log.append("tavily")
-        return "tavily result"
-
-    monkeypatch.setattr(
-        _registry,
-        "resolve_tool_impl",
-        lambda tool_name, provider_name: fake_tavily if (tool_name == "web_search" and provider_name == "tavily") else None,
-    )
-
-    # Create a web_search tool JSON in core/tools/
-    agent = Agent(system_prompt="Base", provider=MockProvider([]))
-    session = make_session(tmp_path, agent)
-
-    tool_schema = {
-        "name": "web_search",
-        "description": "web search",
-        "input_schema": {
-            "type": "object",
-            "properties": {"query": {"type": "string"}},
-            "required": ["query"],
-        },
-    }
-    (session.core_dir / "tools" / "web_search.json").write_text(json.dumps(tool_schema))
-
-    write_config(session.session_dir, tool_providers={"web_search": "tavily"})
-    session._load_session_capabilities()
-
-    ws = next(t for t in agent.tools if t.name == "web_search")
-    import asyncio
-    result = asyncio.run(ws.execute(query="test"))
-    assert result == "tavily result"
-    assert "brave" not in call_log
-
-
-def test_tool_provider_unknown_keeps_original_impl(tmp_path, monkeypatch):
-    """If resolve_tool_impl returns None for unknown provider, original shell impl is kept."""
-    import butterfly.tool_engine.registry as _registry
-
-    monkeypatch.setattr(
-        _registry,
-        "resolve_tool_impl",
-        lambda tool_name, provider_name: None,
-    )
-
-    agent = Agent(system_prompt="Base", provider=MockProvider([]))
-    session = make_session(tmp_path, agent)
-
-    tool_schema = {
-        "name": "custom_search",
-        "description": "custom search",
-        "input_schema": {
-            "type": "object",
-            "properties": {"query": {"type": "string"}},
-            "required": ["query"],
-        },
-    }
-    (session.core_dir / "tools" / "custom_search.json").write_text(json.dumps(tool_schema))
-    # Create a shell impl that returns a known string
-    sh = session.core_dir / "tools" / "custom_search.sh"
-    sh.write_text('#!/bin/bash\necho "shell result"')
-    sh.chmod(0o755)
-
-    write_config(session.session_dir, tool_providers={"custom_search": "nonexistent"})
-    session._load_session_capabilities()
-
-    ws = next(t for t in agent.tools if t.name == "custom_search")
-    import asyncio
-    result = asyncio.run(ws.execute(query="test"))
-    assert "shell result" in result
 
 
 # ── Task history pruning ──────────────────────────────────────────────────────
