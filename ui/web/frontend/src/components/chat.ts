@@ -145,12 +145,26 @@ export function createChat(): HTMLElement {
   // has scrolled up to read earlier context (Bug 6, chat area).
   // 80 px leeway covers the case where a short new message pushes the
   // current bottom line slightly above the fold.
+  //
+  // IMPORTANT: ``isNearBottom()`` MUST be sampled BEFORE the DOM mutation
+  // that extends ``scrollHeight``. If we check afterwards (e.g. after
+  // appending a 400 px message), the new height pushes the measured
+  // distance past the 80 px threshold even though the user was glued to
+  // the bottom — so auto-follow would silently stop. Callers that append
+  // new content use ``stickyBottomNow()`` to capture the pre-mutation
+  // state and pass it to ``scrollToBottom(wasBottom)``. (cubic P2,
+  // PR #33 review.)
   function isNearBottom(): boolean {
     return messages.scrollHeight - messages.scrollTop - messages.clientHeight < 80;
   }
 
-  function scrollToBottom(force = false) {
-    if (force || isNearBottom()) {
+  function stickyBottomNow(): boolean {
+    return isNearBottom();
+  }
+
+  function scrollToBottom(wasBottom?: boolean) {
+    const shouldScroll = wasBottom ?? isNearBottom();
+    if (shouldScroll) {
       messages.scrollTop = messages.scrollHeight;
     }
   }
@@ -158,13 +172,14 @@ export function createChat(): HTMLElement {
   function appendEvent(event: DisplayEvent) {
     const msgEl = renderEvent(event);
     if (msgEl) {
+      const wasBottom = stickyBottomNow();
       // Keep streaming bubble at the bottom: insert new events before it when streaming
       if (streamingEl && messages.contains(streamingEl)) {
         messages.insertBefore(msgEl, streamingEl);
       } else {
         messages.appendChild(msgEl);
       }
-      scrollToBottom();
+      scrollToBottom(wasBottom);
     }
   }
 
@@ -174,12 +189,13 @@ export function createChat(): HTMLElement {
         if (event.state === 'running') {
           // New turn starting: reset the streaming buffer so leftover text
           // from a prior turn doesn't bleed into the next bubble.
+          const wasBottom = stickyBottomNow();
           isStreaming = true;
           streamingText = '';
           const bubble = getOrCreateStreamingBubble();
           const body = bubble.querySelector('.msg-streaming-body') as HTMLElement;
           body.innerHTML = '';
-          scrollToBottom();
+          scrollToBottom(wasBottom);
           store.modelState = { state: 'running', source: event.source ?? null };
           updateHudDot('running');
         } else {
@@ -205,13 +221,14 @@ export function createChat(): HTMLElement {
         // instead of flashing only the last slice.
         if (!isStreaming) isStreaming = true;
         {
+          const wasBottom = stickyBottomNow();
           const bubble = getOrCreateStreamingBubble();
           const body = bubble.querySelector('.msg-streaming-body') as HTMLElement;
           if (event.content) {
             streamingText += event.content;
             body.innerHTML = renderMarkdown(streamingText);
           }
-          scrollToBottom();
+          scrollToBottom(wasBottom);
         }
         break;
 
@@ -239,6 +256,7 @@ export function createChat(): HTMLElement {
         break;
 
       case 'thinking_start': {
+        const wasBottom = stickyBottomNow();
         const blockId = event.block_id ?? `th:${Date.now()}`;
         // If an older cell for this id somehow exists, replace it.
         const existing = runningThinking.get(blockId);
@@ -264,11 +282,12 @@ export function createChat(): HTMLElement {
           messages.appendChild(cell);
         }
         runningThinking.set(blockId, cell);
-        scrollToBottom();
+        scrollToBottom(wasBottom);
         break;
       }
 
       case 'thinking_done': {
+        const wasBottom = stickyBottomNow();
         const blockId = event.block_id ?? '';
         let cell = blockId ? runningThinking.get(blockId) ?? null : null;
         if (!cell && blockId) {
@@ -310,7 +329,7 @@ export function createChat(): HTMLElement {
           }
         }
         if (blockId) runningThinking.delete(blockId);
-        scrollToBottom();
+        scrollToBottom(wasBottom);
         break;
       }
 
@@ -321,6 +340,7 @@ export function createChat(): HTMLElement {
         // streaming bubble was removed and a fresh bubble appended,
         // making it look like the reply arrived as one big block.
         if (streamingEl && event.content) {
+          const wasBottom = stickyBottomNow();
           const bubble = streamingEl;
           bubble.classList.remove('msg-streaming');
           const body = bubble.querySelector('.msg-streaming-body') as HTMLElement | null;
@@ -349,7 +369,7 @@ export function createChat(): HTMLElement {
           streamingEl = null;
           streamingText = '';
           isStreaming = false;
-          scrollToBottom();
+          scrollToBottom(wasBottom);
         } else {
           removeStreamingBubble();
           appendEvent(event);
