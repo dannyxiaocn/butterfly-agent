@@ -32,7 +32,7 @@ PID file helpers (`_write_pid`, `_read_pid`, `_clear_pid`, `_is_server_running`)
 
 1. `git fetch --quiet origin` (all blocking subprocess calls run via `asyncio.to_thread` so the watcher loop is not starved).
 2. Compare `HEAD` vs `origin/main`. Equal → clear any stale `update_status.json`, sleep again.
-3. Dirty tree (via `git diff` + `git diff --cached`) → write `update_status.json` with `{available, dirty, commits_behind, …}`. The frontend polls `/api/update_status` every 30 s and shows a top-right banner — no auto-apply, since `git pull --ff-only` would clobber local work.
+3. Dirty tree (via `git status --porcelain`, which covers modified + staged + untracked) → write `update_status.json` with `{available, dirty, commits_behind, …}`. The frontend polls `/api/update_status` every 30 s and shows a top-right banner — no auto-apply, since `git pull --ff-only` would clobber local work. This detector intentionally matches `cmd_update`'s so untracked-file collisions surface as a banner rather than a silent worker failure.
 4. Clean tree → `git pull --ff-only` + `pip install -e .` + `npm run build` (best-effort). Write `{applied: true, new_head, applied_at, reload: true}`. `_clear_pid()` + `os.execvp` replace the process image with one running the freshly installed code.
 
 The watcher task and auto-update task are awaited via `asyncio.wait(FIRST_EXCEPTION)` so an unhandled error in either propagates to the `finally` block, clears the PID, and exits non-zero (no "zombie server holding the PID file" failure mode).

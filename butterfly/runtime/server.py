@@ -81,6 +81,37 @@ def _update_status_path(system_sessions_dir: Path) -> Path:
     return system_sessions_dir / "update_status.json"
 
 
+def _consume_stale_reload_flag(system_sessions_dir: Path) -> None:
+    """Drop `reload: true` from the status file (or delete it outright).
+
+    Called once at server startup. If the previous process image wrote the
+    flag before `os.execvp`, the respawn itself has already honoured the
+    reload request; leaving the flag in place would make every fresh page
+    poll re-trigger `window.location.reload()` on the frontend.
+    """
+    path = _update_status_path(system_sessions_dir)
+    if not path.exists():
+        return
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        # Malformed file — safest is to drop it; worker will re-emit if needed.
+        try:
+            path.unlink()
+        except OSError:
+            pass
+        return
+    if not isinstance(payload, dict) or not payload.get("reload"):
+        return
+    # Preserve the audit trail (new_head / applied_at) but drop the reload flag
+    # so subsequent polls don't refresh the page.
+    payload.pop("reload", None)
+    try:
+        path.write_text(json.dumps(payload), encoding="utf-8")
+    except OSError:
+        pass
+
+
 def _git(*args: str, check: bool = False, capture: bool = False,
          timeout: float | None = None) -> subprocess.CompletedProcess:
     return subprocess.run(
@@ -140,8 +171,13 @@ async def _auto_update_worker(
                     pass
             return None
 
-        dirty = _git("diff", "--quiet").returncode != 0 or \
-                _git("diff", "--cached", "--quiet").returncode != 0
+        # `git status --porcelain` covers modified + staged + untracked in one
+        # probe. Must match `cmd_update`'s detector exactly — otherwise the
+        # worker thinks the tree is clean, tries `git pull --ff-only`, Git
+        # refuses because an untracked file collides with an incoming one,
+        # and the failure is logged silently instead of becoming a UI banner.
+        porcelain = _git("status", "--porcelain", capture=True).stdout
+        dirty = bool(porcelain.strip())
         commits_behind = int(
             _git("rev-list", "--count", f"{head}..{remote}",
                  capture=True).stdout.strip() or "0"
@@ -225,6 +261,14 @@ async def _run(sessions_dir: Path, system_sessions_dir: Path) -> None:
 
     _write_pid(system_sessions_dir)
     print(f"butterfly server started (pid={os.getpid()}). sessions dir: {sessions_dir.absolute()}")
+
+    # Post-execvp respawn arrives here with `update_status.json` still carrying
+    # `reload: true`. The respawn itself *is* the reload having been honoured,
+    # so we must drop the flag before the frontend polls `/api/update_status`
+    # — otherwise it observes `reload: true` on every page load until the
+    # worker's next iteration (default 3600 s) and loops the browser tab.
+    # Fresh-start (no upstream update yet) simply has no file to touch.
+    _consume_stale_reload_flag(system_sessions_dir)
 
     interval = int(os.environ.get("BUTTERFLY_AUTOUPDATE_INTERVAL_SEC", "3600"))
     watcher_task = asyncio.create_task(watcher.run(stop_event))
