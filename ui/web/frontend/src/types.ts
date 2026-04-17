@@ -18,6 +18,10 @@ export interface Session {
   // Sub-agent permission mode (explorer / executor) — surfaced in sidebar
   // chip and panel cards.
   mode?: string | null;
+  // User-facing session label (set by the new-session form or by the
+  // sub_agent tool's ``name`` arg). When present, the sidebar and panel
+  // render this in place of the raw session_id.
+  display_name?: string | null;
 }
 
 export interface Params {

@@ -40,6 +40,10 @@ _DEFAULT_AGENT_BASE = _REPO_ROOT / "agenthub"
 
 _VALID_MODES = ("explorer", "executor")
 _DEFAULT_TIMEOUT_SECONDS = 600
+# Cap on the display-``name`` arg so a runaway LLM can't paste a paragraph
+# into the sidebar. ``session_init._normalize_display_name`` also truncates
+# defensively, so this is just early feedback at the tool boundary.
+_NAME_MAX_LEN = 40
 # Caller can opt into a longer wait but we never go below 30s — anything
 # shorter is a configuration error (init_session itself takes ~1-2s for
 # venv creation on a cold session).
@@ -101,11 +105,27 @@ def _validate_mode(mode: Any) -> None:
         )
 
 
+def _validate_name(name: Any) -> str:
+    """Require a non-empty ``name``; return the trimmed + capped value.
+
+    The tool schema marks ``name`` as required because an unnamed child is
+    indistinguishable from its siblings in the sidebar — which was the
+    exact UX papercut that motivated adding this parameter.
+    """
+    if not isinstance(name, str):
+        raise ValueError(f"sub_agent: name must be a string, got {type(name).__name__}")
+    trimmed = name.strip()
+    if not trimmed:
+        raise ValueError("sub_agent: name must be a non-empty string")
+    return trimmed[:_NAME_MAX_LEN]
+
+
 def _spawn_child(
     *,
     parent_session_id: str,
     mode: str,
     task: str,
+    name: str,
     sessions_base: Path,
     system_sessions_base: Path,
     agent_base: Path,
@@ -145,6 +165,7 @@ def _spawn_child(
         parent_session_id=parent_session_id,
         mode=mode,
         sub_agent_depth=parent_depth + 1,
+        display_name=name,
     )
     return child_id, msg_id, agent_name
 
@@ -207,10 +228,12 @@ class SubAgentTool:
         try:
             task = kwargs["task"]
             mode = kwargs["mode"]
+            name_raw = kwargs["name"]
         except KeyError as exc:
             return f"Error: missing required arg {exc.args[0]!r}"
         try:
             _validate_mode(mode)
+            name = _validate_name(name_raw)
         except ValueError as exc:
             return f"Error: {exc}"
         timeout = max(
@@ -222,6 +245,7 @@ class SubAgentTool:
                 parent_session_id=self._parent_session_id,
                 mode=mode,
                 task=task,
+                name=name,
                 sessions_base=self._sessions_base,
                 system_sessions_base=self._system_sessions_base,
                 agent_base=self._agent_base,
@@ -269,6 +293,7 @@ class SubAgentRunner:
         if not input.get("task"):
             raise ValueError("sub_agent: input.task is required")
         _validate_mode(input.get("mode"))
+        _validate_name(input.get("name"))
 
     async def run(
         self,
@@ -280,6 +305,7 @@ class SubAgentRunner:
     ) -> int | None:
         task = input["task"]
         mode = input["mode"]
+        name = _validate_name(input.get("name"))
         timeout = max(
             float(input.get("timeout_seconds") or _DEFAULT_TIMEOUT_SECONDS),
             float(_MIN_TIMEOUT_SECONDS),
@@ -289,6 +315,7 @@ class SubAgentRunner:
                 parent_session_id=self._parent_session_id,
                 mode=mode,
                 task=task,
+                name=name,
                 sessions_base=self._sessions_base,
                 system_sessions_base=self._system_sessions_base,
                 agent_base=self._agent_base,
@@ -301,6 +328,7 @@ class SubAgentRunner:
         entry.meta = {
             **(entry.meta or {}),
             "child_session_id": child_id,
+            "display_name": name,
             "mode": mode,
             "agent": agent_name,
             "timeout_seconds": timeout,

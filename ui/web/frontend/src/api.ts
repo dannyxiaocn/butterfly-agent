@@ -27,7 +27,7 @@ export const api = {
   getSession: (id: string): Promise<Session> =>
     request('GET', `/api/sessions/${encodeURIComponent(id)}`),
 
-  createSession: (body: { id?: string; agent: string }): Promise<{ id: string; agent: string }> =>
+  createSession: (body: { agent: string; display_name?: string }): Promise<{ id: string; agent: string; display_name?: string | null }> =>
     request('POST', '/api/sessions', body),
 
   getUpdateStatus: (): Promise<{

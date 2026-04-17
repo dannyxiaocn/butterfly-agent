@@ -192,10 +192,25 @@ def create_app(sessions_dir: Path, system_sessions_dir: Path | None = None) -> F
 
     @app.post("/api/sessions")
     async def create_session(body: dict):
-        session_id = body.get("id") or (datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + "-" + uuid.uuid4().hex[:4])
+        # session_id is always server-generated: keeps the canonical identifier
+        # uniform (timestamp + 4-char uuid) regardless of what the user typed.
+        # The user's human-facing label arrives as ``display_name`` and is
+        # stored on the manifest for sidebar/panel rendering.
+        session_id = datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + "-" + uuid.uuid4().hex[:4]
         agent = body.get("agent", _DEFAULT_AGENT)
+        display_name = body.get("display_name")
+        if isinstance(display_name, str):
+            display_name = display_name.strip() or None
+        else:
+            display_name = None
         try:
-            return service_create_session(session_id, agent, sessions_dir=sessions_dir, system_sessions_dir=system_sessions_dir)
+            return service_create_session(
+                session_id,
+                agent,
+                sessions_dir=sessions_dir,
+                system_sessions_dir=system_sessions_dir,
+                display_name=display_name,
+            )
         except ValueError as exc:
             raise HTTPException(400, str(exc))
 

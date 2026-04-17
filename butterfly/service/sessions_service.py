@@ -76,6 +76,10 @@ def get_session(session_id: str, sessions_dir: Path, system_sessions_dir: Path) 
         # child indentation and the panel can show the mode tag.
         "parent_session_id": manifest.get("parent_session_id"),
         "mode": manifest.get("mode"),
+        # User-facing name (optional; set by sub_agent tool's ``name`` arg or
+        # by the web new-session form). Falls back to session_id in the UI
+        # when absent.
+        "display_name": manifest.get("display_name"),
     }
 
 
@@ -110,8 +114,21 @@ def list_sessions(sessions_dir: Path, system_sessions_dir: Path, exclude_meta: b
     return sort_sessions(result)
 
 
-def create_session(session_id: str, agent: str, sessions_dir: Path, system_sessions_dir: Path) -> dict:
-    """Create a new session."""
+def create_session(
+    session_id: str,
+    agent: str,
+    sessions_dir: Path,
+    system_sessions_dir: Path,
+    *,
+    display_name: str | None = None,
+) -> dict:
+    """Create a new session.
+
+    ``display_name`` is the user-facing label shown in the sidebar and panel;
+    the internal ``session_id`` (timestamp + 4-char uuid suffix) stays the
+    canonical, unique identifier. Pass ``None`` to create an unnamed session
+    (UI will fall back to the session_id).
+    """
     _validate_session_id(session_id)
     from butterfly.session_engine.session_init import init_session
     agent_path = Path(agent)
@@ -130,8 +147,9 @@ def create_session(session_id: str, agent: str, sessions_dir: Path, system_sessi
         sessions_base=sessions_dir,
         system_sessions_base=system_sessions_dir,
         agent_base=agent_base,
+        display_name=display_name,
     )
-    return {"id": session_id, "agent": agent}
+    return {"id": session_id, "agent": agent, "display_name": display_name}
 
 
 def delete_session(session_id: str, sessions_dir: Path, system_sessions_dir: Path) -> bool:

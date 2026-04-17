@@ -808,6 +808,17 @@ export function createPanel(): HTMLElement {
     const childId = String(meta.child_session_id ?? '');
     const mode = String(meta.mode ?? '?');
     const lastChildState = String(meta.last_child_state ?? '');
+    // Prefer ``meta.display_name`` (written by SubAgentRunner for children
+    // spawned post-v2.0.19). Fall back to the child session's own
+    // manifest-side display_name from the store — covers the case where a
+    // card is rendered before the runner has saved its meta update.
+    const storeName = (() => {
+      if (!childId) return '';
+      const s = store.sessions.find(x => x.id === childId);
+      return (s?.display_name ?? '').trim();
+    })();
+    const displayName = String(meta.display_name ?? '').trim() || storeName;
+    const headerLabel = displayName || 'sub_agent';
     const statusClass = `panel-status-${entry.status}`;
     // Thumbnail line: child id + mode chip + current activity.
     const activityIcon = entry.status === 'running' ? '▶' : entry.status === 'completed' ? '✓' : '⚠';
@@ -849,9 +860,9 @@ export function createPanel(): HTMLElement {
 
     return `
       <div class="task-card panel-row sub-agent-row${expanded ? ' expanded' : ''}" data-tid="${escHtml(entry.tid)}">
-        <div class="task-card-header panel-row-header" data-tid="${escHtml(entry.tid)}">
+        <div class="task-card-header panel-row-header" data-tid="${escHtml(entry.tid)}" title="${escHtml(childId || entry.tid)}">
           <span class="task-status-badge ${statusClass}">${escHtml(entry.status)}</span>
-          <span class="task-name">sub_agent</span>
+          <span class="task-name">${escHtml(headerLabel)}</span>
           <span class="session-mode-chip">${escHtml(mode)}</span>
           <span class="hb-pill panel-tid">${escHtml(entry.tid)}</span>
         </div>

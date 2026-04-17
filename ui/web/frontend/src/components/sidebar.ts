@@ -55,12 +55,20 @@ export function createSidebar(): HTMLElement {
       const indent = depth > 0
         ? `<span class="session-indent" aria-hidden="true">↳</span>`
         : '';
+      // Prefer the user-facing display_name (set by the new-session form or
+      // by the sub_agent tool). Fall back to the raw session_id so unnamed
+      // sessions still render. Tooltip carries both so the canonical id is
+      // always discoverable.
+      const displayLabel = (s.display_name && s.display_name.trim()) ? s.display_name : s.id;
+      const tooltip = displayLabel === s.id
+        ? `${s.id} · ${s.agent}`
+        : `${displayLabel} · ${s.id} · ${s.agent}`;
       const own = `
-        <div class="session-item${active}${pulseClass}${childClass}" data-id="${escHtml(s.id)}" data-depth="${depth}" title="${escHtml(s.id)} · ${escHtml(s.agent)}">
+        <div class="session-item${active}${pulseClass}${childClass}" data-id="${escHtml(s.id)}" data-depth="${depth}" title="${escHtml(tooltip)}">
           ${indent}
           ${dotHtml}
           <span class="session-item-info">
-            <span class="session-item-name">${escHtml(s.id)}${modeChip}</span>
+            <span class="session-item-name">${escHtml(displayLabel)}${modeChip}</span>
             <span class="session-item-agent">${escHtml(agentLabel)}</span>
           </span>
         </div>
@@ -88,8 +96,8 @@ export function createSidebar(): HTMLElement {
       </div>
       <div id="new-session-form" class="new-session-form${formVisible ? '' : ' hidden'}">
         <div class="form-field">
-          <label>Session ID</label>
-          <input id="ns-id" type="text" placeholder="my-session (optional)" />
+          <label>Display name</label>
+          <input id="ns-display-name" type="text" placeholder="e.g. audit auth flow (optional)" maxlength="40" />
         </div>
         <div class="form-field">
           <label>Agent</label>
@@ -114,17 +122,20 @@ export function createSidebar(): HTMLElement {
     });
 
     el.querySelector('#ns-create')?.addEventListener('click', async () => {
-      const idEl = el.querySelector('#ns-id') as HTMLInputElement;
+      const nameEl = el.querySelector('#ns-display-name') as HTMLInputElement;
       const agentEl = el.querySelector('#ns-agent') as HTMLInputElement;
-      const body: { id?: string; agent: string } = {
+      // session_id is always server-generated; the form only collects the
+      // user-facing display_name + agent choice.
+      const body: { agent: string; display_name?: string } = {
         agent: agentEl.value.trim() || 'agenthub/agent',
       };
-      if (idEl.value.trim()) body.id = idEl.value.trim();
+      const trimmedName = nameEl.value.trim();
+      if (trimmedName) body.display_name = trimmedName;
       try {
         const res = await api.createSession(body);
         formVisible = false;
         el.querySelector('#new-session-form')?.classList.add('hidden');
-        idEl.value = '';
+        nameEl.value = '';
         // Refresh sessions list
         const sessions = await api.listSessions();
         store.sessions = sessions;
