@@ -654,7 +654,7 @@ class Session:
         self._set_model_status("running", "user")
         tool_call_cb, get_tool_call_count = self._make_tool_call_callback()
         on_chunk = self._make_text_chunk_callback()
-        on_thinking_start, on_thinking_end, had_thinking = self._make_thinking_callbacks()
+        on_thinking_start, on_thinking_end, had_thinking, get_thinking_blocks = self._make_thinking_callbacks()
         result: AgentResult | None = None
         try:
             async with self._agent_lock:
@@ -673,7 +673,10 @@ class Session:
         except asyncio.CancelledError:
             on_chunk.flush()
             self._set_model_status("idle", "user")
-            self._save_partial_chat_turn(item, old_len, get_tool_call_count(), had_thinking())
+            self._save_partial_chat_turn(
+                item, old_len, get_tool_call_count(), had_thinking(),
+                thinking_blocks=get_thinking_blocks(),
+            )
             raise
         except BaseException:
             on_chunk.flush()
@@ -682,7 +685,10 @@ class Session:
         finally:
             on_chunk.flush()
 
-        self._save_chat_turn(item, old_len, result, get_tool_call_count(), had_thinking())
+        self._save_chat_turn(
+            item, old_len, result, get_tool_call_count(), had_thinking(),
+            thinking_blocks=get_thinking_blocks(),
+        )
         self._set_model_status("idle", "user")
         return result
 
@@ -710,7 +716,7 @@ class Session:
         self._set_model_status("running", triggered_by)
         tool_call_cb, get_tool_call_count = self._make_tool_call_callback()
         on_chunk = self._make_text_chunk_callback()
-        on_thinking_start, on_thinking_end, had_thinking = self._make_thinking_callbacks()
+        on_thinking_start, on_thinking_end, had_thinking, get_thinking_blocks = self._make_thinking_callbacks()
         try:
             async with self._agent_lock:
                 self._load_session_capabilities()
@@ -768,6 +774,9 @@ class Session:
                     turn["has_streaming_tools"] = True
                 if had_thinking():
                     turn["has_streaming_thinking"] = True
+                thinking_blocks = get_thinking_blocks()
+                if thinking_blocks:
+                    turn["thinking_blocks"] = thinking_blocks
                 if result.usage and result.usage.total_tokens > 0:
                     turn["usage"] = result.usage.as_dict()
                 self._append_context(turn)
@@ -784,6 +793,8 @@ class Session:
         result: AgentResult,
         tool_call_count: int,
         had_thinking: bool,
+        *,
+        thinking_blocks: list[dict] | None = None,
     ) -> None:
         turn: dict = {
             "type": "turn",
@@ -798,6 +809,8 @@ class Session:
             turn["has_streaming_tools"] = True
         if had_thinking:
             turn["has_streaming_thinking"] = True
+        if thinking_blocks:
+            turn["thinking_blocks"] = thinking_blocks
         if result.usage and result.usage.total_tokens > 0:
             turn["usage"] = result.usage.as_dict()
         self._append_context(turn)
@@ -808,6 +821,8 @@ class Session:
         old_len: int,
         tool_call_count: int,
         had_thinking: bool,
+        *,
+        thinking_blocks: list[dict] | None = None,
     ) -> None:
         """Persist the committed-but-cancelled prefix of a chat turn.
 
@@ -834,6 +849,8 @@ class Session:
             turn["has_streaming_tools"] = True
         if had_thinking:
             turn["has_streaming_thinking"] = True
+        if thinking_blocks:
+            turn["thinking_blocks"] = thinking_blocks
         self._append_context(turn)
 
     # ── Stop / Start ───────────────────────────────────────────────
@@ -1442,7 +1459,7 @@ class Session:
         return f"{last_content}\n\n{new_content}"
 
     def _make_thinking_callbacks(self):
-        """Return ``(on_thinking_start, on_thinking_end, had_any)``.
+        """Return ``(on_thinking_start, on_thinking_end, had_any, get_collected)``.
 
         Thinking blocks render as a dedicated tool-like cell in the web UI:
         ``on_thinking_start`` opens a cell showing "Thinking…" and
@@ -1456,12 +1473,19 @@ class Session:
         ``had_any()`` returns True if at least one thinking_done was emitted
         — used by the caller to mark the completed turn with
         ``has_streaming_thinking`` so history replay doesn't double-emit.
+
+        ``get_collected()`` returns the list of ``{block_id, text, ts,
+        duration_ms}`` dicts captured during the run — persisted onto the
+        turn so history replay can restore the cells on re-entry, even for
+        providers that don't roundtrip thinking text through message.content
+        (codex reasoning items, Anthropic's non-text thinking blocks).
         """
         import time as _time
 
         counter: list[int] = [0]
         pending: list[tuple[str, float]] = []  # stack of (block_id, started_at)
         any_closed: list[bool] = [False]
+        collected: list[dict] = []
 
         def on_thinking_start() -> None:
             counter[0] += 1
@@ -1486,12 +1510,21 @@ class Session:
                 "text": text or "",
                 "duration_ms": duration_ms,
             })
+            collected.append({
+                "block_id": block_id,
+                "text": text or "",
+                "duration_ms": duration_ms,
+                "ts": datetime.now().isoformat(),
+            })
             any_closed[0] = True
 
         def had_any() -> bool:
             return any_closed[0]
 
-        return on_thinking_start, on_thinking_end, had_any
+        def get_collected() -> list[dict]:
+            return list(collected)
+
+        return on_thinking_start, on_thinking_end, had_any, get_collected
 
     def _make_text_chunk_callback(self):
         """Return a sync callback that writes throttled partial_text events.

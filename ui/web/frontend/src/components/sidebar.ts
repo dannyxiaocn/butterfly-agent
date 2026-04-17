@@ -7,13 +7,38 @@ export function createSidebar(): HTMLElement {
   const el = document.createElement('aside');
   el.id = 'sidebar';
 
+  // Persist new-session form state across re-renders. `render()` rebuilds
+  // the whole sidebar DOM via innerHTML on every sessions/weixin poll
+  // (3-5 s cadence), which would otherwise wipe the agent input back to its
+  // default and make "type → create" impossible (Bug 5). We snapshot the
+  // current values + focus before rebuilding and restore them after.
   let formVisible = false;
+  let formState: { id: string; agent: string; focus: string | null } = {
+    id: '',
+    agent: 'agenthub/agent',
+    focus: null,
+  };
 
   function render() {
     const sessions = store.sessions;
     const current = store.currentSessionId;
 
     const weixinSession = store.weixinStatus.status === 'running' ? (store.weixinStatus.session ?? null) : null;
+
+    // Snapshot in-DOM state before we blow it away — scroll position of the
+    // session list (Bug 6) and form inputs (Bug 5).
+    const prevList = el.querySelector('#session-list') as HTMLElement | null;
+    const prevScrollTop = prevList ? prevList.scrollTop : 0;
+    const prevIdInput = el.querySelector('#ns-id') as HTMLInputElement | null;
+    const prevAgentInput = el.querySelector('#ns-agent') as HTMLInputElement | null;
+    const activeEl = document.activeElement;
+    if (prevIdInput) formState.id = prevIdInput.value;
+    if (prevAgentInput) formState.agent = prevAgentInput.value;
+    if (activeEl === prevIdInput) formState.focus = 'id';
+    else if (activeEl === prevAgentInput) formState.focus = 'agent';
+    else formState.focus = null;
+    const prevIdSel = prevIdInput ? [prevIdInput.selectionStart, prevIdInput.selectionEnd] : null;
+    const prevAgentSel = prevAgentInput ? [prevAgentInput.selectionStart, prevAgentInput.selectionEnd] : null;
 
     // Group by parent_session_id so children render indented under their
     // parent (markdown-list style). Orphans (parent missing from current
@@ -89,11 +114,11 @@ export function createSidebar(): HTMLElement {
       <div id="new-session-form" class="new-session-form${formVisible ? '' : ' hidden'}">
         <div class="form-field">
           <label>Session ID</label>
-          <input id="ns-id" type="text" placeholder="my-session (optional)" />
+          <input id="ns-id" type="text" placeholder="my-session (optional)" value="${escHtml(formState.id)}" />
         </div>
         <div class="form-field">
           <label>Agent</label>
-          <input id="ns-agent" type="text" value="agenthub/agent" />
+          <input id="ns-agent" type="text" value="${escHtml(formState.agent || 'agenthub/agent')}" />
         </div>
         <div class="form-row">
           <button class="btn-sm btn-primary" id="ns-create">Create</button>
@@ -102,14 +127,45 @@ export function createSidebar(): HTMLElement {
       </div>
     `;
 
+    // Restore scroll + focus so the 3-5 s background poll doesn't yank the
+    // user's place in the session list or steal the cursor out of a form
+    // input mid-typing (Bug 5 + Bug 6).
+    const nextList = el.querySelector('#session-list') as HTMLElement | null;
+    if (nextList && prevScrollTop > 0) nextList.scrollTop = prevScrollTop;
+    if (formVisible) {
+      const newIdInput = el.querySelector('#ns-id') as HTMLInputElement | null;
+      const newAgentInput = el.querySelector('#ns-agent') as HTMLInputElement | null;
+      // Wire input → state so each keystroke is captured even if the next
+      // render fires before the user tabs away.
+      newIdInput?.addEventListener('input', () => { formState.id = newIdInput.value; });
+      newAgentInput?.addEventListener('input', () => { formState.agent = newAgentInput.value; });
+      if (formState.focus === 'id' && newIdInput) {
+        newIdInput.focus();
+        if (prevIdSel && prevIdSel[0] != null && prevIdSel[1] != null) {
+          newIdInput.setSelectionRange(prevIdSel[0], prevIdSel[1]);
+        }
+      } else if (formState.focus === 'agent' && newAgentInput) {
+        newAgentInput.focus();
+        if (prevAgentSel && prevAgentSel[0] != null && prevAgentSel[1] != null) {
+          newAgentInput.setSelectionRange(prevAgentSel[0], prevAgentSel[1]);
+        }
+      }
+    }
+
     // bind events
     el.querySelector('#btn-new-session')?.addEventListener('click', () => {
       formVisible = !formVisible;
       el.querySelector('#new-session-form')?.classList.toggle('hidden', !formVisible);
+      if (formVisible) {
+        const agentInput = el.querySelector('#ns-agent') as HTMLInputElement | null;
+        agentInput?.focus();
+        agentInput?.select();
+      }
     });
 
     el.querySelector('#ns-cancel')?.addEventListener('click', () => {
       formVisible = false;
+      formState = { id: '', agent: 'agenthub/agent', focus: null };
       el.querySelector('#new-session-form')?.classList.add('hidden');
     });
 
@@ -123,6 +179,7 @@ export function createSidebar(): HTMLElement {
       try {
         const res = await api.createSession(body);
         formVisible = false;
+        formState = { id: '', agent: 'agenthub/agent', focus: null };
         el.querySelector('#new-session-form')?.classList.add('hidden');
         idEl.value = '';
         // Refresh sessions list
