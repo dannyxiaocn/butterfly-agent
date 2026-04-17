@@ -454,7 +454,7 @@ def test_kimi_anthropic_passes_user_agent_header(monkeypatch):
     assert captured["default_headers"]["User-Agent"] == _KIMI_USER_AGENT
 
 
-# ── 7. reasoning_content round-trip (v2.0.15 fix) ─────────────────────────────
+# ── 7. reasoning_content round-trip (v2.0.16 fix) ─────────────────────────────
 #
 # Moonshot/Kimi streams reasoning tokens as ``delta.reasoning_content`` and
 # expects every assistant message carrying ``tool_calls`` on subsequent

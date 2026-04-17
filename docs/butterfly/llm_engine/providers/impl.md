@@ -40,7 +40,7 @@ When `thinking=True`, the provider sends `include=["reasoning.encrypted_content"
 
 Every concrete provider inherits `Provider.consume_extra_blocks()` from the ABC (default: empty list), so the agent loop calls it directly.
 
-### Kimi OpenAI-compat: `reasoning_content` echo (v2.0.15)
+### Kimi OpenAI-compat: `reasoning_content` echo (v2.0.16)
 
 Moonshot/Kimi's OpenAI-compatible surface streams reasoning tokens as `delta.reasoning_content` alongside the assistant text and expects every assistant message carrying `tool_calls` on subsequent requests to include the matching `reasoning_content` string. Losing it causes a 400:
 
@@ -48,7 +48,7 @@ Moonshot/Kimi's OpenAI-compatible surface streams reasoning tokens as `delta.rea
 {"error": {"message": "thinking is enabled but reasoning_content is missing in assistant tool call message at index N", "type": "invalid_request_error"}}
 ```
 
-Prior to v2.0.15 the stream parser only tracked `delta.content` and `delta.tool_calls`, so Kimi would 400 on iteration 2 of every tool-using turn — the agent loop would commit the tool call, execute it, re-call Kimi with the tool result, and the second call would crash. `Agent.run` treated that as a `ProviderError` and (if no fallback was configured, or the fallback also failed) raised, while `Session._do_chat` caught the exception and discarded the partial turn — the user saw a tool cell followed by silence.
+Prior to v2.0.16 the stream parser only tracked `delta.content` and `delta.tool_calls`, so Kimi would 400 on iteration 2 of every tool-using turn — the agent loop would commit the tool call, execute it, re-call Kimi with the tool result, and the second call would crash. `Agent.run` treated that as a `ProviderError` and (if no fallback was configured, or the fallback also failed) raised; `Session._do_chat` re-raised the exception up to the dispatcher which rejected the caller's future — the user saw a tool cell followed by silence.
 
 The fix wires reasoning_content through the same round-trip as Codex reasoning:
 
