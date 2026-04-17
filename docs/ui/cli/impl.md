@@ -22,6 +22,15 @@ butterfly start ID                      # resume session
 butterfly entity new ...                # scaffold a new entity
 butterfly server                        # start the server daemon
 butterfly web                           # start the web UI
+
+# Auth helpers (v2.0.13+)
+butterfly codex login                   # device-code OAuth → ~/.butterfly/auth.json
+butterfly codex login --import-codex-cli  # import from ~/.codex/auth.json
+butterfly codex login --no-verify       # skip post-login display
+butterfly kimi login                    # interactive API key setup → .env
+butterfly kimi login --key KEY          # non-interactive (CI-friendly)
+butterfly kimi login --no-verify        # skip API ping
+butterfly kimi login --env-file PATH    # write to a specific .env file
 ```
 
 ## Server Auto-Start

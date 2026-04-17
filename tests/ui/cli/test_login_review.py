@@ -1,86 +1,167 @@
-"""Review-round regression tests for ``ui/cli/login.py`` (PR #21 review).
+"""Review-round regression tests for ``ui/cli/login.py`` (v2.0.13 interface).
 
-These cover bugs and gaps surfaced during the deep-test pass on PR #21.
-Kimi-side tests were retired in v2.0.10 when ``butterfly kimi login`` was
-stripped back to a URL printer — the failure modes they guarded against
-(empty-key-blocks-on-getpass, secrets-file-race, legacy-env-fallback)
-all became unreachable once the getpass/env-write/verify-ping flow was
-removed.
+Previous test_login_review.py covered the subprocess + _verify_codex_auth()
+interface from v2.0.7 / v2.0.10. That interface was replaced in v2.0.13 with:
+  - Built-in OAuth device-code flow (no codex CLI dependency)
+  - Butterfly-owned auth store at ~/.butterfly/auth.json
+  - Interactive kimi key prompt + .env write
+
+These tests cover the correctness of the new helpers introduced in v2.0.13.
 """
 from __future__ import annotations
 
-import argparse
 import json
+import time
 
 import pytest
 
 from ui.cli import login as login_mod
 
 
-# ── 1. Codex auth.json shape robustness ─────────────────────────────────────
+# ── 1. _read_butterfly_codex_tokens shape robustness ────────────────────────
 
 
-@pytest.mark.parametrize(
-    "payload",
-    [
-        "[1,2,3]",         # JSON array
-        '"a string"',     # JSON string
-        "42",              # JSON number
-        "null",            # JSON null
-        "true",            # JSON bool
-    ],
-)
-def test_codex_verify_handles_non_object_json(monkeypatch, tmp_path, capsys, payload):
-    """A valid-JSON-but-non-dict auth.json should be a graceful error, not a crash."""
+def test_read_butterfly_tokens_missing_file_returns_none(monkeypatch, tmp_path):
+    monkeypatch.setattr(login_mod, "_BUTTERFLY_AUTH_PATH", tmp_path / "nope.json")
+    assert login_mod._read_butterfly_codex_tokens() is None
+
+
+def test_read_butterfly_tokens_corrupt_json_returns_none(monkeypatch, tmp_path):
     auth = tmp_path / "auth.json"
-    auth.write_text(payload, encoding="utf-8")
-    monkeypatch.setattr(login_mod, "_CODEX_AUTH_PATH", auth)
-
-    # Must not raise AttributeError.
-    rc = login_mod._verify_codex_auth()
-    assert rc == 1, "non-object auth.json must return rc=1, not crash"
-    err = capsys.readouterr().err
-    assert "auth.json" in err.lower() or "missing" in err.lower() or "could not" in err.lower(), (
-        f"expected an explanatory stderr message, got: {err!r}"
-    )
+    auth.write_text("{{ not json")
+    monkeypatch.setattr(login_mod, "_BUTTERFLY_AUTH_PATH", auth)
+    assert login_mod._read_butterfly_codex_tokens() is None
 
 
-def test_codex_verify_tokens_field_is_not_dict(monkeypatch, tmp_path, capsys):
-    """If ``tokens`` is itself a non-dict (e.g. list), we shouldn't crash either."""
+def test_read_butterfly_tokens_non_dict_tokens_returns_none(monkeypatch, tmp_path):
     auth = tmp_path / "auth.json"
-    auth.write_text(json.dumps({"tokens": ["wrong-shape"]}), encoding="utf-8")
-    monkeypatch.setattr(login_mod, "_CODEX_AUTH_PATH", auth)
-
-    rc = login_mod._verify_codex_auth()
-    assert rc == 1
+    auth.write_text(json.dumps({"tokens": ["list", "not", "dict"]}))
+    monkeypatch.setattr(login_mod, "_BUTTERFLY_AUTH_PATH", auth)
+    assert login_mod._read_butterfly_codex_tokens() is None
 
 
-# ── 2. Codex subprocess / account-id edge cases ─────────────────────────────
-
-
-def test_codex_login_subprocess_oserror_returns_1(monkeypatch, capsys):
-    """If exec'ing the codex CLI itself raises OSError, we should surface it cleanly."""
-    monkeypatch.setattr(login_mod.shutil, "which", lambda _cmd: "/usr/local/bin/codex")
-
-    def boom(_argv):
-        raise OSError("Exec format error")
-
-    monkeypatch.setattr(login_mod.subprocess, "call", boom)
-    rc = login_mod.cmd_codex(argparse.Namespace(
-        codex_cmd="login", skip_cli=False, no_verify=True,
-    ))
-    assert rc == 1
-    err = capsys.readouterr().err
-    assert "exec" in err.lower() or "failed" in err.lower()
-
-
-def test_codex_verify_account_id_extraction_failure_is_non_fatal(monkeypatch, tmp_path, capsys):
-    """A failure inside ``_extract_account_id`` is decorative — verify must still pass."""
+def test_read_butterfly_tokens_valid_returns_data(monkeypatch, tmp_path):
     auth = tmp_path / "auth.json"
-    auth.write_text(json.dumps({
-        "tokens": {"access_token": "a.b.c", "refresh_token": "r", "id_token": ""}
-    }), encoding="utf-8")
-    monkeypatch.setattr(login_mod, "_CODEX_AUTH_PATH", auth)
+    data = {"tokens": {"access_token": "a.b.c", "refresh_token": "r"}}
+    auth.write_text(json.dumps(data))
+    monkeypatch.setattr(login_mod, "_BUTTERFLY_AUTH_PATH", auth)
+    result = login_mod._read_butterfly_codex_tokens()
+    assert result == data
+
+
+# ── 2. _is_token_expired ────────────────────────────────────────────────────
+
+
+def test_is_token_expired_empty_string():
+    assert login_mod._is_token_expired("") is True
+
+
+def test_is_token_expired_non_jwt():
+    assert login_mod._is_token_expired("notajwt") is True
+
+
+def test_is_token_expired_past_exp():
+    import base64
+    payload = base64.urlsafe_b64encode(
+        json.dumps({"exp": int(time.time()) - 10}).encode()
+    ).rstrip(b"=").decode()
+    token = f"h.{payload}.s"
+    assert login_mod._is_token_expired(token, buffer_seconds=0) is True
+
+
+def test_is_token_expired_future_exp():
+    import base64
+    payload = base64.urlsafe_b64encode(
+        json.dumps({"exp": int(time.time()) + 3600}).encode()
+    ).rstrip(b"=").decode()
+    token = f"h.{payload}.s"
+    assert login_mod._is_token_expired(token, buffer_seconds=0) is False
+
+
+# ── 3. _read_codex_cli_tokens ───────────────────────────────────────────────
+
+
+def test_read_codex_cli_tokens_missing_file(monkeypatch, tmp_path):
+    monkeypatch.setattr(login_mod, "_CODEX_CLI_AUTH_PATH", tmp_path / "nope.json")
+    assert login_mod._read_codex_cli_tokens() is None
+
+
+def test_read_codex_cli_tokens_expired_token_returns_none(monkeypatch, tmp_path):
+    import base64
+    payload = base64.urlsafe_b64encode(
+        json.dumps({"exp": int(time.time()) - 100}).encode()
+    ).rstrip(b"=").decode()
+    expired_token = f"h.{payload}.s"
+    cli_auth = tmp_path / "auth.json"
+    cli_auth.write_text(json.dumps({
+        "tokens": {"access_token": expired_token, "refresh_token": "r"}
+    }))
+    monkeypatch.setattr(login_mod, "_CODEX_CLI_AUTH_PATH", cli_auth)
+    assert login_mod._read_codex_cli_tokens() is None
+
+
+def test_read_codex_cli_tokens_valid(monkeypatch, tmp_path):
+    import base64
+    payload = base64.urlsafe_b64encode(
+        json.dumps({"exp": int(time.time()) + 3600}).encode()
+    ).rstrip(b"=").decode()
+    fresh_token = f"h.{payload}.s"
+    cli_auth = tmp_path / "auth.json"
+    cli_auth.write_text(json.dumps({
+        "tokens": {"access_token": fresh_token, "refresh_token": "r"}
+    }))
+    monkeypatch.setattr(login_mod, "_CODEX_CLI_AUTH_PATH", cli_auth)
+    result = login_mod._read_codex_cli_tokens()
+    assert result is not None
+    assert result["access_token"] == fresh_token
+
+
+# ── 4. device code poll — 403 access_denied fails fast ──────────────────────
+
+
+def test_device_code_flow_403_access_denied_raises_immediately(monkeypatch):
+    """403 with error=access_denied must raise immediately, not loop for 15 min."""
+    import httpx as httpx_mod
+
+    class _MockResp:
+        status_code = 403
+        def json(self):
+            return {"error": "access_denied"}
+
+    class _MockDeviceResp:
+        status_code = 200
+        def json(self):
+            return {
+                "user_code": "ABCD-1234",
+                "device_auth_id": "dev-id-xyz",
+                "interval": "1",
+            }
+
+    class _MockClient:
+        def __init__(self, *a, **kw): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def post(self, url, **kw):
+            if "usercode" in url:
+                return _MockDeviceResp()
+            return _MockResp()
+
+    monkeypatch.setattr(httpx_mod, "Client", _MockClient)
+    monkeypatch.setattr(httpx_mod, "Timeout", lambda x: x)
+
+    with pytest.raises(RuntimeError, match="access_denied"):
+        login_mod._run_device_code_flow(httpx_mod)
+
+
+# ── 5. account-id extraction failure is non-fatal ───────────────────────────
+
+
+def test_codex_success_survives_account_id_failure(monkeypatch, capsys):
+    import base64
+    payload = base64.urlsafe_b64encode(
+        json.dumps({"exp": int(time.time()) + 3600}).encode()
+    ).rstrip(b"=").decode()
+    access_token = f"h.{payload}.s"
 
     def boom(*_a, **_kw):
         raise RuntimeError("decode failed")
@@ -90,7 +171,7 @@ def test_codex_verify_account_id_extraction_failure_is_non_fatal(monkeypatch, tm
         boom,
     )
 
-    rc = login_mod._verify_codex_auth()
+    rc = login_mod._print_codex_success(access_token)
     assert rc == 0, "account-id failure must NOT block verify success"
     out = capsys.readouterr().out
     assert "verified" in out.lower()

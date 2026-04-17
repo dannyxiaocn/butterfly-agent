@@ -45,7 +45,7 @@ def test_kimi_anthropic_default_base_url(monkeypatch):
     monkeypatch.delenv("KIMI_BASE_URL", raising=False)
     captured: dict[str, object] = {}
 
-    def _fake_init(self, *, api_key=None, max_tokens=8096, base_url=None):
+    def _fake_init(self, *, api_key=None, max_tokens=8096, base_url=None, default_headers=None):
         captured["base_url"] = base_url
 
     monkeypatch.setattr(AnthropicProvider, "__init__", _fake_init)

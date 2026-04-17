@@ -1,6 +1,14 @@
 """CodexProvider — calls OpenAI Codex via ChatGPT OAuth.
 
-Reads credentials from ~/.codex/auth.json (written by the ``codex`` CLI),
+Reads credentials from ~/.butterfly/auth.json (butterfly's own auth store,
+written by ``butterfly codex login``).  On first use, tokens are automatically
+migrated from ~/.codex/auth.json if that file exists, so users upgrading from
+an older butterfly that read the Codex CLI's file don't need to log in again.
+
+Storing tokens in butterfly's own file keeps refresh-token rotation independent
+of the Codex CLI and VS Code extension — a refresh by those tools no longer
+invalidates butterfly's session (and vice versa).
+
 auto-refreshes the access token when it expires, and calls:
   POST https://chatgpt.com/backend-api/codex/responses
 
@@ -52,17 +60,24 @@ if TYPE_CHECKING:
     from butterfly.core.types import Message
     from butterfly.core.tool import Tool
 
-_AUTH_PATH = Path.home() / ".codex" / "auth.json"
+# Butterfly's own Codex auth store — separate from ~/.codex/auth.json so
+# refresh-token rotation in the Codex CLI or VS Code extension does NOT
+# invalidate butterfly's session (and vice versa).
+_AUTH_PATH = Path.home() / ".butterfly" / "auth.json"
+# Fallback / migration source: tokens originally written by `codex login`.
+_CODEX_CLI_AUTH_PATH = Path.home() / ".codex" / "auth.json"
 _VALID_EFFORTS = {"none", "minimal", "low", "medium", "high", "xhigh"}
 _CODEX_URL = "https://chatgpt.com/backend-api/codex/responses"
 _TOKEN_URL = "https://auth.openai.com/oauth/token"
+_DEVICE_USERCODE_URL = "https://auth.openai.com/api/accounts/deviceauth/usercode"
+_DEVICE_TOKEN_URL = "https://auth.openai.com/api/accounts/deviceauth/token"
 _CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 _JWT_AUTH_CLAIM = "https://api.openai.com/auth"
 _DEFAULT_READ_TIMEOUT = 600.0  # gpt-5 xhigh routinely exceeds 120s before first token
 _ORIGINATOR = "codex_cli_rs"  # matches openai/codex; "pi" is not on the server allowlist
 _MAX_SSE_BUFFER_BYTES = 1_048_576  # 1 MiB — defend against a server that never sends \n\n
 
-# Module-level lock serializes token-refresh writes to ~/.codex/auth.json
+# Module-level lock serializes token-refresh writes to ~/.butterfly/auth.json
 # across concurrent providers in the same process. File-level cross-process
 # locking is out of scope — the CLI is the only other writer.
 _REFRESH_LOCK = asyncio.Lock()
@@ -254,10 +269,28 @@ class CodexProvider(Provider):
 
 
 def _read_auth() -> dict[str, Any]:
+    """Read Codex OAuth tokens from butterfly's own auth store.
+
+    On first use, migrates tokens from the Codex CLI's ``~/.codex/auth.json``
+    if butterfly's own ``~/.butterfly/auth.json`` doesn't exist yet.  This
+    one-time migration avoids requiring a fresh login after upgrading.  After
+    migration butterfly manages its own refresh-token rotation independently of
+    the Codex CLI and VS Code extension.
+    """
     if not _AUTH_PATH.exists():
+        # One-time migration: import tokens from the Codex CLI's auth file.
+        if _CODEX_CLI_AUTH_PATH.exists():
+            try:
+                data = json.loads(_CODEX_CLI_AUTH_PATH.read_text(encoding="utf-8"))
+                tokens = data.get("tokens", {})
+                if isinstance(tokens, dict) and tokens.get("access_token") and tokens.get("refresh_token"):
+                    _write_auth(data)
+                    return data
+            except Exception:
+                pass
         raise AuthError(
             f"Codex auth file not found at {_AUTH_PATH}. "
-            "Run `codex login` to authenticate.",
+            "Run `butterfly codex login` to authenticate.",
             provider="codex-oauth",
             status=401,
         )
@@ -265,6 +298,7 @@ def _read_auth() -> dict[str, Any]:
 
 
 def _write_auth(auth: dict[str, Any]) -> None:
+    _AUTH_PATH.parent.mkdir(parents=True, exist_ok=True)
     _AUTH_PATH.write_text(json.dumps(auth, indent=2), encoding="utf-8")
     # Restrict to owner-only; OAuth refresh tokens must not be world-readable.
     try:

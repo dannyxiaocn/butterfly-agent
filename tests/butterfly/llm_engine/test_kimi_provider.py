@@ -97,7 +97,7 @@ def test_kimi_base_url_is_hardcoded(monkeypatch):
     monkeypatch.setenv("KIMI_BASE_URL", "https://ignored.kimi.com/")
     captured = {}
 
-    def _fake_init(self, *, api_key=None, max_tokens=8096, base_url=None):
+    def _fake_init(self, *, api_key=None, max_tokens=8096, base_url=None, default_headers=None):
         captured["base_url"] = base_url
 
     monkeypatch.setattr(AnthropicProvider, "__init__", _fake_init)
@@ -119,7 +119,7 @@ def test_kimi_api_key_explicit(monkeypatch):
     monkeypatch.delenv("KIMI_FOR_CODING_API_KEY", raising=False)
     captured = {}
 
-    def _fake_init(self, *, api_key=None, max_tokens=8096, base_url=None):
+    def _fake_init(self, *, api_key=None, max_tokens=8096, base_url=None, default_headers=None):
         captured["api_key"] = api_key
 
     monkeypatch.setattr(AnthropicProvider, "__init__", _fake_init)
@@ -131,7 +131,7 @@ def test_kimi_api_key_from_env(monkeypatch):
     monkeypatch.setenv("KIMI_FOR_CODING_API_KEY", "primary-key")
     captured = {}
 
-    def _fake_init(self, *, api_key=None, max_tokens=8096, base_url=None):
+    def _fake_init(self, *, api_key=None, max_tokens=8096, base_url=None, default_headers=None):
         captured["api_key"] = api_key
 
     monkeypatch.setattr(AnthropicProvider, "__init__", _fake_init)
@@ -158,7 +158,7 @@ def test_kimi_api_key_explicit_overrides_env(monkeypatch):
     monkeypatch.setenv("KIMI_FOR_CODING_API_KEY", "env-key")
     captured = {}
 
-    def _fake_init(self, *, api_key=None, max_tokens=8096, base_url=None):
+    def _fake_init(self, *, api_key=None, max_tokens=8096, base_url=None, default_headers=None):
         captured["api_key"] = api_key
 
     monkeypatch.setattr(AnthropicProvider, "__init__", _fake_init)
@@ -173,7 +173,7 @@ def test_kimi_max_tokens_default(monkeypatch):
     monkeypatch.setenv("KIMI_FOR_CODING_API_KEY", "k")
     captured = {}
 
-    def _fake_init(self, *, api_key=None, max_tokens=8096, base_url=None):
+    def _fake_init(self, *, api_key=None, max_tokens=8096, base_url=None, default_headers=None):
         captured["max_tokens"] = max_tokens
 
     monkeypatch.setattr(AnthropicProvider, "__init__", _fake_init)
@@ -185,7 +185,7 @@ def test_kimi_max_tokens_explicit(monkeypatch):
     monkeypatch.setenv("KIMI_FOR_CODING_API_KEY", "k")
     captured = {}
 
-    def _fake_init(self, *, api_key=None, max_tokens=8096, base_url=None):
+    def _fake_init(self, *, api_key=None, max_tokens=8096, base_url=None, default_headers=None):
         captured["max_tokens"] = max_tokens
 
     monkeypatch.setattr(AnthropicProvider, "__init__", _fake_init)

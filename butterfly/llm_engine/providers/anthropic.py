@@ -24,6 +24,7 @@ class AnthropicProvider(Provider):
         api_key: str | None = None,
         max_tokens: int = 8096,
         base_url: str | None = None,
+        default_headers: dict[str, str] | None = None,
     ) -> None:
         try:
             import anthropic as _anthropic
@@ -34,6 +35,8 @@ class AnthropicProvider(Provider):
         client_kwargs: dict[str, Any] = {"api_key": api_key, "base_url": base_url}
         if http_client is not None:
             client_kwargs["http_client"] = http_client
+        if default_headers is not None:
+            client_kwargs["default_headers"] = default_headers
         self._client = _anthropic.AsyncAnthropic(**client_kwargs)
         self.max_tokens = max_tokens
 
