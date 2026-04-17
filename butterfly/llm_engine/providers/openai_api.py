@@ -91,6 +91,33 @@ class OpenAIProvider(Provider):
 
         self._client = AsyncOpenAI(**client_kwargs)
         self.max_tokens = max_tokens
+        # Moonshot / Kimi-style ``reasoning_content`` captured from the last
+        # completion. Drained by ``consume_extra_blocks`` so Agent.run can
+        # attach it to the assistant message and echo it back on the next
+        # turn — Kimi's API rejects assistant tool-call messages whose
+        # ``reasoning_content`` is missing when thinking is enabled.
+        # Always empty for standard OpenAI (which does not emit this field).
+        self._pending_reasoning_content: str = ""
+
+    def consume_extra_blocks(self) -> list[dict]:
+        """Surface captured Moonshot/Kimi ``reasoning_content`` as a content block.
+
+        The agent loop appends any returned blocks to the assistant message so
+        they round-trip back to the provider on the next request — Kimi's
+        API validates that every assistant message carrying ``tool_calls``
+        includes the matching ``reasoning_content`` when thinking is on, so
+        losing it between turns causes a 400 on every iteration after the
+        first tool call. Standard OpenAI streams never populate this field
+        so the default behaviour is unchanged there.
+        """
+        if not self._pending_reasoning_content:
+            return []
+        block = {
+            "type": "reasoning_content",
+            "text": self._pending_reasoning_content,
+        }
+        self._pending_reasoning_content = ""
+        return [block]
 
     async def aclose(self) -> None:
         close = getattr(self._client, "close", None)
@@ -115,10 +142,11 @@ class OpenAIProvider(Provider):
         thinking_budget: int = 8000,  # ignored — Chat Completions uses reasoning_effort
         thinking_effort: str = "high",
     ) -> tuple[str, list[ToolCall], TokenUsage]:
-        # Chat Completions has no thinking visibility — accept the hooks for
-        # interface parity but never invoke them. All text goes to
-        # on_text_chunk as usual.
-        del on_thinking_start, on_thinking_end  # unused
+        # Standard Chat Completions has no thinking-visibility channel, but
+        # Moonshot's OpenAI-compatible surface (used by KimiOpenAIProvider)
+        # streams ``delta.reasoning_content`` for each reasoning token. The
+        # stream parser picks those up and fires the hooks — plain OpenAI
+        # streams never populate the field so the hooks stay silent there.
         api_messages = _build_messages(system_prompt, messages, cache_system_prefix)
         api_tools = [_tool_to_openai(t) for t in tools] if tools else []
 
@@ -145,8 +173,17 @@ class OpenAIProvider(Provider):
 
         try:
             if on_text_chunk is not None:
-                return await self._stream_complete(kwargs, on_text_chunk)
-            return await self._non_stream_complete(kwargs)
+                return await self._stream_complete(
+                    kwargs,
+                    on_text_chunk,
+                    on_thinking_start=on_thinking_start,
+                    on_thinking_end=on_thinking_end,
+                )
+            return await self._non_stream_complete(
+                kwargs,
+                on_thinking_start=on_thinking_start,
+                on_thinking_end=on_thinking_end,
+            )
         except Exception as exc:  # noqa: BLE001 - mapped below
             _maybe_raise_mapped_openai_error(exc)
             raise
@@ -185,22 +222,62 @@ class OpenAIProvider(Provider):
     # ------------------------------------------------------------------
 
     async def _non_stream_complete(
-        self, kwargs: dict[str, Any]
+        self,
+        kwargs: dict[str, Any],
+        *,
+        on_thinking_start: Callable[[], None] | None = None,
+        on_thinking_end: Callable[[str], None] | None = None,
     ) -> tuple[str, list[ToolCall], TokenUsage]:
         response = await self._client.chat.completions.create(**kwargs)
+        # Moonshot returns the full reasoning body as ``message.reasoning_content``
+        # on non-streaming responses. Standard OpenAI never populates it, so the
+        # hook firing below collapses to a no-op for plain OpenAI.
+        choice = response.choices[0] if response.choices else None
+        reasoning_text = ""
+        if choice is not None and choice.message is not None:
+            reasoning_text = getattr(choice.message, "reasoning_content", "") or ""
+        if reasoning_text:
+            if on_thinking_start is not None:
+                try:
+                    on_thinking_start()
+                except Exception:  # noqa: BLE001 - hooks are best-effort
+                    pass
+            if on_thinking_end is not None:
+                try:
+                    on_thinking_end(reasoning_text)
+                except Exception:  # noqa: BLE001
+                    pass
+            self._pending_reasoning_content = reasoning_text
+        else:
+            self._pending_reasoning_content = ""
         return _parse_response(response, extract_usage=self._extract_usage)
 
     async def _stream_complete(
         self,
         kwargs: dict[str, Any],
         on_text_chunk: Callable[[str], None],
+        *,
+        on_thinking_start: Callable[[], None] | None = None,
+        on_thinking_end: Callable[[str], None] | None = None,
     ) -> tuple[str, list[ToolCall], TokenUsage]:
         kwargs["stream"] = True
         kwargs["stream_options"] = {"include_usage": True}
 
         content_parts: list[str] = []
+        reasoning_parts: list[str] = []
+        thinking_opened = False  # guards on_thinking_start; prevents double-fire
+        thinking_closed = False  # set when on_thinking_end has fired
         tc_map: dict[int, dict[str, Any]] = {}
         usage = TokenUsage()
+
+        def _close_thinking() -> None:
+            nonlocal thinking_closed
+            if thinking_opened and not thinking_closed and on_thinking_end is not None:
+                try:
+                    on_thinking_end("".join(reasoning_parts))
+                except Exception:  # noqa: BLE001 - best-effort hook
+                    pass
+                thinking_closed = True
 
         stream = await self._client.chat.completions.create(**kwargs)
         async for chunk in stream:
@@ -213,11 +290,33 @@ class OpenAIProvider(Provider):
 
             delta = chunk.choices[0].delta
 
+            # Moonshot / Kimi emits reasoning tokens as ``delta.reasoning_content``.
+            # Accumulate them into ``reasoning_parts`` so the final body can be
+            # exposed to the session IPC (thinking cell) and echoed back to the
+            # provider on the next turn via ``consume_extra_blocks``.
+            reasoning_delta = getattr(delta, "reasoning_content", None) or ""
+            if reasoning_delta:
+                if not thinking_opened:
+                    thinking_opened = True
+                    if on_thinking_start is not None:
+                        try:
+                            on_thinking_start()
+                        except Exception:  # noqa: BLE001
+                            pass
+                reasoning_parts.append(reasoning_delta)
+
             if delta.content:
+                # Assistant text begins — close the thinking cell so the UI
+                # transitions from the "thinking…" pill to the streamed reply.
+                _close_thinking()
                 on_text_chunk(delta.content)
                 content_parts.append(delta.content)
 
             if delta.tool_calls:
+                # A tool call ends the thinking phase just as clearly as plain
+                # text does — close the cell so the body isn't left hanging if
+                # the assistant goes straight from reasoning into a tool call.
+                _close_thinking()
                 for tc_delta in delta.tool_calls:
                     idx = tc_delta.index
                     if idx not in tc_map:
@@ -235,6 +334,11 @@ class OpenAIProvider(Provider):
                         if tc_delta.function.arguments:
                             entry["arguments"] += tc_delta.function.arguments
 
+        # Stream ended without a content/tool-call transition closing the
+        # thinking cell — e.g. a reasoning-only finish (rare but legal).
+        _close_thinking()
+
+        self._pending_reasoning_content = "".join(reasoning_parts)
         text = "".join(content_parts)
         tool_calls = _tc_map_to_list(tc_map)
         return text, tool_calls, usage
@@ -307,6 +411,7 @@ def _build_messages(
             if isinstance(msg.content, list):
                 text_parts = []
                 tool_calls_api = []
+                reasoning_content_str = ""
                 for block in msg.content:
                     if isinstance(block, dict):
                         btype = block.get("type")
@@ -321,6 +426,15 @@ def _build_messages(
                             })
                         elif btype == "text":
                             text_parts.append(block.get("text", ""))
+                        elif btype == "reasoning_content":
+                            # Moonshot / Kimi-style reasoning captured on a
+                            # previous turn. Kimi's API validates that every
+                            # assistant message carrying ``tool_calls``
+                            # replays it on subsequent requests when thinking
+                            # is enabled; losing it yields a 400 on iteration
+                            # 2. Only the last reasoning block per turn is
+                            # kept — Kimi's API expects a single string.
+                            reasoning_content_str = block.get("text", "")
                         # Provider-specific blocks (e.g. Codex "reasoning") are
                         # skipped — they don't round-trip through Chat Completions.
                     else:
@@ -339,6 +453,14 @@ def _build_messages(
                 }
                 if tool_calls_api:
                     entry["tool_calls"] = tool_calls_api
+                    # Stamp reasoning_content only on tool-call turns: that
+                    # is where Kimi's API actually requires it, and standard
+                    # OpenAI models would reject an unknown field. Plain-text
+                    # turns get no reasoning_content even if captured so a
+                    # mixed-provider history (Kimi reasoning echoed to plain
+                    # OpenAI) does not 400.
+                    if reasoning_content_str:
+                        entry["reasoning_content"] = reasoning_content_str
                 result.append(entry)
             else:
                 result.append({"role": "assistant", "content": msg.content})

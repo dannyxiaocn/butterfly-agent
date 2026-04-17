@@ -40,6 +40,23 @@ When `thinking=True`, the provider sends `include=["reasoning.encrypted_content"
 
 Every concrete provider inherits `Provider.consume_extra_blocks()` from the ABC (default: empty list), so the agent loop calls it directly.
 
+### Kimi OpenAI-compat: `reasoning_content` echo (v2.0.16)
+
+Moonshot/Kimi's OpenAI-compatible surface streams reasoning tokens as `delta.reasoning_content` alongside the assistant text and expects every assistant message carrying `tool_calls` on subsequent requests to include the matching `reasoning_content` string. Losing it causes a 400:
+
+```
+{"error": {"message": "thinking is enabled but reasoning_content is missing in assistant tool call message at index N", "type": "invalid_request_error"}}
+```
+
+Prior to v2.0.16 the stream parser only tracked `delta.content` and `delta.tool_calls`, so Kimi would 400 on iteration 2 of every tool-using turn — the agent loop would commit the tool call, execute it, re-call Kimi with the tool result, and the second call would crash. `Agent.run` treated that as a `ProviderError` and (if no fallback was configured, or the fallback also failed) raised; `Session._do_chat` re-raised the exception up to the dispatcher which rejected the caller's future — the user saw a tool cell followed by silence.
+
+The fix wires reasoning_content through the same round-trip as Codex reasoning:
+
+1. `OpenAIProvider._stream_complete` / `_non_stream_complete` accumulate `reasoning_content` into `self._pending_reasoning_content` and fire `on_thinking_start` / `on_thinking_end(body)` so the session emits `thinking_start` / `thinking_done` IPC events (thinking cell in the web UI). Standard OpenAI streams never populate `reasoning_content`, so the hooks stay silent there.
+2. `OpenAIProvider.consume_extra_blocks` returns `[{"type": "reasoning_content", "text": "…"}]` when reasoning was captured, clearing the slot after — `Agent.run` appends the block to the committed assistant `Message.content` before the `text` / `tool_use` blocks.
+3. `_build_messages` sees the `reasoning_content` block on an assistant message and — **only when that message also has `tool_calls`** — stamps `entry["reasoning_content"] = block["text"]` on the OpenAI request entry. Plain-text turns never carry the field, so a mixed history replayed against a standard OpenAI model does not 400 on an unknown assistant field.
+4. `Session._clean_content_for_api` allow-lists the block type, so a session reload preserves the field through `context.jsonl` round-trip.
+
 ### Codex SSE: defending against summary leak (v2.0.11)
 
 The ChatGPT-OAuth backend has been observed to deliver reasoning summary content via `response.output_text.delta` events nested inside a `reasoning` output_item — not via the spec'd `response.reasoning_summary_text.delta` channel. Without defenses, that content leaks into `text_parts` and the assistant message buffer (visible as the model "narrating" its plan in the final reply, with no Thinking… cell ever opening).

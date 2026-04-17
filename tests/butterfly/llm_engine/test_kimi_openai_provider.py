@@ -452,3 +452,439 @@ def test_kimi_anthropic_passes_user_agent_header(monkeypatch):
 
     assert captured["default_headers"] == _KIMI_DEFAULT_HEADERS
     assert captured["default_headers"]["User-Agent"] == _KIMI_USER_AGENT
+
+
+# ── 7. reasoning_content round-trip (v2.0.16 fix) ─────────────────────────────
+#
+# Moonshot/Kimi streams reasoning tokens as ``delta.reasoning_content`` and
+# expects every assistant message carrying ``tool_calls`` on subsequent
+# requests to include a matching ``reasoning_content`` string. Losing that
+# field between turns causes Kimi to 400 with
+# "thinking is enabled but reasoning_content is missing" — which used to
+# crash Agent.run the moment it tried the second iteration after a tool
+# call. These tests lock down the end-to-end round-trip.
+
+
+def _fake_stream_client(chunks: list) -> SimpleNamespace:
+    """Fake ``chat.completions.create`` that yields provided streaming chunks."""
+
+    async def _create(**kwargs: Any) -> Any:
+        async def _gen():
+            for c in chunks:
+                yield c
+        return _gen()
+
+    return SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=_create))
+    )
+
+
+def _chunk(
+    *,
+    content: str | None = None,
+    reasoning: str | None = None,
+    usage: Any = None,
+) -> SimpleNamespace:
+    delta = SimpleNamespace(content=content, tool_calls=None, reasoning_content=reasoning)
+    choice = SimpleNamespace(delta=delta)
+    return SimpleNamespace(choices=[choice], usage=usage)
+
+
+def _usage_chunk(usage: Any) -> SimpleNamespace:
+    return SimpleNamespace(choices=[], usage=usage)
+
+
+@pytest.mark.asyncio
+async def test_stream_captures_reasoning_content_into_pending_slot():
+    """``delta.reasoning_content`` accumulates into ``_pending_reasoning_content``."""
+    provider = _make_provider()
+    chunks = [
+        _chunk(reasoning="Let me "),
+        _chunk(reasoning="think about it."),
+        _chunk(content="Hi!"),
+        _usage_chunk(SimpleNamespace(
+            prompt_tokens=5, completion_tokens=2,
+            prompt_tokens_details=None, completion_tokens_details=None,
+        )),
+    ]
+    provider._client = _fake_stream_client(chunks)
+
+    text, tool_calls, _usage = await provider.complete(
+        messages=[Message(role="user", content="hi")],
+        tools=[],
+        system_prompt="sys",
+        model="kimi-k2-turbo-preview",
+        thinking=True,
+        on_text_chunk=lambda _: None,
+    )
+
+    assert text == "Hi!"
+    assert tool_calls == []
+    assert provider._pending_reasoning_content == "Let me think about it."
+
+
+@pytest.mark.asyncio
+async def test_stream_fires_thinking_hooks_on_reasoning_then_content():
+    """Reasoning opens the thinking cell; the first content delta closes it."""
+    provider = _make_provider()
+    chunks = [
+        _chunk(reasoning="plan"),
+        _chunk(reasoning=" step"),
+        _chunk(content="done"),
+    ]
+    provider._client = _fake_stream_client(chunks)
+
+    events: list[tuple[str, str]] = []
+
+    await provider.complete(
+        messages=[Message(role="user", content="x")],
+        tools=[],
+        system_prompt="sys",
+        model="kimi-k2",
+        thinking=True,
+        on_text_chunk=lambda _: None,
+        on_thinking_start=lambda: events.append(("start", "")),
+        on_thinking_end=lambda body: events.append(("end", body)),
+    )
+
+    assert events[0] == ("start", "")
+    assert events[-1] == ("end", "plan step")
+    # End must fire exactly once even when more content deltas follow.
+    assert sum(1 for e in events if e[0] == "end") == 1
+
+
+@pytest.mark.asyncio
+async def test_stream_fires_thinking_end_on_reasoning_only_stream():
+    """Stream that ends with only reasoning (no assistant text, no tool call)
+    still closes the thinking cell so the UI does not leak a "thinking…" pill.
+    """
+    provider = _make_provider()
+    chunks = [_chunk(reasoning="mid-thought")]
+    provider._client = _fake_stream_client(chunks)
+
+    events: list[tuple[str, str]] = []
+
+    await provider.complete(
+        messages=[Message(role="user", content="x")],
+        tools=[],
+        system_prompt="sys",
+        model="kimi-k2",
+        thinking=True,
+        on_text_chunk=lambda _: None,
+        on_thinking_start=lambda: events.append(("start", "")),
+        on_thinking_end=lambda body: events.append(("end", body)),
+    )
+
+    assert ("end", "mid-thought") in events
+
+
+@pytest.mark.asyncio
+async def test_stream_without_reasoning_leaves_pending_slot_empty():
+    """Standard OpenAI streams never populate reasoning_content — the pending
+    slot stays empty so ``consume_extra_blocks`` returns []."""
+    provider = _make_provider()
+    chunks = [_chunk(content="hello")]
+    provider._client = _fake_stream_client(chunks)
+
+    await provider.complete(
+        messages=[Message(role="user", content="x")],
+        tools=[],
+        system_prompt="sys",
+        model="gpt-4",
+        on_text_chunk=lambda _: None,
+    )
+
+    assert provider._pending_reasoning_content == ""
+    assert provider.consume_extra_blocks() == []
+
+
+def test_consume_extra_blocks_returns_reasoning_and_clears_slot():
+    """``consume_extra_blocks`` drains the pending reasoning and clears it."""
+    provider = _make_provider()
+    provider._pending_reasoning_content = "captured reasoning"
+
+    first = provider.consume_extra_blocks()
+    assert first == [{"type": "reasoning_content", "text": "captured reasoning"}]
+    # A second call returns [] — the block was consumed.
+    assert provider.consume_extra_blocks() == []
+
+
+@pytest.mark.asyncio
+async def test_non_stream_captures_message_reasoning_content():
+    """Non-streaming responses capture ``message.reasoning_content`` too."""
+    provider = _make_provider()
+
+    async def _create(**kwargs: Any) -> Any:
+        return SimpleNamespace(
+            choices=[SimpleNamespace(
+                message=SimpleNamespace(
+                    content="Hi", tool_calls=None,
+                    reasoning_content="thought through it",
+                ),
+            )],
+            usage=SimpleNamespace(
+                prompt_tokens=3, completion_tokens=1,
+                prompt_tokens_details=None, completion_tokens_details=None,
+            ),
+        )
+
+    provider._client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=_create))
+    )
+
+    text, _tool_calls, _usage = await provider.complete(
+        messages=[Message(role="user", content="x")],
+        tools=[],
+        system_prompt="sys",
+        model="kimi-k2",
+        thinking=True,
+    )
+
+    assert text == "Hi"
+    assert provider._pending_reasoning_content == "thought through it"
+
+
+def test_build_messages_stamps_reasoning_content_on_tool_call_turn():
+    """Assistant turn with both reasoning_content and tool_use → entry carries
+    the ``reasoning_content`` field Kimi's API demands on iter 2+."""
+    from butterfly.llm_engine.providers.openai_api import _build_messages
+
+    messages = [
+        Message(role="user", content="read my config"),
+        Message(role="assistant", content=[
+            {"type": "reasoning_content", "text": "need to call read"},
+            {"type": "tool_use", "id": "tu1", "name": "read",
+             "input": {"path": "config.yaml"}},
+        ]),
+        Message(role="tool", content=[
+            {"type": "tool_result", "tool_use_id": "tu1",
+             "content": "model: kimi", "is_error": False},
+        ]),
+    ]
+
+    out = _build_messages("sys", messages)
+    # system, user, assistant(tool_call), tool
+    assert out[2]["role"] == "assistant"
+    assert out[2]["tool_calls"][0]["function"]["name"] == "read"
+    assert out[2]["reasoning_content"] == "need to call read"
+
+
+def test_build_messages_does_not_stamp_reasoning_on_text_only_turn():
+    """Text-only assistant turns must NOT carry ``reasoning_content`` so a
+    mixed history does not 400 standard OpenAI models that reject the field.
+    """
+    from butterfly.llm_engine.providers.openai_api import _build_messages
+
+    messages = [
+        Message(role="user", content="hi"),
+        Message(role="assistant", content=[
+            {"type": "reasoning_content", "text": "thinking..."},
+            {"type": "text", "text": "Hello!"},
+        ]),
+    ]
+
+    out = _build_messages("sys", messages)
+    assistant_entry = out[2]
+    assert assistant_entry["content"] == "Hello!"
+    assert "reasoning_content" not in assistant_entry
+    assert "tool_calls" not in assistant_entry
+
+
+def test_session_clean_content_preserves_reasoning_content():
+    """``Session._clean_content_for_api`` must allow-list ``reasoning_content``
+    so a session reload still carries the field Kimi requires on the next
+    LLM call."""
+    from butterfly.session_engine.session import Session
+
+    content = [
+        {"type": "reasoning_content", "text": "captured"},
+        {"type": "tool_use", "id": "tu1", "name": "read",
+         "input": {"path": "x"}},
+    ]
+    cleaned = Session._clean_content_for_api(content)
+
+    assert {"type": "reasoning_content", "text": "captured"} in cleaned
+    # And storage-only fields on reasoning blocks (if any future writer added
+    # one) get stripped — only ``type`` + ``text`` survive.
+    enriched = [{"type": "reasoning_content", "text": "x", "ts": "should-strip"}]
+    stripped = Session._clean_content_for_api(enriched)
+    assert stripped == [{"type": "reasoning_content", "text": "x"}]
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_carries_reasoning_across_iterations():
+    """End-to-end: Agent.run should pull reasoning_content out via
+    ``consume_extra_blocks`` after iter 1 and attach it to the assistant
+    message so iter 2's request already contains it — the regression that
+    previously 400'd Kimi on every tool-call follow-up.
+    """
+    from butterfly.core.agent import Agent
+    from butterfly.core.tool import Tool
+    from butterfly.core.types import ToolCall, TokenUsage
+
+    calls: list[list[Message]] = []
+
+    class _StubProvider:
+        _supports_cache_control = False
+
+        def __init__(self) -> None:
+            self._pending = "my reasoning"
+
+        def consume_extra_blocks(self) -> list[dict]:
+            if not self._pending:
+                return []
+            out = [{"type": "reasoning_content", "text": self._pending}]
+            self._pending = ""
+            return out
+
+        async def complete(self, *, messages, tools, system_prompt, model, **_kw):
+            calls.append(list(messages))
+            if len(calls) == 1:
+                # iter 1: fire a tool call
+                return "", [ToolCall(id="tu1", name="read", input={"path": "x"})], TokenUsage()
+            # iter 2: produce final text
+            return "done", [], TokenUsage()
+
+    async def _read(path: str) -> str:
+        return f"contents of {path}"
+
+    tool = Tool(
+        name="read", description="Read a file.", func=_read,
+        schema={"type": "object", "properties": {"path": {"type": "string"}}},
+    )
+    agent = Agent(
+        system_prompt="sys", tools=[tool], model="stub",
+        provider=_StubProvider(),
+    )
+
+    result = await agent.run("go")
+
+    assert result.iterations == 2
+    assert result.content == "done"
+
+    # The second LLM call must have seen the reasoning_content block inside
+    # the assistant message — that is what round-trips to Kimi as the
+    # ``reasoning_content`` field on the request body.
+    iter2_messages = calls[1]
+    assistant_turn = iter2_messages[1]
+    assert assistant_turn.role == "assistant"
+    assert isinstance(assistant_turn.content, list)
+    types = [b.get("type") for b in assistant_turn.content if isinstance(b, dict)]
+    assert "reasoning_content" in types
+    assert "tool_use" in types
+
+
+# ── 8. Correctness invariants around the pending slot ────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_stream_interleaved_reasoning_after_content_still_captured():
+    """If reasoning arrives AFTER content (interleaved), the pending slot must
+    still capture the full reasoning body so Kimi's tool-loop round-trip is
+    preserved. The thinking cell closes on the first content chunk (one-shot),
+    but that is a UI concern — the API field the provider echoes back must be
+    complete regardless of arrival order.
+    """
+    provider = _make_provider()
+    chunks = [
+        _chunk(reasoning="pre-"),
+        _chunk(content="hi"),
+        _chunk(reasoning="post"),
+    ]
+    provider._client = _fake_stream_client(chunks)
+
+    events: list[tuple[str, str]] = []
+    await provider.complete(
+        messages=[Message(role="user", content="x")],
+        tools=[],
+        system_prompt="sys",
+        model="kimi-k2",
+        thinking=True,
+        on_text_chunk=lambda _: None,
+        on_thinking_start=lambda: events.append(("start", "")),
+        on_thinking_end=lambda body: events.append(("end", body)),
+    )
+
+    # Full reasoning text round-trips through pending — this is what gets
+    # echoed back to Kimi on the next request body.
+    assert provider._pending_reasoning_content == "pre-post"
+    # UI cell closes exactly once (on the first content delta).
+    assert sum(1 for e in events if e[0] == "end") == 1
+
+
+@pytest.mark.asyncio
+async def test_stream_clears_pending_when_no_reasoning_in_current_call():
+    """Consecutive calls on the same provider: a call with reasoning populates
+    the slot; a subsequent call without reasoning must clear it so the stale
+    value does not round-trip to an unrelated turn.
+    """
+    provider = _make_provider()
+
+    # Call 1: reasoning present.
+    provider._client = _fake_stream_client([
+        _chunk(reasoning="stale"), _chunk(content="a"),
+    ])
+    await provider.complete(
+        messages=[Message(role="user", content="x")],
+        tools=[], system_prompt="sys", model="kimi-k2",
+        thinking=True, on_text_chunk=lambda _: None,
+    )
+    assert provider._pending_reasoning_content == "stale"
+
+    # Call 2: no reasoning chunks at all. Pending must be cleared so
+    # consume_extra_blocks returns [] for callers that did not drain
+    # after call 1 (defensive — Agent.run normally drains immediately).
+    provider._client = _fake_stream_client([_chunk(content="b")])
+    await provider.complete(
+        messages=[Message(role="user", content="x")],
+        tools=[], system_prompt="sys", model="kimi-k2",
+        on_text_chunk=lambda _: None,
+    )
+    assert provider._pending_reasoning_content == ""
+    assert provider.consume_extra_blocks() == []
+
+
+def test_build_messages_keeps_last_reasoning_when_multiple_blocks_present():
+    """Defensive: if an assistant message somehow carries multiple
+    ``reasoning_content`` blocks (future-proofing against a provider that
+    emits per-step reasoning), ``_build_messages`` stamps only the last one.
+    Kimi's API expects a single string, so collapsing to "last wins" matches
+    the in-code documentation.
+    """
+    from butterfly.llm_engine.providers.openai_api import _build_messages
+
+    messages = [
+        Message(role="user", content="do it"),
+        Message(role="assistant", content=[
+            {"type": "reasoning_content", "text": "first"},
+            {"type": "reasoning_content", "text": "second"},
+            {"type": "tool_use", "id": "tu1", "name": "read",
+             "input": {"path": "x"}},
+        ]),
+    ]
+    out = _build_messages("sys", messages)
+    assert out[2]["reasoning_content"] == "second"
+
+
+def test_build_messages_skips_reasoning_when_no_tool_calls_even_if_text_present():
+    """A mixed history replayed against a standard OpenAI model (fallback
+    scenario) must not leak ``reasoning_content`` onto text-only assistant
+    entries — OpenAI rejects the field on plain-text turns. Covered by
+    ``test_build_messages_does_not_stamp_reasoning_on_text_only_turn`` for
+    the single-block case; this extends that to a mixed-blocks turn with
+    both text and reasoning (no tool_use).
+    """
+    from butterfly.llm_engine.providers.openai_api import _build_messages
+
+    messages = [
+        Message(role="user", content="hi"),
+        Message(role="assistant", content=[
+            {"type": "reasoning_content", "text": "pondering"},
+            {"type": "text", "text": "hello"},
+        ]),
+    ]
+    out = _build_messages("sys", messages)
+    assistant_entry = out[2]
+    assert assistant_entry["content"] == "hello"
+    assert "reasoning_content" not in assistant_entry
+    assert "tool_calls" not in assistant_entry

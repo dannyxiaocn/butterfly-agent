@@ -367,10 +367,14 @@ class Session:
         if not isinstance(content, list):
             return content
         _ALLOWED: dict[str, set] = {
-            "text":        {"type", "text"},
-            "tool_use":    {"type", "id", "name", "input"},
-            "tool_result": {"type", "tool_use_id", "content", "is_error"},
-            "image":       {"type", "source"},
+            "text":              {"type", "text"},
+            "tool_use":          {"type", "id", "name", "input"},
+            "tool_result":       {"type", "tool_use_id", "content", "is_error"},
+            "image":             {"type", "source"},
+            # Moonshot/Kimi reasoning echoed back on tool-call turns when
+            # thinking is enabled. Preserved through reload so the next LLM
+            # call still carries the field — skipping it 400s on Kimi.
+            "reasoning_content": {"type", "text"},
         }
         cleaned = []
         for block in content:
