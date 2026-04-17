@@ -73,6 +73,37 @@ Task cards enter the inbox as `TaskItem(card=...)`. `_scheduled_task_names` is a
 
 The 5 s pending bar (PR #24) is removed. The dispatcher owns merging, so each Enter sends one `POST /messages` with a `mode` field — default `interrupt`. The Alt/⌥+Enter shortcut (and a small `wait` checkbox) sends with `mode=wait`. There is no per-tab buffer to go stale across tabs, which fixes the silent-cross-session footgun that PR #24 review flagged.
 
+#### Daemon poll cadence — split input / housekeeping (v2.0.14)
+
+`run_daemon_loop` polls on two cadences, tuned by class constants on `Session`:
+
+| Constant | Value | Scope |
+| --- | --- | --- |
+| `_INPUT_POLL_INTERVAL` | `0.05` (50 ms) | Drains `context.jsonl` for new `user_input`, the explicit-interrupt control event on `events.jsonl`, and `BackgroundTaskManager` completion notifications every tick. |
+| `_TASK_POLL_INTERVAL` | `0.5` (500 ms) | Housekeeping: stopped-session auto-expiry after 5 h, plus scanning `core/tasks/` for due cards to enqueue. |
+
+Why split: with a single 500 ms cadence, a fast provider could finish the **first** chat before the daemon ever saw the **second** message, so the two runs produced two separate turns instead of the expected cancel-and-merge behaviour described above. A 50 ms input poll closes that race while leaving task scheduling on the coarser cadence — task cards have `interval`s measured in seconds to hours, so a sub-second check serves no purpose. The loop body calls `self._drain_background_events()` and `ipc.poll_interrupt()` / `ipc.poll_inputs()` every tick; the housekeeping block runs only when `loop.time() >= next_housekeeping_at`, which is advanced by `_TASK_POLL_INTERVAL` each firing.
+
+`_scheduled_task_names` still guards a card against being re-enqueued while it sits in the inbox or is currently running, so the faster input tick cannot multi-queue the same wakeup.
+
+#### `merged_user_input_ids` on `turn` events
+
+When the dispatcher folds multiple `user_input` events into one user message (the `merge_before` / `merge_after` paths above), the resulting `turn` event on `context.jsonl` records every contributing id:
+
+```jsonc
+{ "type": "turn",
+  "user_input_id": "<last id — back-compat>",
+  "merged_user_input_ids": ["<id_1>", "<id_2>", ...],
+  "messages": [...], "usage": {...}, "ts": "..." }
+```
+
+`user_input_id` is preserved (it is the id of the final merged input) so pre-merge consumers still work. `merged_user_input_ids` is populated only when more than one input contributed — a single-input turn omits it. Consumers that walk history must honour the merged list, otherwise earlier inputs of a merged turn look "pending" or invisible:
+
+- `butterfly.service.history_service.turn_input_ids / turn_user_content / turn_display_ts` — canonical helpers. `get_pending_inputs` excludes every id in the merged list; `get_log_turns` / `get_token_report` concatenate content and use the earliest timestamp.
+- `butterfly.runtime.bridge.BridgeSession.async_wait_for_reply` — matches a caller's `msg_id` against `merged_user_input_ids` as well as `user_input_id`, so SDK callers (e.g., WeChat) whose original id was not the *final* merged id do not time out.
+- `ui/cli/chat.py._read_matching_turn` — same matching rule for the interactive CLI.
+- `ui/cli/main.py` `butterfly log` — reuses the `history_service` helpers (no local reimplementation); merged turns render with concatenated user content and the earliest input timestamp.
+
 ### `init_session()` invariant — manifest.json is the watcher's discovery signal
 
 `_sessions/<id>/manifest.json` is what `SessionWatcher._scan()` checks to decide whether to spawn a `Session` task for a given session_id. Therefore:

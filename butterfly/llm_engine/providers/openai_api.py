@@ -68,6 +68,7 @@ class OpenAIProvider(Provider):
         base_url: str | None = None,
         max_tokens: int = 8096,
         max_retries: int = 3,
+        default_headers: dict[str, str] | None = None,
     ) -> None:
         try:
             from openai import AsyncOpenAI
@@ -85,6 +86,8 @@ class OpenAIProvider(Provider):
         }
         if resolved_base is not None:
             client_kwargs["base_url"] = resolved_base
+        if default_headers is not None:
+            client_kwargs["default_headers"] = default_headers
 
         self._client = AsyncOpenAI(**client_kwargs)
         self.max_tokens = max_tokens

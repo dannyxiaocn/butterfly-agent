@@ -29,7 +29,9 @@ from butterfly.llm_engine.providers.codex import (
     _parse_retry_after,
     _raise_from_status,
     _raise_stream_error,
+    _read_auth,
     _tool_to_responses_api,
+    _write_auth,
 )
 
 
@@ -625,3 +627,76 @@ async def test_complete_invalid_effort_sends_medium_in_body(monkeypatch):
     )
 
     assert captured_body.get("reasoning", {}).get("effort") == "medium"
+
+
+# ── _read_auth migration (butterfly-owned auth store) ─────────────────────────
+
+
+def test_read_auth_uses_butterfly_path_when_present(monkeypatch, tmp_path):
+    """When ~/.butterfly/auth.json exists, _read_auth() reads it directly."""
+    import json as _json
+    from butterfly.llm_engine.providers import codex as codex_mod
+
+    butterfly_auth = tmp_path / "butterfly_auth.json"
+    data = {"tokens": {"access_token": "butterfly-tok", "refresh_token": "r"}}
+    butterfly_auth.write_text(_json.dumps(data))
+
+    monkeypatch.setattr(codex_mod, "_AUTH_PATH", butterfly_auth)
+    # CLI auth path exists too but should be ignored when butterfly's file is present.
+    cli_auth = tmp_path / "codex_auth.json"
+    cli_auth.write_text(_json.dumps({"tokens": {"access_token": "cli-tok", "refresh_token": "r"}}))
+    monkeypatch.setattr(codex_mod, "_CODEX_CLI_AUTH_PATH", cli_auth)
+
+    result = _read_auth()
+    assert result["tokens"]["access_token"] == "butterfly-tok"
+
+
+def test_read_auth_migrates_from_codex_cli_on_first_use(monkeypatch, tmp_path):
+    """When ~/.butterfly/auth.json is absent but ~/.codex/auth.json exists,
+    _read_auth() migrates the tokens and writes ~/.butterfly/auth.json."""
+    import json as _json
+    from butterfly.llm_engine.providers import codex as codex_mod
+
+    butterfly_auth = tmp_path / "butterfly_auth.json"  # does NOT exist yet
+    cli_auth = tmp_path / "codex_auth.json"
+    cli_data = {"tokens": {"access_token": "cli-tok", "refresh_token": "cli-r"}}
+    cli_auth.write_text(_json.dumps(cli_data))
+
+    monkeypatch.setattr(codex_mod, "_AUTH_PATH", butterfly_auth)
+    monkeypatch.setattr(codex_mod, "_CODEX_CLI_AUTH_PATH", cli_auth)
+
+    result = _read_auth()
+    assert result["tokens"]["access_token"] == "cli-tok"
+    # Migration must have written the butterfly auth file.
+    assert butterfly_auth.exists(), "_read_auth() must write the butterfly auth file on migration"
+    stored = _json.loads(butterfly_auth.read_text())
+    assert stored["tokens"]["access_token"] == "cli-tok"
+
+
+def test_read_auth_raises_when_neither_file_exists(monkeypatch, tmp_path):
+    """When both auth files are absent, _read_auth() raises AuthError."""
+    from butterfly.llm_engine.providers import codex as codex_mod
+    from butterfly.llm_engine.errors import AuthError
+
+    monkeypatch.setattr(codex_mod, "_AUTH_PATH", tmp_path / "nope_butterfly.json")
+    monkeypatch.setattr(codex_mod, "_CODEX_CLI_AUTH_PATH", tmp_path / "nope_codex.json")
+
+    with pytest.raises(AuthError):
+        _read_auth()
+
+
+def test_read_auth_migration_skipped_when_cli_tokens_malformed(monkeypatch, tmp_path):
+    """Malformed ~/.codex/auth.json should not cause a migration; AuthError is raised."""
+    import json as _json
+    from butterfly.llm_engine.providers import codex as codex_mod
+    from butterfly.llm_engine.errors import AuthError
+
+    butterfly_auth = tmp_path / "butterfly_auth.json"
+    cli_auth = tmp_path / "codex_auth.json"
+    cli_auth.write_text("{{ not valid json")
+
+    monkeypatch.setattr(codex_mod, "_AUTH_PATH", butterfly_auth)
+    monkeypatch.setattr(codex_mod, "_CODEX_CLI_AUTH_PATH", cli_auth)
+
+    with pytest.raises(AuthError):
+        _read_auth()

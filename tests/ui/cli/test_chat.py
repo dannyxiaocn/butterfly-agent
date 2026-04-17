@@ -162,3 +162,18 @@ def test_read_matching_turn_returns_text(tmp_path):
         "messages": [{"role": "assistant", "content": "hello world"}],
     }) + "\n")
     assert _read_matching_turn(ctx, mid) == "hello world"
+
+
+def test_read_matching_turn_matches_merged_id(tmp_path):
+    from ui.cli.chat import _read_matching_turn
+    ctx = tmp_path / "ctx.jsonl"
+    first_id = "id-first"
+    second_id = "id-second"
+    ctx.write_text(json.dumps({
+        "type": "turn",
+        "user_input_id": second_id,
+        "merged_user_input_ids": [first_id, second_id],
+        "messages": [{"role": "assistant", "content": "merged reply"}],
+    }) + "\n")
+    assert _read_matching_turn(ctx, first_id) == "merged reply"
+    assert _read_matching_turn(ctx, second_id) == "merged reply"

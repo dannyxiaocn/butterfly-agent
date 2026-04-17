@@ -571,13 +571,12 @@ def _watch_log(args, session_id: str, context_path, since_ts: float) -> int:
 
 def _print_turns(turns: list[dict], inputs_by_id: dict[str, dict]) -> None:
     """Print a list of turns with their associated user inputs."""
+    from butterfly.service.history_service import turn_display_ts, turn_user_content
     for turn in turns:
-        uid = turn.get("user_input_id")
-        user_ev = inputs_by_id.get(uid) if uid else None
-        ts = (user_ev or turn).get("ts", "")[:16].replace("T", " ")
+        ts = turn_display_ts(turn, inputs_by_id)
+        user_text = turn_user_content(turn, inputs_by_id)
 
         # User line
-        user_text = user_ev.get("content", "") if user_ev else ""
         if user_text:
             print(f"  USER  {ts}  {user_text}")
 

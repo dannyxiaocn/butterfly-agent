@@ -72,7 +72,7 @@ def test_kimi_openai_base_url_is_hardcoded(monkeypatch):
     monkeypatch.setenv("KIMI_OPENAI_BASE_URL", "https://ignored.kimi.com/v1/")
     captured: dict[str, Any] = {}
 
-    def _fake_init(self, *, api_key=None, base_url=None, max_tokens=8096, max_retries=3):
+    def _fake_init(self, *, api_key=None, base_url=None, max_tokens=8096, max_retries=3, default_headers=None):
         captured["api_key"] = api_key
         captured["base_url"] = base_url
 
@@ -105,7 +105,7 @@ def test_kimi_openai_primary_env_key(monkeypatch):
     monkeypatch.delenv("KIMI_API_KEY", raising=False)
     captured: dict[str, Any] = {}
 
-    def _fake_init(self, *, api_key=None, base_url=None, max_tokens=8096, max_retries=3):
+    def _fake_init(self, *, api_key=None, base_url=None, max_tokens=8096, max_retries=3, default_headers=None):
         captured["api_key"] = api_key
 
     monkeypatch.setattr(OpenAIProvider, "__init__", _fake_init)
@@ -126,7 +126,7 @@ def test_kimi_openai_explicit_key_overrides_env(monkeypatch):
     monkeypatch.setenv("KIMI_FOR_CODING_API_KEY", "env-key")
     captured: dict[str, Any] = {}
 
-    def _fake_init(self, *, api_key=None, base_url=None, max_tokens=8096, max_retries=3):
+    def _fake_init(self, *, api_key=None, base_url=None, max_tokens=8096, max_retries=3, default_headers=None):
         captured["api_key"] = api_key
 
     monkeypatch.setattr(OpenAIProvider, "__init__", _fake_init)
@@ -405,3 +405,50 @@ def test_back_compat_alias_is_anthropic_variant():
     )
 
     assert KimiForCodingProvider is KimiAnthropicProvider
+
+
+# ── User-Agent header (required by Kimi For Coding access control) ────────────
+
+
+def test_kimi_openai_passes_user_agent_header(monkeypatch):
+    """Both Kimi providers must pass User-Agent: claude-code/0.1.0 to the SDK."""
+    from butterfly.llm_engine.providers.kimi import (
+        _KIMI_USER_AGENT,
+        _KIMI_DEFAULT_HEADERS,
+        KimiOpenAIProvider,
+    )
+    from butterfly.llm_engine.providers.openai_api import OpenAIProvider
+
+    captured: dict = {}
+
+    def _fake_init(self, *, api_key=None, base_url=None, max_tokens=8096,
+                   max_retries=3, default_headers=None):
+        captured["default_headers"] = default_headers
+
+    monkeypatch.setattr(OpenAIProvider, "__init__", _fake_init)
+    KimiOpenAIProvider(api_key="k")
+
+    assert captured["default_headers"] == _KIMI_DEFAULT_HEADERS
+    assert captured["default_headers"]["User-Agent"] == _KIMI_USER_AGENT
+    assert _KIMI_USER_AGENT == "claude-code/0.1.0"
+
+
+def test_kimi_anthropic_passes_user_agent_header(monkeypatch):
+    from butterfly.llm_engine.providers.kimi import (
+        _KIMI_USER_AGENT,
+        _KIMI_DEFAULT_HEADERS,
+        KimiAnthropicProvider,
+    )
+    from butterfly.llm_engine.providers.anthropic import AnthropicProvider
+
+    captured: dict = {}
+
+    def _fake_init(self, *, api_key=None, max_tokens=8096, base_url=None,
+                   default_headers=None):
+        captured["default_headers"] = default_headers
+
+    monkeypatch.setattr(AnthropicProvider, "__init__", _fake_init)
+    KimiAnthropicProvider(api_key="k")
+
+    assert captured["default_headers"] == _KIMI_DEFAULT_HEADERS
+    assert captured["default_headers"]["User-Agent"] == _KIMI_USER_AGENT

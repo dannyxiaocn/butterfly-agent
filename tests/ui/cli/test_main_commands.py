@@ -554,6 +554,34 @@ def test_cmd_log_basic(tmp_path, capsys):
     assert "↓5" in out
 
 
+def test_cmd_log_shows_merged_user_inputs(tmp_path, capsys):
+    import argparse
+    events = [
+        {"type": "user_input", "content": "first", "id": "uid-1", "ts": "2026-03-25T10:00:00"},
+        {"type": "user_input", "content": "second", "id": "uid-2", "ts": "2026-03-25T10:00:01"},
+        {"type": "turn", "triggered_by": "user",
+         "messages": [
+             {"role": "assistant", "content": "merged reply", "ts": "2026-03-25T10:00:02"},
+         ],
+         "user_input_id": "uid-2",
+         "merged_user_input_ids": ["uid-1", "uid-2"],
+         "ts": "2026-03-25T10:00:02"},
+    ]
+    sessions, system = _seed_context(tmp_path, "merged-log-session", events)
+    args = argparse.Namespace(
+        session_id="merged-log-session",
+        num_turns=5,
+        sessions_base=sessions,
+        system_base=system,
+    )
+    code = cmd_log(args)
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "first" in out
+    assert "second" in out
+    assert "merged reply" in out
+
+
 def test_cmd_log_no_history(tmp_path, capsys):
     import argparse
     _, system = _seed_session(tmp_path, "no-log-session")

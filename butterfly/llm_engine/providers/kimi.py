@@ -25,6 +25,14 @@ Pick by the shape of the usage fields you care about:
   is enabled server-side but ``cache_control`` is not honored by this
   surface, so we leave it off.
 
+Kimi For Coding requires a ``User-Agent`` header that identifies the client
+as an authorized coding agent (kimi-cli, Claude Code, Roo Code, etc.). Both
+providers set ``User-Agent: claude-code/0.1.0`` — matching the value used by
+openclaw's kimi-coding extension — so that Kimi's access control accepts the
+request. Without this header the API returns a 403 ``access_terminated_error``
+with the message "Kimi For Coding is currently only available for Coding
+Agents".
+
 Reference: https://www.kimi.com/code/docs/en/more/third-party-agents.html
 """
 from __future__ import annotations
@@ -51,6 +59,13 @@ _KIMI_OPENAI_BASE_URL = "https://api.kimi.com/coding/v1/"
 # Historical alias — some external code and tests still import
 # ``_KIMI_BASE_URL`` by name (the Anthropic-surface constant pre-v2.0.10).
 _KIMI_BASE_URL = _KIMI_ANTHROPIC_BASE_URL
+
+# User-Agent header required by Kimi For Coding to identify the client as an
+# authorized coding agent. Matches openclaw's kimi-coding extension value.
+_KIMI_USER_AGENT = "claude-code/0.1.0"
+
+# Convenience dict injected as ``default_headers`` in both providers.
+_KIMI_DEFAULT_HEADERS: dict[str, str] = {"User-Agent": _KIMI_USER_AGENT}
 
 
 def _resolve_kimi_api_key(explicit: str | None, *, provider_label: str) -> str:
@@ -99,6 +114,7 @@ class KimiAnthropicProvider(AnthropicProvider):
             api_key=resolved_key,
             max_tokens=max_tokens,
             base_url=_KIMI_ANTHROPIC_BASE_URL,
+            default_headers=_KIMI_DEFAULT_HEADERS,
         )
 
 
@@ -135,6 +151,7 @@ class KimiOpenAIProvider(OpenAIProvider):
             base_url=_KIMI_OPENAI_BASE_URL,
             max_tokens=max_tokens,
             max_retries=max_retries,
+            default_headers=_KIMI_DEFAULT_HEADERS,
         )
 
     def _extra_body_for_thinking(
@@ -199,4 +216,6 @@ __all__ = [
     "_KIMI_ANTHROPIC_BASE_URL",
     "_KIMI_OPENAI_BASE_URL",
     "_KIMI_BASE_URL",
+    "_KIMI_USER_AGENT",
+    "_KIMI_DEFAULT_HEADERS",
 ]

@@ -24,7 +24,9 @@ import pytest
 
 from butterfly.core.agent import Agent
 from butterfly.core.provider import Provider
+from butterfly.core.tool import tool
 from butterfly.core.types import Message, TokenUsage, ToolCall
+from butterfly.session_engine.panel import STATUS_COMPLETED, PanelEntry
 from butterfly.session_engine.pending_inputs import (
     ChatItem,
     TaskItem,
@@ -32,6 +34,7 @@ from butterfly.session_engine.pending_inputs import (
     merge_chat_content,
 )
 from butterfly.session_engine.session import Session
+from butterfly.tool_engine.background import BackgroundEvent
 
 
 # ── Test helpers ─────────────────────────────────────────────────────────────
@@ -474,6 +477,61 @@ async def test_daemon_loop_routes_panel_user_input_through_queue(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_daemon_interrupt_poll_is_fast_enough_to_merge_human_followup(tmp_path):
+    """Regression: daemon-side polling must be tight enough that a human's
+    quick second send lands while the first run is still in flight.
+
+    With the old 0.5 s loop, both user_input events could sit on disk until the
+    same poll cycle, so the first run never became cancellable and the daemon
+    produced two separate turns. A sub-100 ms input poll is enough for the
+    first message to start, the second to cancel it, and the merged run to fire.
+    """
+    from butterfly.runtime.bridge import BridgeSession
+    from butterfly.runtime.ipc import FileIPC
+
+    observed: list[str] = []
+    slow = SlowProvider(delay=5.0, observed_user_messages=observed)
+    agent = Agent(provider=slow)
+    session = make_session(tmp_path, agent, session_id="daemon-fast-interrupt")
+    ipc = FileIPC(session.system_dir)
+    stop_event = asyncio.Event()
+
+    daemon_task = asyncio.create_task(session.run_daemon_loop(ipc, stop_event=stop_event))
+    bridge = BridgeSession(session.system_dir)
+    try:
+        await asyncio.sleep(0.02)
+        bridge.send_message("first", mode="interrupt")
+        # Slightly above the new 50 ms poll and far below the previous 500 ms poll.
+        await asyncio.sleep(0.08)
+        bridge.send_message("second", mode="interrupt")
+        agent._provider = RecordingProvider([("merged-ok", [])], observed_user_messages=observed)
+
+        for _ in range(80):
+            turns = [
+                e for e in read_jsonl(session.system_dir / "context.jsonl")
+                if e.get("type") == "turn"
+            ]
+            if turns:
+                break
+            await asyncio.sleep(0.05)
+        else:
+            pytest.fail("expected merged turn to be written")
+    finally:
+        stop_event.set()
+        await daemon_task
+
+    turns = [
+        e for e in read_jsonl(session.system_dir / "context.jsonl")
+        if e.get("type") == "turn"
+    ]
+    assert len(turns) == 1
+    assert turns[0]["messages"][0]["content"] == "first\n\nsecond"
+    assert len(turns[0]["merged_user_input_ids"]) == 2
+    assert turns[0]["merged_user_input_ids"][-1] == turns[0]["user_input_id"]
+    assert observed == ["first", "first\n\nsecond"]
+
+
+@pytest.mark.asyncio
 async def test_merged_user_input_ids_recorded_on_turn(tmp_path):
     """When a wait-merged turn fires, the resulting turn event records
     every contributing msg_id in ``merged_user_input_ids``."""
@@ -671,3 +729,160 @@ async def test_cancelled_tool_result_marked_is_error(tmp_path):
     assert blocks[0]["tool_use_id"] == "tc-x"
     assert blocks[0]["is_error"] is True
     assert "cancel" in blocks[0]["content"].lower()
+
+
+# ── Background-tool notifications interrupt the daemon loop ───────────────────
+
+@pytest.mark.asyncio
+async def test_daemon_background_event_interrupts_uncommitted_run(tmp_path):
+    """A background-tool completion that lands before the LLM responds
+    cancels the in-flight run and is merged into the restarted turn."""
+    from butterfly.runtime.bridge import BridgeSession
+    from butterfly.runtime.ipc import FileIPC
+
+    slow = SlowProvider(delay=2.0)
+    agent = Agent(provider=slow)
+    session = make_session(tmp_path, agent, session_id="daemon-bg-uncommitted")
+    ipc = FileIPC(session.system_dir)
+    stop_event = asyncio.Event()
+
+    daemon_task = asyncio.create_task(session.run_daemon_loop(ipc, stop_event=stop_event))
+    bridge = BridgeSession(session.system_dir)
+    try:
+        await asyncio.sleep(0.05)
+        bridge.send_message("hello", mode="interrupt")
+        await asyncio.sleep(0.2)
+
+        # Inject a fake background completed event
+        now = __import__("time").time()
+        entry = PanelEntry(
+            tid="bg_123",
+            type="tool",
+            tool_name="bash",
+            input={"command": "echo hi"},
+            status=STATUS_COMPLETED,
+            created_at=now,
+            started_at=now,
+            finished_at=now,
+            exit_code=0,
+            output_bytes=10,
+        )
+        session._bg_manager._emit_event(
+            BackgroundEvent(tid="bg_123", kind="completed", entry=entry)
+        )
+
+        for _ in range(80):
+            turns = [
+                e for e in read_jsonl(session.system_dir / "context.jsonl")
+                if e.get("type") == "turn"
+            ]
+            if turns:
+                break
+            await asyncio.sleep(0.05)
+        else:
+            pytest.fail("expected merged turn to be written")
+    finally:
+        stop_event.set()
+        await daemon_task
+
+    turns = [
+        e for e in read_jsonl(session.system_dir / "context.jsonl")
+        if e.get("type") == "turn"
+    ]
+    assert len(turns) == 1
+    assert "hello" in str(turns[0]["messages"])
+    assert "Background task bg_123" in str(turns[0]["messages"])
+
+
+@pytest.mark.asyncio
+async def test_daemon_background_event_interrupts_committed_run(tmp_path):
+    """A background-tool completion that lands after the LLM has already
+    committed a tool_use turn causes a partial save + fresh response turn."""
+    from butterfly.runtime.bridge import BridgeSession
+    from butterfly.runtime.ipc import FileIPC
+
+    @tool(description="slow tool")
+    async def slow_tool() -> str:
+        await asyncio.sleep(10.0)
+        return "done"
+
+    class CommitThenStallProvider(Provider):
+        async def complete(
+            self,
+            messages,
+            tools,
+            system_prompt,
+            model,
+            *,
+            on_text_chunk=None,
+            cache_system_prefix="",
+            cache_last_human_turn=False,
+            thinking=False,
+            thinking_budget=8000,
+            thinking_effort="high",
+            on_thinking_start=None,
+            on_thinking_end=None,
+        ):
+            self.calls = getattr(self, "calls", 0) + 1
+            if self.calls == 1:
+                return ("", [ToolCall(id="tc1", name="slow_tool", input={})], TokenUsage(input_tokens=1, output_tokens=1))
+            await asyncio.sleep(1.0)
+            return (f"response-{self.calls}", [], TokenUsage(input_tokens=1, output_tokens=1))
+
+    agent = Agent(provider=CommitThenStallProvider(), tools=[slow_tool])
+    session = make_session(tmp_path, agent, session_id="daemon-bg-committed")
+    ipc = FileIPC(session.system_dir)
+    stop_event = asyncio.Event()
+
+    daemon_task = asyncio.create_task(session.run_daemon_loop(ipc, stop_event=stop_event))
+    bridge = BridgeSession(session.system_dir)
+    try:
+        await asyncio.sleep(0.05)
+        bridge.send_message("hello", mode="interrupt")
+
+        for _ in range(50):
+            await asyncio.sleep(0.05)
+            if getattr(agent.provider, "calls", 0) >= 1:
+                break
+
+        now = __import__("time").time()
+        entry = PanelEntry(
+            tid="bg_123",
+            type="tool",
+            tool_name="bash",
+            input={"command": "echo hi"},
+            status=STATUS_COMPLETED,
+            created_at=now,
+            started_at=now,
+            finished_at=now,
+            exit_code=0,
+            output_bytes=10,
+        )
+        session._bg_manager._emit_event(
+            BackgroundEvent(tid="bg_123", kind="completed", entry=entry)
+        )
+
+        for _ in range(200):
+            await asyncio.sleep(0.05)
+            ctx = read_jsonl(session.system_dir / "context.jsonl")
+            turns = [e for e in ctx if e.get("type") == "turn"]
+            non_interrupted = [t for t in turns if not t.get("interrupted")]
+            if len(non_interrupted) >= 1:
+                break
+        else:
+            pytest.fail("expected second non-interrupted turn to be written")
+    finally:
+        stop_event.set()
+        await daemon_task
+
+    turns = [
+        e for e in read_jsonl(session.system_dir / "context.jsonl")
+        if e.get("type") == "turn"
+    ]
+    assert len(turns) == 2
+    assert turns[0].get("interrupted") is True
+    assert turns[1].get("interrupted") is not True
+    assert any(
+        m.get("role") == "assistant" and "response-2" in str(m.get("content", ""))
+        for m in turns[1].get("messages", [])
+    )

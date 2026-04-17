@@ -64,7 +64,7 @@ def _send_message(ctx_path: Path, content: str, *, caller: str = "human") -> str
 
 
 def _read_matching_turn(ctx_path: Path, msg_id: str) -> str | None:
-    """Scan context.jsonl for a turn with user_input_id == msg_id.
+    """Scan context.jsonl for a turn whose user_input_id or merged_user_input_ids contains msg_id.
 
     Returns the assistant text if found, None otherwise.
     Returns empty string if the turn exists but has no text.
@@ -83,7 +83,8 @@ def _read_matching_turn(ctx_path: Path, msg_id: str) -> str | None:
                     continue
                 if event.get("type") != "turn":
                     continue
-                if event.get("user_input_id") != msg_id:
+                merged_ids = event.get("merged_user_input_ids") or []
+                if event.get("user_input_id") != msg_id and msg_id not in merged_ids:
                     continue
                 for msg in reversed(event.get("messages", [])):
                     if msg.get("role") == "assistant":
