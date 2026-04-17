@@ -57,10 +57,29 @@ def get_hud(session_id: str, sessions_dir: Path, system_sessions_dir: Path) -> d
                     continue
         except Exception:
             pass
+    # Running sub_agent count, derived from on-disk panel entries so the
+    # HUD can restore the badge after a page refresh — the SSE stream
+    # only re-emits ``sub_agent_count`` when a child changes state.
+    # (PR #28 review Gap #7.)
+    sub_agents_running = 0
+    if session_dir.exists():
+        try:
+            from butterfly.session_engine.panel import (
+                list_entries as _list_entries,
+                TYPE_SUB_AGENT as _TYPE_SUB_AGENT,
+            )
+            panel_dir = session_dir / 'core' / 'panel'
+            sub_agents_running = sum(
+                1 for e in _list_entries(panel_dir)
+                if e.type == _TYPE_SUB_AGENT and not e.is_terminal()
+            )
+        except Exception:
+            sub_agents_running = 0
     return {
         'cwd': git_root or str(project_root),
         'context_bytes': ipc.context_size(),
         'model': params.get('model') or None,
         'git': {'files': git_files, 'added': git_added, 'deleted': git_deleted},
         'usage': latest_usage,
+        'sub_agents_running': sub_agents_running,
     }

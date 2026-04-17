@@ -12,6 +12,12 @@ export interface Session {
   persistent: boolean;
   has_tasks: boolean;
   params?: Params;
+  // Sub-agent hierarchy: when set, this session was spawned by another and
+  // the sidebar renders it indented under its parent.
+  parent_session_id?: string | null;
+  // Sub-agent permission mode (explorer / executor) — surfaced in sidebar
+  // chip and panel cards.
+  mode?: string | null;
 }
 
 export interface Params {
@@ -115,6 +121,17 @@ export interface DisplayEvent {
   block_id?: string;
   text?: string;
   duration_ms?: number;
+  // Background-spawn tagging on tool_done so the UI keeps the cell yellow
+  // until tool_finalize arrives (sub_agent + bash background).
+  is_background?: boolean;
+  tid?: string;
+  // tool_progress: latest one-line summary (e.g. "running tool: bash").
+  summary?: string;
+  // tool_finalize: terminal kind from BackgroundEvent.
+  kind?: string;
+  exit_code?: number | null;
+  // sub_agent_count: HUD badge tally.
+  running?: number;
 }
 
 export type SessionTone = 'running' | 'napping' | 'persistent' | 'stopped' | 'idle' | 'meta';

@@ -134,3 +134,46 @@ Each task card is a `.json` file in `core/tasks/`:
 - Every session gets its own `.venv` under `sessions/<id>/.venv`
 - `reload_capabilities` tool is always injected at runtime
 - `system_notice` events are passed through IPC and rendered in both web UI and SSE stream
+
+## v2.0.13 — Sub-agent support
+
+- `init_session()` grew four optional kwargs: `parent_session_id`,
+  `mode` (`"explorer"` | `"executor"`), `initial_message_id`, and
+  `sub_agent_depth`. All four land in `manifest.json` only when set, so
+  top-level sessions keep the old manifest shape. Invalid `mode` raises
+  `ValueError`; missing `toolhub/sub_agent/<mode>.md` raises
+  `FileNotFoundError` rather than silently skip (cubic review, PR #28).
+- `Session.__init__` reads those manifest fields, builds
+  `Guardian(playground_dir)` for `mode=="explorer"`, and threads the
+  guardian through `ToolLoader` into Write / Edit / Bash.
+- `Session._load_session_capabilities` concatenates `core/mode.md` after
+  `core/system.md` into the cached static prefix consumed by
+  `Agent._build_system_parts`.
+- `Session.run_daemon_loop` seeds `input_offset` via
+  `_initial_input_offset()` — the byte position right after the last
+  committed `turn` in `context.jsonl`, or 0 on a fresh session. This
+  ensures `init_session(initial_message=...)` user_inputs are picked up
+  instead of skipped (PR #28 review Bug #1).
+- Session emits three new event kinds into `events.jsonl`:
+  `tool_progress`, `tool_finalize`, `sub_agent_count`. They are forwarded
+  through `FileIPC._runtime_event_to_display` so the SSE stream delivers
+  them to the web UI unchanged.
+- `Session._make_tool_done_callback` tags the placeholder `tool_done`
+  emitted for background-spawn calls with `is_background=true` + `tid`;
+  the UI keeps the corresponding chat cell yellow until the
+  `tool_finalize` event arrives.
+- `Session._emit_sub_agent_count` (+ hook from `_drain_background_events`)
+  re-broadcasts the running `TYPE_SUB_AGENT` panel tally so the HUD
+  badge stays accurate.
+- `Session._bg_manager.register_runner("sub_agent", SubAgentRunner(...))`
+  is wired in `__init__`; agent.py's `run_in_background=true` routing
+  dispatches the sub_agent call through the same lifecycle plumbing as
+  the bash background flow.
+- `Session.__init__` now also passes `guardian=self._guardian` to
+  `BackgroundTaskManager` so background-mode bash inherits the same
+  boundary as inline bash (PR #28 round 2 Bug #5).
+- `init_session` adds a parent-playground hand-off for sub-agent
+  children: when `parent_session_id` is set, it creates the symlink
+  `sessions/<child>/playground/parent → sessions/<parent>/playground/`.
+  Reads work; writes through the link resolve outside the child's
+  Guardian root and are denied (PR #28 round 2 Gap #6).

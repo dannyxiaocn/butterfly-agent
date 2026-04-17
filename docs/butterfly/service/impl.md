@@ -31,3 +31,23 @@ CLI and Web should only call these functions, never access IPC/status files dire
 ## `models_service` — catalog
 
 `get_models_catalog()` returns the data consumed by `PUT /api/sessions/{id}/config` / the form editor dropdown. Each provider entry carries `supports_thinking`, `thinking_style` (`budget`/`effort`/`extra_body`/`None`), `supported_efforts` (provider-specific effort vocabulary — `xhigh` is Codex-only), `default_model`, and a curated `models` list. The catalog is hand-curated: the point is to exactly mirror what the CLI registry exposes, not to scrape provider APIs at request time.
+
+## v2.0.13 — Sub-agent surface
+
+- `sessions_service.get_session()` / `list_sessions()` now return two new
+  optional fields read from `manifest.json`: `parent_session_id` (for the
+  sidebar's parent → child indent grouping) and `mode` (for the mode chip
+  rendered next to the session name). Fields are `None` when the manifest
+  doesn't set them (top-level sessions), preserving backwards compat for
+  any client that ignores unknown keys.
+- `ui/web/app.py` adds `GET /api/sessions/{id}/events_tail?n=N` which
+  returns the last ``n`` events from the session's `events.jsonl` as a
+  JSON list. Used by the parent's panel card to render the last 5
+  events of the sub-agent child on expand; clamped to `1 ≤ n ≤ 100`.
+  Returns `[]` if the session has no events yet (rather than 404).
+- `hud_service.get_hud()` payload now includes ``sub_agents_running`` —
+  derived from on-disk `core/panel/*.json` entries with
+  `type == TYPE_SUB_AGENT` and a non-terminal status. Lets the chat HUD
+  restore the badge after a page refresh, since the SSE stream only
+  re-broadcasts ``sub_agent_count`` on state change (PR #28 round 2
+  Gap #7).

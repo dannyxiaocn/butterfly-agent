@@ -28,6 +28,8 @@ _REPO_ROOT = Path(__file__).parent.parent.parent
 _DEFAULT_SESSIONS_BASE = _REPO_ROOT / "sessions"
 _DEFAULT_SYSTEM_SESSIONS_BASE = _REPO_ROOT / "_sessions"
 _DEFAULT_ENTITY_BASE = _REPO_ROOT / "entity"
+_TOOLHUB_DIR = _REPO_ROOT / "toolhub"
+_VALID_MODES = frozenset({"explorer", "executor"})
 
 
 def _write_if_absent(path: Path, content: str) -> None:
@@ -81,6 +83,10 @@ def init_session(
     system_sessions_base: Path | None = None,
     entity_base: Path | None = None,
     initial_message: str | None = None,
+    initial_message_id: str | None = None,
+    parent_session_id: str | None = None,
+    mode: str | None = None,
+    sub_agent_depth: int | None = None,
 ) -> str:
     """Create a new session on disk from an entity, ready for the server to pick up.
 
@@ -93,7 +99,27 @@ def init_session(
         system_sessions_base: Root of _sessions/ directory.
         entity_base:         Root of entity/ directory.
         initial_message:     Optional first user message to write to context.jsonl.
+        initial_message_id:  Optional UUID for the initial message — lets the
+                              caller correlate the eventual reply (sub_agent
+                              uses this to call BridgeSession.async_wait_for_reply).
+        parent_session_id:   Optional parent session — recorded in manifest so
+                              sidebar/services can render the session hierarchy.
+        mode:                Optional sub-agent mode: "explorer" | "executor".
+                              When set, ``toolhub/sub_agent/<mode>.md`` is
+                              copied to the child's ``core/mode.md`` and the
+                              mode name is recorded in the manifest. The mode
+                              prompt is concatenated into ``system_prompt`` by
+                              ``Session._load_session_capabilities`` (which
+                              sits in the static prefix later rendered by
+                              ``Agent._build_system_parts``).
+                              Raises ``FileNotFoundError`` if the matching
+                              ``toolhub/sub_agent/<mode>.md`` asset is absent —
+                              recording a mode in the manifest without its
+                              prompt on disk would leave the child in an
+                              inconsistent state (raised in PR #28 review).
     """
+    if mode is not None and mode not in _VALID_MODES:
+        raise ValueError(f"init_session: invalid mode {mode!r}; expected one of {sorted(_VALID_MODES)}")
     s_base = sessions_base or _DEFAULT_SESSIONS_BASE
     sys_base = system_sessions_base or _DEFAULT_SYSTEM_SESSIONS_BASE
     ent_base = entity_base or _DEFAULT_ENTITY_BASE
@@ -255,15 +281,60 @@ def init_session(
 
     ensure_session_status(system_dir)
 
+    # Parent playground hand-off (sub-agent only). When a child is spawned
+    # by sub_agent, we surface the parent's playground inside the child's
+    # own playground as a symlink — ``playground/parent/`` → parent's
+    # playground. The child can READ those files freely (Guardian only
+    # blocks writes); explorer-mode writes resolve through the symlink to
+    # the parent's tree, which is OUTSIDE the child's Guardian root, so
+    # they are denied. Reuses the existing playground bound — no extra
+    # contract needed. (PR #28 review Gap #6.)
+    if parent_session_id is not None:
+        parent_playground = s_base / parent_session_id / "playground"
+        if parent_playground.is_dir():
+            link_target = session_dir / "playground" / "parent"
+            if not link_target.exists() and not link_target.is_symlink():
+                try:
+                    link_target.symlink_to(parent_playground.resolve(), target_is_directory=True)
+                except OSError:
+                    # Symlink creation may fail on exotic filesystems; the
+                    # child will still work, just without the convenience link.
+                    pass
+
+    # Mode prompt — copy toolhub/sub_agent/<mode>.md into core/mode.md.
+    # Session._load_session_capabilities folds it into the static
+    # (cacheable) system prefix consumed by Agent._build_system_parts.
+    #
+    # We hard-fail when the prompt file is missing: recording ``mode`` in
+    # the manifest without its corresponding prompt would activate the
+    # Guardian boundary (in explorer mode) and the sidebar chip without
+    # the agent-visible rules that make those mechanisms safe. Cubic
+    # review (PR #28) flagged the silent-skip path as a consistency hole.
+    if mode is not None:
+        mode_src = _TOOLHUB_DIR / "sub_agent" / f"{mode}.md"
+        if not mode_src.exists():
+            raise FileNotFoundError(
+                f"init_session: mode={mode!r} requires {mode_src} to exist; "
+                "the child would otherwise end up in an inconsistent state "
+                "(manifest says mode=X but no prompt was injected)."
+            )
+        _write_if_absent(core_dir / "mode.md", mode_src.read_text(encoding="utf-8"))
+
     # Publish manifest LAST (see NOTE above about watcher race):
     # by the time manifest.json is visible to the watcher, sessions/<id>/core/
     # has a fully-populated config.yaml, so Session.__init__'s ensure_config
     # is a no-op instead of clobbering model/provider with DEFAULT_CONFIG.
-    manifest = {
+    manifest: dict = {
         "session_id": session_id,
         "entity": entity_name,
         "created_at": datetime.now().isoformat(),
     }
+    if parent_session_id is not None:
+        manifest["parent_session_id"] = parent_session_id
+    if mode is not None:
+        manifest["mode"] = mode
+    if sub_agent_depth is not None:
+        manifest["sub_agent_depth"] = int(sub_agent_depth)
     (system_dir / "manifest.json").write_text(
         json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
     )
@@ -274,7 +345,7 @@ def init_session(
         event = {
             "type": "user_input",
             "content": initial_message,
-            "id": str(uuid.uuid4()),
+            "id": initial_message_id or str(uuid.uuid4()),
             "ts": datetime.now().isoformat(),
         }
         with context_path.open("a", encoding="utf-8") as f:

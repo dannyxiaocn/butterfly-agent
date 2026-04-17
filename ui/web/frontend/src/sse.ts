@@ -72,7 +72,9 @@ export class SSEConnection {
       'tool_done', 'thinking_start', 'thinking_done',
       'loop_start', 'loop_end',
       'task_wakeup', 'task_finished', 'status', 'error', 'message',
-      'system_notice'
+      'system_notice',
+      // Sub-agent / background-tool UI events
+      'tool_progress', 'tool_finalize', 'sub_agent_count', 'panel_update',
     ];
 
     for (const type of eventTypes) {

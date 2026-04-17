@@ -62,3 +62,22 @@ Client-side handle for frontends:
 - `last_running_event_offset()`: returns byte offset of last `model_status:running` for SSE reconnect
 - Thinking blocks use per-block IDs (`thinking:{ts}:{idx}`) for multi-block dedup
 - Stopped sessions can auto-expire back to active after several hours
+
+## v2.0.13 — Sub-agent / background UI events
+
+`_runtime_event_to_display` (`butterfly/runtime/ipc.py`) forwards four
+additional event types end-to-end (written by Session, consumed by the
+web SSE stream):
+
+| Type | Emitter | Carries | UI consumer |
+|---|---|---|---|
+| `tool_progress` | `Session._drain_background_events` on kind=`progress` | `tid`, `name`, `summary` | Chat tool-cell refreshes its "running…" meta line |
+| `tool_finalize` | `Session._drain_background_events` on terminal kinds | `tid`, `name`, `kind`, `duration_ms`, `exit_code` | Chat tool-cell flips yellow→done (✓ for completed, ⚠ otherwise) |
+| `sub_agent_count` | `Session._emit_sub_agent_count` | `running` (non-terminal `TYPE_SUB_AGENT` entries) | HUD "⚙ N sub-agents running" badge |
+| `panel_update` | Existing, now also consumed by frontend | `tid`, `kind`, `status` | Panel tab observers |
+
+Pair invariant: every background-spawn placeholder `tool_done` carries
+`is_background=true` + `tid`, and exactly one matching `tool_finalize`
+event is emitted per tid from the runner's completion. Losing one
+breaks the chat cell's yellow-until-done transition, so the two are
+co-tested in `tests/butterfly/tool_engine/test_pr28_review_bugs.py`.

@@ -10,14 +10,20 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from butterfly.core.guardian import Guardian
 from butterfly.tool_engine.executor.base import BaseExecutor
 
 
 class WriteExecutor(BaseExecutor):
     """Executor for the built-in write tool."""
 
-    def __init__(self, workdir: str | None = None) -> None:
+    def __init__(
+        self,
+        workdir: str | None = None,
+        guardian: Guardian | None = None,
+    ) -> None:
         self._workdir = workdir
+        self._guardian = guardian
 
     def _resolve(self, path: str) -> Path:
         p = Path(path)
@@ -31,6 +37,11 @@ class WriteExecutor(BaseExecutor):
         content: str = kwargs["content"]
 
         resolved = self._resolve(path_arg)
+        if self._guardian is not None:
+            try:
+                self._guardian.check_write(resolved)
+            except PermissionError as exc:
+                return f"Error: Failed to write {path_arg}: {exc}"
         data = content.encode("utf-8")
         tmp_path: str | None = None
         try:

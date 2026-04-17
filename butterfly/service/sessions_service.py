@@ -71,6 +71,11 @@ def get_session(session_id: str, sessions_dir: Path, system_sessions_dir: Path) 
         "tasks_updated_at": tasks_mtime,
         "params": params,
         "alive": pid_alive and status != "stopped",
+        # Sub-agent fields (populated by init_session when applicable; absent
+        # for top-level sessions). Surfaced so the sidebar can render parent →
+        # child indentation and the panel can show the mode tag.
+        "parent_session_id": manifest.get("parent_session_id"),
+        "mode": manifest.get("mode"),
     }
 
 

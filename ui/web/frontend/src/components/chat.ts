@@ -33,6 +33,8 @@ export function createChat(): HTMLElement {
       <span class="hud-item hud-context"><span class="hud-ctx-text">…</span></span>
       <span class="hud-sep hud-tool-sep hidden">·</span>
       <span class="hud-item hud-tool hidden"><span class="hud-tool-text"></span></span>
+      <span class="hud-sep hud-subagent-sep hidden">·</span>
+      <span class="hud-item hud-subagent hidden" title="Sub-agents currently running"><span class="hud-subagent-text"></span></span>
       <span class="hud-sep hud-tokens-sep">·</span>
       <span class="hud-item hud-tokens"><span class="hud-tokens-text">…</span></span>
     </div>
@@ -61,6 +63,12 @@ export function createChat(): HTMLElement {
   // Also held per msg-tool DOM node for the running/finished state transition.
   const runningTools = new Map<string, { el: HTMLElement | null; startTs: number }>();
   let latestToolKey: string | null = null;
+  // Background tools (sub_agent + bash bg) have a two-phase lifecycle: the
+  // immediate tool_done is just a placeholder (cell stays yellow), and the
+  // matching tool_finalize event arrives later when the actual work ends.
+  // We map tid → cell so the finalize handler can locate the right row even
+  // when many bg tools are running concurrently.
+  const backgroundCells = new Map<string, { el: HTMLElement; name: string; startTs: number }>();
 
   // Thinking cells: map block_id → running DOM element. On thinking_start we
   // insert a placeholder "💭 Thinking…" cell; on thinking_done we flip it to
@@ -106,7 +114,9 @@ export function createChat(): HTMLElement {
     runningTools.clear();
     latestToolKey = null;
     runningThinking.clear();
+    backgroundCells.clear();
     updateHudTool(null);
+    updateHudSubAgents(0);
     updateHudDot('idle');
   }
 
@@ -291,6 +301,19 @@ export function createChat(): HTMLElement {
         const target = toolEls
           .reverse()
           .find(n => n.dataset.toolName === name && !n.classList.contains('done'));
+        // Background-spawn placeholder: the cell must stay yellow until the
+        // matching tool_finalize event arrives. Tag it with the tid + parked
+        // start timestamp so finalize can locate and resolve it.
+        if (event.is_background && event.tid && target) {
+          target.dataset.bgTid = event.tid;
+          backgroundCells.set(event.tid, { el: target, name, startTs: started });
+          const summary = target.querySelector('.tool-status-summary') as HTMLElement | null;
+          if (summary) {
+            summary.innerHTML = `<span class="tool-status-icon">▶</span><span class="tool-status-name">${escapeHtml(name)}</span><span class="tool-status-meta">running…</span>`;
+          }
+          // Don't drop runningTools entry — the HUD ▶ name pill should stay.
+          break;
+        }
         if (target) {
           target.classList.add('done');
           const durSec = (durationMs / 1000).toFixed(1) + 's';
@@ -304,6 +327,51 @@ export function createChat(): HTMLElement {
         updateHudTool(latestToolKey);
         // Intentionally NOT appending a separate msg-status line — the running
         // pill transitions to done in place. Memory note: keeps the log quiet.
+        break;
+      }
+
+      case 'tool_progress': {
+        // Refresh the in-place "▶ name · running…" pill with the latest
+        // one-line summary from the background runner.
+        if (!event.tid) break;
+        const tracked = backgroundCells.get(event.tid);
+        if (!tracked) break;
+        const summaryEl = tracked.el.querySelector('.tool-status-summary') as HTMLElement | null;
+        if (summaryEl) {
+          const summaryText = event.summary || 'running…';
+          summaryEl.innerHTML = `<span class="tool-status-icon">▶</span><span class="tool-status-name">${escapeHtml(tracked.name)}</span><span class="tool-status-meta">${escapeHtml(summaryText)}</span>`;
+        }
+        break;
+      }
+
+      case 'tool_finalize': {
+        if (!event.tid) break;
+        const tracked = backgroundCells.get(event.tid);
+        if (!tracked) break;
+        const durationMs = event.duration_ms ?? (Date.now() - tracked.startTs);
+        const durSec = (durationMs / 1000).toFixed(1) + 's';
+        const kind = event.kind || 'completed';
+        // Map kind to a finishing icon — completed is the success path,
+        // killed / killed_by_restart / stalled all surface as warnings.
+        const icon = kind === 'completed' ? '✓' : '⚠';
+        tracked.el.classList.add('done');
+        if (kind !== 'completed') tracked.el.classList.add('warned');
+        const summaryEl = tracked.el.querySelector('.tool-status-summary') as HTMLElement | null;
+        if (summaryEl) {
+          summaryEl.innerHTML = `<span class="tool-status-icon">${icon}</span><span class="tool-status-name">${escapeHtml(tracked.name)}</span><span class="tool-status-meta">${escapeHtml(kind)} · ${escapeHtml(durSec)}</span>`;
+        }
+        backgroundCells.delete(event.tid);
+        // HUD "▶ name" cleanup: this name might still have other concurrent
+        // calls; only clear if it was the latest tracked.
+        if (latestToolKey === tracked.name && !runningTools.has(tracked.name)) {
+          latestToolKey = null;
+          updateHudTool(null);
+        }
+        break;
+      }
+
+      case 'sub_agent_count': {
+        updateHudSubAgents(event.running ?? 0);
         break;
       }
 
@@ -334,6 +402,23 @@ export function createChat(): HTMLElement {
       sep.classList.remove('hidden');
       item.classList.remove('hidden');
       text.textContent = `▶ ${toolName}`;
+    } else {
+      sep.classList.add('hidden');
+      item.classList.add('hidden');
+      text.textContent = '';
+    }
+  }
+
+  function updateHudSubAgents(count: number) {
+    const sep = el.querySelector('.hud-subagent-sep') as HTMLElement | null;
+    const item = el.querySelector('.hud-subagent') as HTMLElement | null;
+    const text = el.querySelector('.hud-subagent-text') as HTMLElement | null;
+    if (!sep || !item || !text) return;
+    if (count > 0) {
+      sep.classList.remove('hidden');
+      item.classList.remove('hidden');
+      const noun = count === 1 ? 'sub-agent' : 'sub-agents';
+      text.textContent = `⚙ ${count} ${noun} running`;
     } else {
       sep.classList.add('hidden');
       item.classList.add('hidden');
@@ -398,6 +483,11 @@ export function createChat(): HTMLElement {
         tokEl.textContent = '—';
         tokEl.title = 'no usage yet';
       }
+      // Restore the sub-agent badge on attach / page refresh — derived
+      // from the on-disk panel by the HUD endpoint, since the SSE stream
+      // only re-broadcasts sub_agent_count when a child changes state.
+      const subAgentsRunning = (data as { sub_agents_running?: number }).sub_agents_running ?? 0;
+      updateHudSubAgents(subAgentsRunning);
     } catch {
       // ignore — HUD is best-effort
     }

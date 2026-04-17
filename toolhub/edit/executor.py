@@ -18,14 +18,20 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from butterfly.core.guardian import Guardian
 from butterfly.tool_engine.executor.base import BaseExecutor
 
 
 class EditExecutor(BaseExecutor):
     """Executor for the built-in edit tool."""
 
-    def __init__(self, workdir: str | None = None) -> None:
+    def __init__(
+        self,
+        workdir: str | None = None,
+        guardian: Guardian | None = None,
+    ) -> None:
         self._workdir = workdir
+        self._guardian = guardian
 
     def _resolve(self, path: str) -> Path:
         p = Path(path)
@@ -49,6 +55,11 @@ class EditExecutor(BaseExecutor):
             return "Error: old_string and new_string are identical; no change."
 
         resolved = self._resolve(path_arg)
+        if self._guardian is not None:
+            try:
+                self._guardian.check_write(resolved)
+            except PermissionError as exc:
+                return f"Error: Failed to edit {path_arg}: {exc}"
         if not resolved.exists() or not resolved.is_file():
             return f"Error: File not found: {path_arg}"
 

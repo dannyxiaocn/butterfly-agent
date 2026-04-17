@@ -330,6 +330,39 @@ def create_app(sessions_dir: Path, system_sessions_dir: Path | None = None) -> F
             raise HTTPException(404, f"Task not found: {task_name}")
         return {"ok": True}
 
+    @app.get("/api/sessions/{session_id}/events_tail")
+    async def get_events_tail(session_id: str, n: int = 10):
+        """Return the last `n` events from a session's events.jsonl.
+
+        Used by the parent's panel card for a sub-agent child: the parent's
+        SSE stream doesn't subscribe to children's event streams (each session
+        is its own SSE source), so we read the file directly when the user
+        expands the sub_agent card. Cheap — events.jsonl is bounded by the
+        child's lifetime and we only pull the last few.
+        """
+        _validate_session_id_or_400(session_id)
+        n = max(1, min(int(n), 100))
+        system_dir = system_sessions_dir / session_id
+        events_path = system_dir / "events.jsonl"
+        if not events_path.exists():
+            return []
+        import json as _json
+        try:
+            with events_path.open("r", encoding="utf-8") as f:
+                lines = f.readlines()[-n:]
+        except OSError:
+            return []
+        out: list[dict] = []
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                out.append(_json.loads(line))
+            except _json.JSONDecodeError:
+                continue
+        return out
+
     @app.get("/api/sessions/{session_id}/panel")
     async def get_panel(session_id: str):
         """List all panel entries for a session, sorted by created_at asc.

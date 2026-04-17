@@ -1,5 +1,6 @@
 import { store } from '../store';
 import { api } from '../api';
+import { attachSession } from '../main';
 import type { ModelsCatalog, Params, PanelEntry, PanelEntryDetail, ProviderCatalogEntry, TaskCard } from '../types';
 import { formatInterval, formatRelative } from '../markdown';
 import { renderTaskEditor } from './taskEditor';
@@ -30,6 +31,9 @@ export function createPanel(): HTMLElement {
   let modelsCatalogPromise: Promise<ModelsCatalog | null> | null = null;
   const expandedPanel = new Set<string>(); // tids currently expanded
   const panelDetails = new Map<string, PanelEntryDetail>(); // tid → latest detail fetch
+  // Sub-agent panel cards expand to show the child session's last 5 events.
+  // Cached so repeated open/close doesn't refetch.
+  const subAgentChildEvents = new Map<string, Array<Record<string, unknown>>>();
   let panelPollTimer: number | null = null;
 
   function ensureModelsCatalog(): Promise<ModelsCatalog | null> {
@@ -761,6 +765,9 @@ export function createPanel(): HTMLElement {
   }
 
   function renderPanelRow(entry: PanelEntry): string {
+    if (entry.type === 'sub_agent') {
+      return renderSubAgentRow(entry);
+    }
     const statusClass = `panel-status-${entry.status}`;
     const expanded = expandedPanel.has(entry.tid);
     const detail = panelDetails.get(entry.tid);
@@ -795,6 +802,88 @@ export function createPanel(): HTMLElement {
     `;
   }
 
+  function renderSubAgentRow(entry: PanelEntry): string {
+    const expanded = expandedPanel.has(entry.tid);
+    const meta = (entry.meta ?? {}) as Record<string, unknown>;
+    const childId = String(meta.child_session_id ?? '');
+    const mode = String(meta.mode ?? '?');
+    const lastChildState = String(meta.last_child_state ?? '');
+    const statusClass = `panel-status-${entry.status}`;
+    // Thumbnail line: child id + mode chip + current activity.
+    const activityIcon = entry.status === 'running' ? '▶' : entry.status === 'completed' ? '✓' : '⚠';
+    const thumb = lastChildState
+      ? `${activityIcon} ${escHtml(lastChildState)}`
+      : (entry.status === 'completed' ? '✓ done' : `${activityIcon} starting…`);
+
+    let expandedHtml = '';
+    if (expanded) {
+      const events = subAgentChildEvents.get(entry.tid);
+      const result = String(meta.result_text ?? '');
+      const resultBlock = result
+        ? `<details class="sub-agent-result" open><summary>Final reply</summary><pre>${escHtml(result)}</pre></details>`
+        : '';
+      let recentBlock: string;
+      if (events === undefined) {
+        recentBlock = `<div class="sub-agent-recent-empty">Loading recent events…</div>`;
+      } else if (events.length === 0) {
+        recentBlock = `<div class="sub-agent-recent-empty">No recent events.</div>`;
+      } else {
+        recentBlock = `<div class="sub-agent-recent">${events.map(formatChildEvent).join('')}</div>`;
+      }
+      const openLink = childId
+        ? `<button class="btn-sm" data-sub-action="open-child" data-child-id="${escHtml(childId)}">Open child session</button>`
+        : '';
+      expandedHtml = `
+        <div class="sub-agent-detail">
+          <div class="sub-agent-detail-row"><span class="cfg-label">child:</span> <span class="hb-pill">${escHtml(childId)}</span></div>
+          <div class="sub-agent-detail-row"><span class="cfg-label">recent activity (last 5):</span></div>
+          ${recentBlock}
+          ${resultBlock}
+          <div class="task-card-actions">
+            ${openLink}
+            <button class="btn-sm" data-panel-action="kill" data-tid="${escHtml(entry.tid)}">Kill</button>
+          </div>
+        </div>
+      `;
+    }
+
+    return `
+      <div class="task-card panel-row sub-agent-row${expanded ? ' expanded' : ''}" data-tid="${escHtml(entry.tid)}">
+        <div class="task-card-header panel-row-header" data-tid="${escHtml(entry.tid)}">
+          <span class="task-status-badge ${statusClass}">${escHtml(entry.status)}</span>
+          <span class="task-name">sub_agent</span>
+          <span class="session-mode-chip">${escHtml(mode)}</span>
+          <span class="hb-pill panel-tid">${escHtml(entry.tid)}</span>
+        </div>
+        <div class="task-preview panel-tail" title="${escHtml(thumb)}">${thumb}</div>
+        ${expandedHtml}
+      </div>
+    `;
+  }
+
+  function formatChildEvent(evt: Record<string, unknown>): string {
+    const t = String(evt.type ?? '');
+    if (t === 'tool_call' || t === 'tool') {
+      const name = String(evt.name ?? evt.tool ?? '');
+      return `<div class="sub-agent-evt"><span class="sub-agent-evt-icon">▶</span> tool: <code>${escHtml(name)}</code></div>`;
+    }
+    if (t === 'tool_done') {
+      const name = String(evt.name ?? '');
+      return `<div class="sub-agent-evt"><span class="sub-agent-evt-icon">✓</span> tool done: <code>${escHtml(name)}</code></div>`;
+    }
+    if (t === 'model_status') {
+      const v = String(evt.value ?? evt.state ?? '');
+      return `<div class="sub-agent-evt sub-agent-evt-quiet">model: ${escHtml(v)}</div>`;
+    }
+    if (t === 'thinking_start' || t === 'thinking_done') {
+      return `<div class="sub-agent-evt sub-agent-evt-quiet">${escHtml(t.replace('_', ' '))}</div>`;
+    }
+    if (t === 'partial_text') {
+      return '';
+    }
+    return `<div class="sub-agent-evt sub-agent-evt-quiet">${escHtml(t)}</div>`;
+  }
+
   function entryToJsonView(entry: PanelEntry, detail: PanelEntryDetail | undefined): Record<string, unknown> {
     // Prefer the detail payload (same shape + output_tail) if loaded.
     return detail ? { ...detail } : { ...entry };
@@ -823,15 +912,41 @@ export function createPanel(): HTMLElement {
     });
 
     el.querySelectorAll('.panel-row-header').forEach(hdr => {
-      hdr.addEventListener('click', () => {
+      hdr.addEventListener('click', async () => {
         const tid = (hdr as HTMLElement).dataset.tid;
         if (!tid) return;
-        if (expandedPanel.has(tid)) {
-          expandedPanel.delete(tid);
-        } else {
+        const opening = !expandedPanel.has(tid);
+        if (opening) {
           expandedPanel.add(tid);
+        } else {
+          expandedPanel.delete(tid);
         }
         render();
+        // Sub-agent rows: load the child's last 5 events on first open.
+        if (opening) {
+          const entry = (store.panelEntries as PanelEntry[]).find(e => e.tid === tid);
+          const childId = entry && entry.type === 'sub_agent'
+            ? String((entry.meta ?? {}).child_session_id ?? '')
+            : '';
+          if (childId) {
+            try {
+              const events = await api.getEventsTail(childId, 5);
+              subAgentChildEvents.set(tid, events);
+              if (expandedPanel.has(tid)) render();
+            } catch (e) {
+              console.error('Failed to load child events:', e);
+            }
+          }
+        }
+      });
+    });
+
+    el.querySelectorAll('[data-sub-action="open-child"]').forEach(btn => {
+      btn.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        const childId = (btn as HTMLElement).dataset.childId;
+        if (!childId) return;
+        await attachSession(childId);
       });
     });
 
@@ -877,6 +992,21 @@ export function createPanel(): HTMLElement {
       // tail-one-line on the collapsed row and the output block stay fresh.
       if (activeTab === 'panel' && expandedPanel.size > 0) {
         await Promise.all([...expandedPanel].map(async tid => {
+          const entry = entries.find(e => e.tid === tid);
+          if (entry?.type === 'sub_agent') {
+            // Refresh the child's recent events while the sub-agent card is open.
+            const childId = String((entry.meta ?? {}).child_session_id ?? '');
+            if (childId) {
+              try {
+                const events = await api.getEventsTail(childId, 5);
+                if (store.currentSessionId !== sid) return;
+                subAgentChildEvents.set(tid, events);
+              } catch (e) {
+                console.error('Failed to refresh sub-agent child events:', e);
+              }
+            }
+            return;
+          }
           try {
             const detail = await api.getPanelEntry(sid, tid);
             if (store.currentSessionId !== sid) return;

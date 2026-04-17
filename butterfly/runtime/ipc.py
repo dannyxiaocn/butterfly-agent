@@ -170,6 +170,13 @@ def _runtime_event_to_display(event: dict) -> list[dict]:
         "status",
         "error",
         "system_notice",
+        # Sub-agent / background-tool UI events. Frontend keys these by
+        # ``tid`` to keep the placeholder tool cell yellow until the actual
+        # work finishes (see ui/web/frontend/src/components/chat.ts).
+        "tool_progress",
+        "tool_finalize",
+        "sub_agent_count",
+        "panel_update",
     ):
         return [event]
 
