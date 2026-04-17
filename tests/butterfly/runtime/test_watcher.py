@@ -38,7 +38,7 @@ def _make_session(tmp_path: Path, session_id: str, pid: int | None = None, statu
     sys_dir = tmp_path / "_sessions" / session_id
     sys_dir.mkdir(parents=True)
     (sys_dir / "manifest.json").write_text(
-        json.dumps({"entity": "agent", "created_at": "2026-01-01T00:00:00"}),
+        json.dumps({"agent": "agent", "created_at": "2026-01-01T00:00:00"}),
         encoding="utf-8",
     )
     write_session_status(sys_dir, status=status, pid=pid)

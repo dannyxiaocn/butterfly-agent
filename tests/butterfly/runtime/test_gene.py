@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 import pytest
 
-from butterfly.session_engine.entity_state import (
+from butterfly.session_engine.agent_state import (
     _create_meta_venv,
     _load_gene_commands,
     ensure_gene_initialized,
@@ -13,23 +13,23 @@ from butterfly.session_engine.entity_state import (
 )
 
 
-def _seed_entity_with_gene(tmp_path: Path, gene: list[str] | None = None):
-    """Create a minimal entity with optional gene commands."""
-    entity_base = tmp_path / 'entity'
-    ent = entity_base / 'demo'
-    ent.mkdir(parents=True)
+def _seed_agent_with_gene(tmp_path: Path, gene: list[str] | None = None):
+    """Create a minimal agent with optional gene commands."""
+    agent_base = tmp_path / 'agenthub'
+    agt = agent_base / 'demo'
+    agt.mkdir(parents=True)
     import yaml
     manifest = {'name': 'demo', 'model': 'm1', 'provider': 'p1'}
     if gene is not None:
         manifest['gene'] = gene
-    (ent / 'config.yaml').write_text(yaml.dump(manifest), encoding='utf-8')
-    return entity_base
+    (agt / 'config.yaml').write_text(yaml.dump(manifest), encoding='utf-8')
+    return agent_base
 
 
 def test_gene_commands_run_in_playground(tmp_path, monkeypatch):
     """Verify gene commands execute with cwd=playground_dir and venv env."""
-    entity_base = _seed_entity_with_gene(tmp_path, gene=['echo hello', 'echo world'])
-    monkeypatch.setattr('butterfly.session_engine.entity_state._SESSIONS_DIR', tmp_path / 'sessions')
+    agent_base = _seed_agent_with_gene(tmp_path, gene=['echo hello', 'echo world'])
+    monkeypatch.setattr('butterfly.session_engine.agent_state._SESSIONS_DIR', tmp_path / 'sessions')
 
     calls = []
     original_run = __import__('subprocess').run
@@ -44,7 +44,7 @@ def test_gene_commands_run_in_playground(tmp_path, monkeypatch):
 
     monkeypatch.setattr('subprocess.run', mock_run)
 
-    run_gene_commands('demo', entity_base=entity_base, s_base=tmp_path / 'sessions')
+    run_gene_commands('demo', agent_base=agent_base, s_base=tmp_path / 'sessions')
 
     meta_dir = tmp_path / 'sessions' / 'demo_meta'
     playground_dir = meta_dir / 'playground'
@@ -64,8 +64,8 @@ def test_gene_commands_run_in_playground(tmp_path, monkeypatch):
 
 def test_ensure_gene_initialized_skips_if_marker_exists(tmp_path, monkeypatch):
     """Verify that if .gene_initialized exists, subprocess.run is not called for gene."""
-    entity_base = _seed_entity_with_gene(tmp_path, gene=['echo should not run'])
-    monkeypatch.setattr('butterfly.session_engine.entity_state._SESSIONS_DIR', tmp_path / 'sessions')
+    agent_base = _seed_agent_with_gene(tmp_path, gene=['echo should not run'])
+    monkeypatch.setattr('butterfly.session_engine.agent_state._SESSIONS_DIR', tmp_path / 'sessions')
 
     # Pre-create meta session with marker
     meta_dir = ensure_meta_session('demo', s_base=tmp_path / 'sessions')
@@ -84,7 +84,7 @@ def test_ensure_gene_initialized_skips_if_marker_exists(tmp_path, monkeypatch):
 
     monkeypatch.setattr('subprocess.run', mock_run)
 
-    ensure_gene_initialized('demo', entity_base=entity_base, s_base=tmp_path / 'sessions')
+    ensure_gene_initialized('demo', agent_base=agent_base, s_base=tmp_path / 'sessions')
 
     # No gene commands should have been called
     assert len(calls) == 0
@@ -92,19 +92,19 @@ def test_ensure_gene_initialized_skips_if_marker_exists(tmp_path, monkeypatch):
 
 def test_load_gene_commands_empty_when_no_gene(tmp_path, monkeypatch):
     """Verify _load_gene_commands returns [] when no gene field."""
-    entity_base = _seed_entity_with_gene(tmp_path, gene=None)
-    monkeypatch.setattr('butterfly.session_engine.entity_state._SESSIONS_DIR', tmp_path / 'sessions')
-    result = _load_gene_commands('demo', entity_base=entity_base)
+    agent_base = _seed_agent_with_gene(tmp_path, gene=None)
+    monkeypatch.setattr('butterfly.session_engine.agent_state._SESSIONS_DIR', tmp_path / 'sessions')
+    result = _load_gene_commands('demo', agent_base=agent_base)
     assert result == []
 
 
 def test_run_gene_commands_no_gene_field(tmp_path, monkeypatch):
     """Verify run_gene_commands is a no-op when no gene field exists."""
-    entity_base = _seed_entity_with_gene(tmp_path, gene=None)
-    monkeypatch.setattr('butterfly.session_engine.entity_state._SESSIONS_DIR', tmp_path / 'sessions')
+    agent_base = _seed_agent_with_gene(tmp_path, gene=None)
+    monkeypatch.setattr('butterfly.session_engine.agent_state._SESSIONS_DIR', tmp_path / 'sessions')
 
     # Should not raise, should not write marker
-    run_gene_commands('demo', entity_base=entity_base, s_base=tmp_path / 'sessions')
+    run_gene_commands('demo', agent_base=agent_base, s_base=tmp_path / 'sessions')
     meta_dir = tmp_path / 'sessions' / 'demo_meta'
     marker = meta_dir / 'core' / '.gene_initialized'
     assert not marker.exists()
@@ -112,11 +112,11 @@ def test_run_gene_commands_no_gene_field(tmp_path, monkeypatch):
 
 def test_gene_command_failure_does_not_raise(tmp_path, monkeypatch):
     """Verify a failing gene command prints error but does not raise."""
-    entity_base = _seed_entity_with_gene(tmp_path, gene=['false'])
-    monkeypatch.setattr('butterfly.session_engine.entity_state._SESSIONS_DIR', tmp_path / 'sessions')
+    agent_base = _seed_agent_with_gene(tmp_path, gene=['false'])
+    monkeypatch.setattr('butterfly.session_engine.agent_state._SESSIONS_DIR', tmp_path / 'sessions')
 
     # Should not raise even though 'false' exits with code 1
-    run_gene_commands('demo', entity_base=entity_base, s_base=tmp_path / 'sessions')
+    run_gene_commands('demo', agent_base=agent_base, s_base=tmp_path / 'sessions')
 
     # Marker should still be written
     meta_dir = tmp_path / 'sessions' / 'demo_meta'

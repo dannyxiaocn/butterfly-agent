@@ -21,7 +21,7 @@ The project root is at the path you were given. Run all commands from there.
 - Remove tests
 - Add new features or behaviour
 - Rename files or directories
-- Change entity YAML, prompts, or skill content
+- Change agent YAML, prompts, or skill content
 
 ---
 
@@ -130,7 +130,7 @@ Also check:
 
 Do **not** audit or modify:
 - `tests/` — never change tests
-- `entity/` — not Python code
+- `agenthub/` — not Python code
 - `sessions/`, `_sessions/` — runtime data
 - `examples/` — reference material
 
@@ -140,7 +140,7 @@ Do **not** audit or modify:
 
 A few things to know that will help you audit correctly:
 
-**`_registry.py`** — The built-in tool registry maps tool names to factory callables. If a factory is registered here but the corresponding tool JSON doesn't exist in `entity/agent/tools/`, that's dead — but check both sides before removing.
+**`_registry.py`** — The built-in tool registry maps tool names to factory callables. If a factory is registered here but the corresponding tool JSON doesn't exist in `agenthub/agent/tools/`, that's dead — but check both sides before removing.
 
 **`ensure_*` functions** — `ensure_session_params`, `ensure_session_status` etc. are idempotent initialisation helpers. They may look unused if you only search for call sites in Python — they're also called from `session.py`'s init path. Check carefully before removing.
 

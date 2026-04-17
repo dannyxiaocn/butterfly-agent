@@ -1,6 +1,10 @@
 """butterfly — unified CLI for the Butterfly agent runtime.
 
 Usage:
+    butterfly                                  Start server + web UI, print URL, hang
+    butterfly server                          Tail the running server's log
+    butterfly update                          git pull + pip install -e . + rebuild web + restart
+
     butterfly chat MESSAGE [options]          Send a message / create a session
     butterfly sessions [--json]               List all sessions
     butterfly new [SESSION_ID] [options]      Create a new session (no message)
@@ -9,10 +13,7 @@ Usage:
     butterfly log [SESSION_ID] [-n N] [--since T] [--watch]  Show conversation history
     butterfly tasks [SESSION_ID]              Show a session's task board
     butterfly panel [SESSION_ID] [options]    Show a session's panel (pending tools)
-    butterfly entity new [options]            Scaffold a new entity directory
-
-    butterfly server                          Start the Butterfly server (auto-daemonize)
-    butterfly web                             Start the web UI (monitoring)
+    butterfly agent new [options]             Scaffold a new agent directory
 
 All session-management commands (sessions, new, stop, start, tasks) work without
 a running server — they read/write the _sessions/ directory directly.
@@ -41,7 +42,7 @@ def _ensure_server_running(
     sessions_dir: Path | None = None,
     system_sessions_dir: Path | None = None,
 ) -> None:
-    """Start butterfly-server in daemon mode if not already running."""
+    """Start the butterfly server in daemon mode if not already running."""
     from butterfly.runtime.server import _is_server_running, _start_daemon
     sys_dir = system_sessions_dir or _DEFAULT_SYSTEM_BASE
     if _is_server_running(sys_dir):
@@ -161,7 +162,7 @@ def _add_chat_parser(subparsers) -> None:
             "Send a message to an existing session or create a new one.\n\n"
             "Examples:\n"
             "  butterfly chat 'Plan a data pipeline'\n"
-            "  butterfly chat --entity butterfly_dev 'Review this code'\n"
+            "  butterfly chat --agent butterfly_dev 'Review this code'\n"
             "  butterfly chat --session 2026-03-25_10-00-00 'Status?'\n"
             "  butterfly chat --session <id> --no-wait 'Run overnight'\n"
         ),
@@ -169,8 +170,8 @@ def _add_chat_parser(subparsers) -> None:
     )
     p.add_argument("message", help="Message to send")
     p.add_argument("--session", metavar="ID", help="Continue an existing session")
-    p.add_argument("--entity", default="agent", metavar="NAME",
-                   help="Entity for new session (default: agent)")
+    p.add_argument("--agent", default="agent", metavar="NAME",
+                   help="Agent for new session (default: agent)")
     p.add_argument("--no-wait", action="store_true", help="Fire-and-forget")
     p.add_argument("--timeout", type=float, default=300.0,
                    help="Seconds to wait for a response (default: 300)")
@@ -203,7 +204,7 @@ def cmd_chat(args) -> int:
             system_base=args.system_base,
         )
     return _new_session(
-        args.entity, args.message,
+        args.agent, args.message,
         no_wait=args.no_wait, timeout=args.timeout,
         system_base=args.system_base,
         sessions_base=args.sessions_base,
@@ -219,7 +220,7 @@ def _add_sessions_parser(subparsers) -> None:
         "sessions",
         allow_abbrev=False,
         help="List all sessions.",
-        description="List all sessions with status, entity, and last-run time.",
+        description="List all sessions with status, agent, and last-run time.",
     )
     p.add_argument("--json", action="store_true", dest="as_json",
                    help="Output as JSON array (useful for agents)")
@@ -242,9 +243,9 @@ def cmd_sessions(args) -> int:
         return 0
 
     # Table layout
-    COL = {"id": 26, "entity": 16, "status": 10, "last_run": 10}
+    COL = {"id": 26, "agent": 16, "status": 10, "last_run": 10}
     header = (
-        f"{'ID':<{COL['id']}}  {'ENTITY':<{COL['entity']}}  "
+        f"{'ID':<{COL['id']}}  {'AGENT':<{COL['agent']}}  "
         f"{'STATUS':<{COL['status']}}  LAST RUN"
     )
     print(header)
@@ -259,7 +260,7 @@ def cmd_sessions(args) -> int:
         }.get(tone, tone)
         last_run = _fmt_ago(s.get("last_run_at")) or _fmt_ago(s.get("created_at")) or "—"
         print(
-            f"{s['id']:<{COL['id']}}  {s.get('entity','?'):<{COL['entity']}}  "
+            f"{s['id']:<{COL['id']}}  {s.get('agent','?'):<{COL['agent']}}  "
             f"{status_label:<{COL['status']}}  {last_run}"
         )
     return 0
@@ -273,19 +274,19 @@ def _add_new_parser(subparsers) -> None:
         allow_abbrev=False,
         help="Create a new session (no message — use 'chat' to send immediately).",
         description=(
-            "Create a session from an entity. Session ID is auto-generated from\n"
+            "Create a session from an agent. Session ID is auto-generated from\n"
             "the current timestamp unless specified explicitly.\n\n"
             "Examples:\n"
             "  butterfly new\n"
-            "  butterfly new --entity butterfly_dev\n"
-            "  butterfly new my-project --entity agent\n"
+            "  butterfly new --agent butterfly_dev\n"
+            "  butterfly new my-project --agent agent\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument("session_id", nargs="?", default=None,
                    help="Session ID (default: current timestamp)")
-    p.add_argument("--entity", default="agent", metavar="NAME",
-                   help="Entity to initialise from (default: agent)")
+    p.add_argument("--agent", default="agent", metavar="NAME",
+                   help="Agent to initialise from (default: agent)")
     p.add_argument("--system-base", type=Path, default=_DEFAULT_SYSTEM_BASE,
                    help=argparse.SUPPRESS)
     p.add_argument("--sessions-base", type=Path, default=_DEFAULT_SESSIONS_BASE,
@@ -300,12 +301,12 @@ def cmd_new(args) -> int:
     _ensure_server_running(args.sessions_base, args.system_base)
     from butterfly.service import create_session
     session_id = args.session_id or (datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + "-" + uuid.uuid4().hex[:4])
-    entity_dir = _REPO_ROOT / "entity" / args.entity
-    if not entity_dir.exists():
-        print(f"Error: entity '{args.entity}' not found in entity/", file=sys.stderr)
+    agent_dir = _REPO_ROOT / "agenthub" / args.agent
+    if not agent_dir.exists():
+        print(f"Error: agent '{args.agent}' not found in agenthub/", file=sys.stderr)
         return 1
     try:
-        create_session(session_id, args.entity, sessions_dir=args.sessions_base, system_sessions_dir=args.system_base)
+        create_session(session_id, args.agent, sessions_dir=args.sessions_base, system_sessions_dir=args.system_base)
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
@@ -838,44 +839,44 @@ def cmd_panel(args) -> int:
     return 0
 
 
-# ── Subcommand: entity ────────────────────────────────────────────────────────
+# ── Subcommand: agent ────────────────────────────────────────────────────────
 
-def _add_entity_parser(subparsers) -> None:
+def _add_agent_parser(subparsers) -> None:
     p = subparsers.add_parser(
-        "entity",
-        help="Manage entity definitions.",
+        "agent",
+        help="Manage agent definitions.",
     )
-    esub = p.add_subparsers(dest="entity_cmd", metavar="COMMAND")
-    esub.required = True
+    asub = p.add_subparsers(dest="agent_cmd", metavar="COMMAND")
+    asub.required = True
 
-    enew = esub.add_parser(
+    anew = asub.add_parser(
         "new",
-        help="Scaffold a new entity directory.",
+        help="Scaffold a new agent directory.",
         description=(
-            "Scaffold a new agent entity directory.\n\n"
+            "Scaffold a new agent directory.\n\n"
             "Examples:\n"
-            "  butterfly entity new                          # interactive\n"
-            "  butterfly entity new -n my-agent\n"
-            "  butterfly entity new -n my-agent --init-from agent\n"
-            "  butterfly entity new -n my-agent --blank\n"
+            "  butterfly agent new                          # interactive\n"
+            "  butterfly agent new -n my-agent\n"
+            "  butterfly agent new -n my-agent --init-from agent\n"
+            "  butterfly agent new -n my-agent --blank\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    enew.add_argument("-n", "--name", metavar="NAME", help="Entity name")
-    enew.add_argument("--init-from", metavar="SOURCE",
-                      help="Copy all files from this entity (skips picker)")
-    enew.add_argument("--blank", action="store_true",
-                      help="Create a blank entity with empty files")
-    enew.add_argument("--entity-dir", default="entity", metavar="DIR",
-                      help="Base directory for entities (default: entity/)")
+    anew.add_argument("-n", "--name", metavar="NAME", help="Agent name")
+    anew.add_argument("--init-from", metavar="SOURCE",
+                      help="Copy all files from this agent (skips picker)")
+    anew.add_argument("--blank", action="store_true",
+                      help="Create a blank agent with empty files")
+    anew.add_argument("--agent-dir", default="agenthub", metavar="DIR",
+                      help="Base directory for agents (default: agenthub/)")
 
-    p.set_defaults(func=cmd_entity)
+    p.set_defaults(func=cmd_agent)
 
 
-def cmd_entity(args) -> int:
-    if args.entity_cmd == "new":
-        from ui.cli.new_agent import _ask_name, _ask_init_from, create_entity
-        entity_dir = Path(args.entity_dir)
+def cmd_agent(args) -> int:
+    if args.agent_cmd == "new":
+        from ui.cli.new_agent import _ask_name, _ask_init_from, create_agent
+        agent_dir = Path(args.agent_dir)
         name = args.name or _ask_name()
         init_from_arg = getattr(args, "init_from", None)
         if args.blank:
@@ -886,9 +887,9 @@ def cmd_entity(args) -> int:
             # Non-interactive: -n NAME given but no --init-from/--blank → default to agent
             init_from = "agent"
         else:
-            init_from = _ask_init_from(entity_dir)
+            init_from = _ask_init_from(agent_dir)
         try:
-            created = create_entity(name, entity_dir, init_from)
+            created = create_agent(name, agent_dir, init_from)
         except ValueError as exc:
             print(f"Error: {exc}", file=sys.stderr)
             return 1
@@ -900,33 +901,179 @@ def cmd_entity(args) -> int:
     return 0
 
 
-# ── Subcommands: server / web ─────────────────────────────────────────────────
+# ── Default: `butterfly` (no subcommand) — boot server + web ──────────────────
 
-def _add_exec_parser(subparsers, name: str, help_text: str) -> None:
-    p = subparsers.add_parser(name, help=help_text)
-    p.set_defaults(func=lambda args: _exec_entrypoint(name))
+def cmd_default(args) -> int:
+    """Start server daemon + run web UI in foreground, hang until Ctrl+C.
+
+    On exit, the server daemon is stopped so the process cleans up together.
+    """
+    import signal
+    from butterfly.runtime.env import load_dotenv
+    from butterfly.runtime.server import (
+        _start_daemon, _is_server_running, _cmd_stop,
+    )
+    load_dotenv()
+
+    sessions_dir = _DEFAULT_SESSIONS_BASE
+    sys_dir = _DEFAULT_SYSTEM_BASE
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    sys_dir.mkdir(parents=True, exist_ok=True)
+
+    existing = _is_server_running(sys_dir)
+    started_server = False
+    if existing:
+        print(f"butterfly server already running (pid={existing}).")
+    else:
+        rc = _start_daemon(sessions_dir, sys_dir)
+        if rc != 0:
+            return rc
+        started_server = True
+
+    from ui.web.app import create_app, _DEFAULT_PORT
+    import uvicorn
+    app = create_app(sessions_dir, sys_dir)
+    port = int(os.environ.get("BUTTERFLY_WEB_PORT", str(_DEFAULT_PORT)))
+    host = os.environ.get("BUTTERFLY_WEB_HOST", "127.0.0.1")
+    print(f"butterfly web UI: http://localhost:{port}")
+    print("(Ctrl+C to stop server + web)")
+
+    def _stop_all(*_):
+        raise KeyboardInterrupt()
+    signal.signal(signal.SIGTERM, _stop_all)
+
+    try:
+        uvicorn.run(app, host=host, port=port, log_level="warning")
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if started_server:
+            class _A: pass
+            a = _A()
+            a.system_sessions_dir = str(sys_dir)
+            _cmd_stop(a)
+    return 0
 
 
-def _exec_entrypoint(name: str) -> int:
-    """Replace the current process with the named entry-point script."""
-    import shutil
-    cmd = f"butterfly-{name}"
-    path = shutil.which(cmd)
-    if path:
-        os.execv(path, [path])
-    # Fallback: call the Python module directly
-    mapping = {
-        "server": ("butterfly.runtime.server", "main"),
-        "web":    ("ui.web", "main"),
-    }
-    if name in mapping:
-        module_path, fn = mapping[name]
-        import importlib
-        mod = importlib.import_module(module_path)
-        getattr(mod, fn)()
-        return 0
-    print(f"Error: unknown entrypoint '{name}'", file=sys.stderr)
-    return 1
+# ── Subcommand: `butterfly server` (tail server log) ──────────────────────────
+
+def _add_server_parser(subparsers) -> None:
+    p = subparsers.add_parser(
+        "server",
+        allow_abbrev=False,
+        help="Tail the running butterfly server's log (Ctrl+C to exit).",
+    )
+    p.set_defaults(func=cmd_server)
+
+
+def cmd_server(args) -> int:
+    from butterfly.runtime.server import _is_server_running, _log_file
+    sys_dir = _DEFAULT_SYSTEM_BASE
+    pid = _is_server_running(sys_dir)
+    log_path = _log_file(sys_dir)
+    if pid is None:
+        print("butterfly server is not running. Start it with `butterfly` (no args).")
+        return 1
+    if not log_path.exists():
+        print(f"Server log not found: {log_path}")
+        return 1
+    print(f"Tailing {log_path} (server pid={pid}). Ctrl+C to exit.\n")
+    import subprocess as _sp
+    try:
+        _sp.run(["tail", "-F", str(log_path)])
+    except KeyboardInterrupt:
+        pass
+    return 0
+
+
+# ── Subcommand: `butterfly update` ────────────────────────────────────────────
+
+def _add_update_parser(subparsers) -> None:
+    p = subparsers.add_parser(
+        "update",
+        allow_abbrev=False,
+        help="git pull + pip install -e . + rebuild web + restart server.",
+    )
+    p.add_argument("--skip-frontend", action="store_true",
+                   help="Skip the frontend rebuild step.")
+    p.set_defaults(func=cmd_update)
+
+
+def cmd_update(args) -> int:
+    import subprocess as _sp
+    from butterfly.runtime.server import (
+        _is_server_running, _cmd_stop, _start_daemon,
+    )
+    sys_dir = _DEFAULT_SYSTEM_BASE
+    sessions_dir = _DEFAULT_SESSIONS_BASE
+
+    # 1. Refuse to clobber uncommitted changes OR untracked files. `git diff`
+    # alone misses untracked files, which `git pull --ff-only` then happily
+    # overwrites if upstream added a file at the same path. Use
+    # `status --porcelain` which reports all three classes (modified / staged
+    # / untracked) in one go.
+    status = _sp.run(
+        ["git", "-C", str(_REPO_ROOT), "status", "--porcelain"],
+        capture_output=True, text=True,
+    )
+    if status.returncode != 0:
+        print(f"Error: git status failed: {status.stderr}", file=sys.stderr)
+        return 1
+    if status.stdout.strip():
+        print("Error: working tree is not clean (modified / staged / untracked "
+              "files present). Commit, stash, or remove them first.",
+              file=sys.stderr)
+        return 1
+
+    # 2. Stop server if running; remember so we can restart.
+    server_was_running = _is_server_running(sys_dir) is not None
+
+    def _ensure_server_restarted_on_exit():
+        if server_was_running and _is_server_running(sys_dir) is None:
+            _start_daemon(sessions_dir, sys_dir)
+
+    if server_was_running:
+        print("Stopping butterfly server...")
+        class _A: pass
+        a = _A()
+        a.system_sessions_dir = str(sys_dir)
+        _cmd_stop(a)
+
+    # 3. git pull --ff-only
+    print("git pull...")
+    r = _sp.run(["git", "-C", str(_REPO_ROOT), "pull", "--ff-only"])
+    if r.returncode != 0:
+        print("Error: git pull failed.", file=sys.stderr)
+        _ensure_server_restarted_on_exit()
+        return 1
+
+    # 4. pip install -e .
+    print("pip install -e .")
+    r = _sp.run([sys.executable, "-m", "pip", "install", "-e", str(_REPO_ROOT)])
+    if r.returncode != 0:
+        # Even if pip fails, the new code is already on disk and importable.
+        # Restart the server so we don't leave the user without a running
+        # daemon after a partial update.
+        print("Error: pip install failed.", file=sys.stderr)
+        _ensure_server_restarted_on_exit()
+        return 1
+
+    # 5. Rebuild frontend (best-effort; warn but don't fail).
+    if not args.skip_frontend:
+        frontend_dir = _REPO_ROOT / "ui" / "web" / "frontend"
+        if (frontend_dir / "package.json").exists() and shutil.which("npm"):
+            print("npm run build (frontend)...")
+            r = _sp.run(["npm", "run", "build"], cwd=str(frontend_dir))
+            if r.returncode != 0:
+                print("Warning: npm build failed; frontend may be stale.",
+                      file=sys.stderr)
+
+    # 6. Restart server if it was running.
+    if server_was_running:
+        print("Starting butterfly server...")
+        _start_daemon(sessions_dir, sys_dir)
+    print("Update complete.")
+    return 0
 
 
 
@@ -939,9 +1086,11 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         allow_abbrev=False,
         epilog=(
+            "Default (no subcommand):\n"
+            "  butterfly                            Start server + web UI; print URL; hang\n\n"
             "Session management (no server required):\n"
             "  butterfly sessions                   List all sessions\n"
-            "  butterfly new [ID] [--entity NAME]   Create a session\n"
+            "  butterfly new [ID] [--agent NAME]    Create a session\n"
             "  butterfly chat MESSAGE               New session + send message\n"
             "  butterfly chat --session ID MSG      Send to existing session\n"
             "  butterfly stop SESSION_ID            Stop a session\n"
@@ -949,19 +1098,19 @@ def main() -> None:
             "  butterfly log [SESSION_ID] [-n N]    Show conversation history\n"
             "  butterfly tasks [SESSION_ID]         Show session task board\n"
             "  butterfly panel [SESSION_ID]         Show session panel entries\n\n"
-            "Entity management:\n"
-            "  butterfly entity new                 Scaffold entity interactively\n"
-            "  butterfly entity new -n NAME         Scaffold entity by name\n\n"
+            "Agent management:\n"
+            "  butterfly agent new                  Scaffold agent interactively\n"
+            "  butterfly agent new -n NAME          Scaffold agent by name\n\n"
             "Provider login:\n"
             "  butterfly codex login                OAuth flow for ChatGPT Codex\n"
             "  butterfly kimi login                 Paste Kimi API key into .env\n\n"
-            "Other:\n"
-            "  butterfly server                     Start the server\n"
-            "  butterfly web                        Start the web UI (monitoring)\n"
+            "Runtime:\n"
+            "  butterfly server                     Tail the running server's log\n"
+            "  butterfly update                     git pull + pip install + rebuild + restart\n"
         ),
     )
     subparsers = parser.add_subparsers(dest="command", metavar="COMMAND")
-    subparsers.required = True
+    subparsers.required = False
 
     _add_chat_parser(subparsers)
     _add_sessions_parser(subparsers)
@@ -971,14 +1120,16 @@ def main() -> None:
     _add_log_parser(subparsers)
     _add_tasks_parser(subparsers)
     _add_panel_parser(subparsers)
-    _add_entity_parser(subparsers)
+    _add_agent_parser(subparsers)
     from ui.cli.login import _add_codex_parser, _add_kimi_parser
     _add_codex_parser(subparsers)
     _add_kimi_parser(subparsers)
-    _add_exec_parser(subparsers, "server", "Start the Butterfly server daemon.")
-    _add_exec_parser(subparsers, "web",    "Start the web UI at http://localhost:7720 (monitoring).")
+    _add_server_parser(subparsers)
+    _add_update_parser(subparsers)
 
     args = parser.parse_args()
+    if getattr(args, "func", None) is None:
+        sys.exit(cmd_default(args))
     sys.exit(args.func(args))
 
 

@@ -15,7 +15,7 @@
   `if not session_config_path.exists()` 拷贝分支被跳过，session 永远只带 null
   model。修复：(a) 把 manifest.json 移到函数末尾，只有当 session core/ 里 config
   准备好之后 watcher 才能看到；(b) 把拷贝条件从 "文件不存在" 放宽到 "文件缺
-  model"，让即使抢跑产生的 stub config 也会被真正的 entity config 覆盖。
+  model"，让即使抢跑产生的 stub config 也会被真正的 agent config 覆盖。
   回归测试：`tests/butterfly/session_engine/test_session_init.py::test_init_session_config_not_clobbered_by_concurrent_ensure_config`
   以及 `::test_init_session_writes_manifest_after_config_populated`。
 
@@ -35,7 +35,7 @@ Big redesign. Full spec in `docs/butterfly/tool_engine/design.md` and `docs/butt
 - [ ] New tools `glob` / `grep` (ripgrep-preferred, Python `re` fallback)
 - [ ] New tool `web_fetch` (provider-abstracted like web_search; default httpx+trafilatura)
 - [ ] Split `manage_task` → `task_create` / `task_update` / `task_finish` / `task_pause` / `task_resume` / `task_list`
-- [ ] Rename + behavior change: `recall_memory` (β, fetch-only) + new `update_memory` (patch sub-memory + upsert main memory index line)
+- [x] Rename + behavior change: `memory_recall` (β, fetch-only) + new `memory_update` (patch sub-memory + upsert main memory index line)
 - [ ] New tool `tool_output(task_id, delta?)` — fetch backgrounded-tool output from panel
 - [ ] Remove `reload_capabilities` injection from `session.py` + delete `butterfly/tool_engine/reload.py`
 
@@ -50,7 +50,7 @@ Big redesign. Full spec in `docs/butterfly/tool_engine/design.md` and `docs/butt
 - [ ] CLI: `butterfly panel` (one-line list) + `butterfly panel --tid <tid>` (detail + `--kill` / `--output`)
 
 **Sync-up**
-- [ ] Rewrite `entity/agent/tools.md` and `entity/butterfly_dev/tools.md` for the new catalog (drop `shell`, `manage_task`, `reload_capabilities`; add new ones)
+- [ ] Rewrite `agenthub/agent/tools.md` and `agenthub/butterfly_dev/tools.md` for the new catalog (drop `shell`, `manage_task`, `reload_capabilities`; add new ones)
 - [ ] Migrate meta sessions: either delete `sessions/<name>_meta/` + `_sessions/<name>_meta/` for re-bootstrap, or mirror tool list into existing metas
 - [ ] `CLAUDE_*` env vars → `BUTTERFLY_*` (notably `${CLAUDE_SKILL_DIR}` in skill_tool.py); no alias
 - [ ] Memory (β) wiring: drop `memory_layers` from prompt build; verify main-memory index flow end-to-end
@@ -60,9 +60,9 @@ Big redesign. Full spec in `docs/butterfly/tool_engine/design.md` and `docs/butt
 
 ### Module 10 · v2.0.2 Follow-ups (from PR #17 review)
 
-- [ ] **验证 Codex `gpt-5-codex` 默认模型是否在 ChatGPT-OAuth 端点可用**：PR #17 把 `CodexProvider.DEFAULT_MODEL` 从 `gpt-5.4` 改成 `gpt-5-codex`（对齐 openai/codex-rs CLI），但 PR description 中 `Manual end-to-end call against Codex (codex-oauth) with thinking=True` 的 checkbox 未勾选 —— 没有人真实跑过这个组合。同时 `entity/agent/config.yaml`、`entity/butterfly_dev/config.yaml`、`README.md`、`docs/entity/agent/impl.md`、`ui/web/frontend/src/components/chat.ts` 里的 token 上限表仍是 `gpt-5.4`，处于不一致状态。需要：
+- [ ] **验证 Codex `gpt-5-codex` 默认模型是否在 ChatGPT-OAuth 端点可用**：PR #17 把 `CodexProvider.DEFAULT_MODEL` 从 `gpt-5.4` 改成 `gpt-5-codex`（对齐 openai/codex-rs CLI），但 PR description 中 `Manual end-to-end call against Codex (codex-oauth) with thinking=True` 的 checkbox 未勾选 —— 没有人真实跑过这个组合。同时 `agenthub/agent/config.yaml`、`agenthub/butterfly_dev/config.yaml`、`README.md`、`docs/agent/agent/impl.md`、`ui/web/frontend/src/components/chat.ts` 里的 token 上限表仍是 `gpt-5.4`，处于不一致状态。需要：
   - 手动跑一次 `codex-oauth` + `thinking=True` + 无显式 model 的会话，确认 `gpt-5-codex` 被服务端接受
-  - 确认后要么统一 entity/docs/frontend 都改成 `gpt-5-codex`，要么把 `DEFAULT_MODEL` 回退到 `gpt-5.4` 保持兼容
+  - 确认后要么统一 agenthub/docs/frontend 都改成 `gpt-5-codex`，要么把 `DEFAULT_MODEL` 回退到 `gpt-5.4` 保持兼容
 - [ ] **`agent.py` `consume_extra_blocks` 的 `getattr` fallback 已是死代码**：基类 `Provider` ABC 现在默认实现了 `consume_extra_blocks`（返回 `[]`），`getattr(active_provider, "consume_extra_blocks", lambda: [])()` 里的 `lambda: []` 永远不会命中。留着是防御性写法，但严格说冗余。可简化为 `active_provider.consume_extra_blocks()`
 - [ ] **`openai_api._tc_map_to_list` 未过滤空 `name` 的条目**：Codex 和 OpenAI Responses 两个 provider 都有 `if tc["name"]` 过滤，只有 Chat Completions 这条没有。实际 OpenAI 第一个 tool_call delta 一定带 name，不会真触发，但三个 provider 的行为不对齐，属于一致性 drift。补一个 `if entry["name"]`
 - [ ] **`_get_fallback_provider` 在只配 `fallback_model` 时静默失效**：`agent.py` 的 `_get_fallback_provider` 早期 return 要求 `fallback_provider` 和 `fallback_model` 两个都为空；但只配 `fallback_model`（不配 `fallback_provider`）时，`self._fallback_provider` 会留在 None，fallback 整条路径被跳过。要么只配 `fallback_model` 时报错提示，要么继承主 provider 类型
@@ -79,7 +79,7 @@ Big redesign. Full spec in `docs/butterfly/tool_engine/design.md` and `docs/butt
 - [ ] **skill 参数替换语义完善**：从当前 `$ARGUMENTS` + 简单 positional 替换，升级到具名参数、缺省值、引用转义和错误提示
 - [ ] **skill 资源导入机制**：支持 skill 目录下 `agents/`、`prompts/`、`references/` 等附属文件的标准化发现与注入提示
 - [ ] **skill prompt 导入与持久化策略**：解决 skill 被加载后在多轮对话、history compact、sub-agent/fork 场景中的保留与恢复问题
-- [ ] **session / entity / user 三级 skill 源**：补用户级 skill 目录与优先级/去重逻辑
+- [ ] **session / agent / user 三级 skill 源**：补用户级 skill 目录与优先级/去重逻辑
 - [ ] **conditional skill activation**：支持按路径模式或工作区上下文激活 skill，减少大 skill catalog 的噪音
 - [ ] **skill tool observability**：记录 skill load/use 事件到 runtime stats
 - [ ] **skill engine 端到端测试补强**：新增 provider 真实交互模拟
@@ -113,16 +113,16 @@ See `docs/butterfly/service/todo.md` for full detail.
 
 ### Module 3 · Meta-session 完善
 
-- [x] **整理现有 entity** (commit: bc2cc6f)
-- [x] **meta session 作为 entity 实例化单位** (commit: 9472524)：`sync_from_entity()` 引导 memory 与 playground
+- [x] **整理现有 agent** (commit: bc2cc6f)
+- [x] **meta session 作为 agent 实例化单位** (commit: 9472524)：`sync_from_agent()` 引导 memory 与 playground
 - [x] **给 meta session 配工具：子 session 管理** (commit: 6a1c5c4)：dream 机制 24h 审查子 session
 - [x] **Bridge 子进程标注 + Persistent agent 标识** (commit: d773ed7)
 - [x] **分层 memory 调整（单向流）** (commit: 5d895fc)
 
-### Module 4 · Entity 继承系统改进
+### Module 4 · Agent 继承系统改进
 
-- [x] **meta session 完备，entity 保留继承标识** (commit: b4fbc50)：link/own/append 字段
-- [x] **entity 可更新 parent entity 内容** (commit: 6bf957d)：`propose_parent_update` 接口
+- [x] **meta session 完备，agent 保留继承标识** (commit: b4fbc50)：link/own/append 字段
+- [x] **agent 可更新 parent agent 内容** (commit: 6bf957d)：`propose_parent_update` 接口
 
 ### Module 5 · Thinking 配置
 
@@ -183,14 +183,14 @@ See `docs/butterfly/service/todo.md` for full detail.
 - [x] session memory 分层 (71f9c66 v1.1.7)
 - [x] memory recall skill (5dd735b v1.2.3)
 - [x] creator mode skill (d86c2b6)
-- [x] entity 版本控制 + propose_entity_update review 流程 (3abfba4 v1.2.1 / d239374 v1.3.14)
+- [x] agent 版本控制 + propose_agent_update review 流程 (3abfba4 v1.2.1 / d239374 v1.3.14)
 - [x] agent 自己迭代 tool 和 skill（热插拔）
 - [x] skills 分段式 load in + memory layer 60 行自动截断 (3c12fce v1.3.10)
 - [x] web search tool（brave + tavily 多 provider）
 
 ### Multi-agent
 
-- [x] receptionist entity — 接待 agent (79e89bc v1.3.26)
+- [x] receptionist agent — 接待 agent (79e89bc v1.3.26)
 - [x] multi-agent runtime (1871749 v1.2.2 + 679e482 v1.2.4)
 
 ### Runtime Feedback & Token

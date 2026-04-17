@@ -36,8 +36,8 @@ class _NoopProvider:
         return ("", [], TokenUsage())
 
 
-def _minimal_entity(tmp_path: Path) -> Path:
-    base = tmp_path / "entity"
+def _minimal_agent(tmp_path: Path) -> Path:
+    base = tmp_path / "agenthub"
     ag = base / "agent"
     ag.mkdir(parents=True)
     (ag / "config.yaml").write_text(
@@ -68,15 +68,15 @@ async def test_initial_message_reaches_daemon_consumer(tmp_path: Path) -> None:
     sys_base = tmp_path / "_sessions"
     sessions_base.mkdir()
     sys_base.mkdir()
-    entity_base = _minimal_entity(tmp_path)
+    agent_base = _minimal_agent(tmp_path)
 
     sid = "probe-child"
     init_session(
         session_id=sid,
-        entity_name="agent",
+        agent_name="agent",
         sessions_base=sessions_base,
         system_sessions_base=sys_base,
-        entity_base=entity_base,
+        agent_base=agent_base,
         initial_message="HELLO INITIAL",
         initial_message_id="probe-msg-id",
         parent_session_id="probe-parent",

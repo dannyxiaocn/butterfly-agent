@@ -18,7 +18,7 @@ from ui.cli.main import (
     cmd_start,
     cmd_log,
     cmd_tasks,
-    cmd_entity,
+    cmd_agent,
     _add_new_parser,
     _add_log_parser,
     _add_tasks_parser,
@@ -50,7 +50,7 @@ def make_args(**kwargs):
 def _seed_session(
     tmp_path: Path,
     session_id: str,
-    entity: str = "agent",
+    agent: str = "agent",
     status: str = "active",
     model_state: str = "idle",
 ) -> tuple[Path, Path]:
@@ -62,7 +62,7 @@ def _seed_session(
     (session_dir / "core").mkdir(parents=True)
     system_dir.mkdir(parents=True)
     (system_dir / "manifest.json").write_text(
-        json.dumps({"entity": entity, "created_at": "2026-03-25T10:00:00"}),
+        json.dumps({"agent": agent, "created_at": "2026-03-25T10:00:00"}),
         encoding="utf-8",
     )
     (system_dir / "status.json").write_text(
@@ -135,7 +135,7 @@ def test_cmd_sessions_table(tmp_path, capsys):
 
 
 def test_cmd_sessions_json(tmp_path, capsys):
-    _seed_session(tmp_path, "test-json", entity="kimi")
+    _seed_session(tmp_path, "test-json", agent="kimi")
     code = cmd_sessions(make_args(
         sessions_base=tmp_path / "sessions",
         system_base=tmp_path / "_sessions",
@@ -145,7 +145,7 @@ def test_cmd_sessions_json(tmp_path, capsys):
     data = json.loads(capsys.readouterr().out)
     assert isinstance(data, list)
     assert data[0]["id"] == "test-json"
-    assert data[0]["entity"] == "kimi"
+    assert data[0]["agent"] == "kimi"
 
 
 # ── cmd_new ───────────────────────────────────────────────────────────────────
@@ -155,7 +155,7 @@ def test_cmd_new_creates_session(tmp_path, capsys):
     import argparse
     args = argparse.Namespace(
         session_id="my-test-session",
-        entity="agent",
+        agent="agent",
         sessions_base=tmp_path / "sessions",
         system_base=tmp_path / "_sessions",
     )
@@ -170,7 +170,7 @@ def test_cmd_new_creates_session(tmp_path, capsys):
 def test_cmd_new_generates_id(tmp_path, capsys):
     args = argparse.Namespace(
         session_id=None,  # auto-generate
-        entity="agent",
+        agent="agent",
         sessions_base=tmp_path / "sessions",
         system_base=tmp_path / "_sessions",
     )
@@ -183,10 +183,10 @@ def test_cmd_new_generates_id(tmp_path, capsys):
     assert (tmp_path / "_sessions" / session_id / "manifest.json").exists()
 
 
-def test_cmd_new_bad_entity(tmp_path, capsys):
+def test_cmd_new_bad_agent(tmp_path, capsys):
     args = argparse.Namespace(
         session_id="x",
-        entity="nonexistent_entity_xyz",
+        agent="nonexistent_agent_xyz",
         sessions_base=tmp_path / "sessions",
         system_base=tmp_path / "_sessions",
     )
@@ -250,7 +250,7 @@ def test_cmd_log_defaults_to_non_meta_session_when_meta_is_first(tmp_path, capsy
     def _seed_context(session_id: str, reply: str) -> None:
         system_dir = system_base / session_id
         system_dir.mkdir()
-        (system_dir / "manifest.json").write_text(json.dumps({"entity": "agent"}), encoding="utf-8")
+        (system_dir / "manifest.json").write_text(json.dumps({"agent": "agent"}), encoding="utf-8")
         (system_dir / "context.jsonl").write_text(
             "\n".join(
                 [
@@ -295,23 +295,23 @@ def test_cmd_log_defaults_to_non_meta_session_when_meta_is_first(tmp_path, capsy
     assert "meta reply" not in out
 
 
-def test_cmd_entity_name_only_does_not_require_init_from_prompt(tmp_path, capsys):
+def test_cmd_agent_name_only_does_not_require_init_from_prompt(tmp_path, capsys):
     from argparse import Namespace
     from unittest.mock import patch
 
     created = tmp_path / "child"
     args = Namespace(
-        entity_cmd="new",
+        agent_cmd="new",
         name="child",
         blank=False,
-        entity_dir=str(tmp_path),
+        agent_dir=str(tmp_path),
     )
 
     with patch("ui.cli.new_agent._ask_init_from", side_effect=AssertionError("interactive prompt should not be used")), patch(
-        "ui.cli.new_agent.create_entity",
+        "ui.cli.new_agent.create_agent",
         return_value=created,
     ) as mock_create:
-        code = cmd_entity(args)
+        code = cmd_agent(args)
 
     assert code == 0
     mock_create.assert_called_once()
@@ -457,8 +457,8 @@ def test_cmd_tasks_defaults_to_non_meta_session(tmp_path, capsys):
     (sessions / "chat-session" / "core" / "tasks").mkdir(parents=True)
     (system / "agent_meta").mkdir(parents=True)
     (system / "chat-session").mkdir(parents=True)
-    (system / "agent_meta" / "manifest.json").write_text(json.dumps({"entity": "agent"}), encoding="utf-8")
-    (system / "chat-session" / "manifest.json").write_text(json.dumps({"entity": "agent"}), encoding="utf-8")
+    (system / "agent_meta" / "manifest.json").write_text(json.dumps({"agent": "agent"}), encoding="utf-8")
+    (system / "chat-session" / "manifest.json").write_text(json.dumps({"agent": "agent"}), encoding="utf-8")
     (sessions / "agent_meta" / "core" / "tasks" / "default.json").write_text(
         json.dumps({"name": "default", "description": "meta task", "status": "pending"}), encoding="utf-8")
     (sessions / "chat-session" / "core" / "tasks" / "real.json").write_text(
@@ -727,10 +727,10 @@ def test_cmd_new_inject_memory(tmp_path):
     sessions = tmp_path / "sessions"
     system = tmp_path / "_sessions"
 
-    assert (REPO_ROOT / "entity" / "agent").exists()
+    assert (REPO_ROOT / "agenthub" / "agent").exists()
     args = argparse.Namespace(
         session_id="inject-test",
-        entity="agent",
+        agent="agent",
         sessions_base=sessions,
         system_base=system,
         inject_memory=["mykey=myvalue", "other=content here"],

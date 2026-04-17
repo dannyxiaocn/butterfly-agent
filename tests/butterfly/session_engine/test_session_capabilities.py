@@ -59,11 +59,11 @@ def write_tool_files(tools_dir: Path, name: str, description: str = "", sh_body:
 
 def test_session_tool_added(tmp_path):
     """New JSON+SH in core/tools/ is picked up by _load_session_capabilities."""
-    @tool(description="entity tool")
-    def entity_tool() -> str:
-        return "entity"
+    @tool(description="agent tool")
+    def agent_tool() -> str:
+        return "agent_tool_result"
 
-    agent = Agent(system_prompt="Base", tools=[entity_tool], provider=MockProvider([]))
+    agent = Agent(system_prompt="Base", tools=[agent_tool], provider=MockProvider([]))
     session = make_session(tmp_path, agent)
 
     write_tool_files(session.core_dir / "tools", "my_new_tool")
@@ -281,10 +281,10 @@ def test_memory_updated_reflects_on_next_load(tmp_path):
 
 
 # ── Layered memory (core/memory/) removed in v2.0.5 ──────────────────────────
-# The `memory_layers` feature was replaced by on-demand `recall_memory` tool;
+# The `memory_layers` feature was replaced by on-demand `memory_recall` tool;
 # auto-injection of core/memory/*.md into the system prompt is gone.
-# See toolhub/recall_memory/ and tests/butterfly/tool_engine/test_toolhub.py
-# (TestRecallMemoryExecutor) for the new surface.
+# See toolhub/memory_recall/ and tests/butterfly/tool_engine/test_toolhub.py
+# (TestMemoryRecallExecutor) for the new surface.
 
 
 # ── Tool-provider override ────────────────────────────────────────────────────
@@ -418,4 +418,4 @@ async def test_task_compact_marker_recognized_by_reshape_history(tmp_path):
 
 # ── memory layer truncation (_render_memory_layer) removed in v2.0.5 ─────────
 # The inline-vs-truncated rendering logic for core/memory/*.md is gone.
-# Sub-memories are now fetched on demand via the recall_memory tool.
+# Sub-memories are now fetched on demand via the memory_recall tool.

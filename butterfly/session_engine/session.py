@@ -70,7 +70,7 @@ class Session:
     Disk layout:
         sessions/<id>/                ← agent-visible
           core/
-            system.md               ← system prompt (copied from entity at creation)
+            system.md               ← system prompt (copied from agent at creation)
             task.md                 ← task wakeup prompt
             env.md                  ← session paths + operational guide
             memory.md               ← persistent memory (auto-injected each activation)
@@ -84,7 +84,7 @@ class Session:
           playground/               ← agent's free workspace
 
         _sessions/<id>/             ← system-only twin (agent never sees this)
-          manifest.json             ← static: entity name, created_at
+          manifest.json             ← static: agent name, created_at
           status.json               ← dynamic runtime state
           context.jsonl             ← conversation history
           events.jsonl              ← runtime/UI events
@@ -211,7 +211,7 @@ class Session:
             parent_session_id=self._session_id,
             sessions_base=self._base_dir,
             system_sessions_base=self._system_base,
-            entity_base=self._base_dir.parent / "entity",
+            agent_base=self._base_dir.parent / "agenthub",
         ))
 
     # ── Capability loading ─────────────────────────────────────────
@@ -267,7 +267,7 @@ class Session:
         # v2.0.5 memory (β): sub-memory under core/memory/*.md is NO LONGER
         # injected into the system prompt. The agent discovers sub-memories via
         # one-line index entries in main memory.md and fetches them on demand
-        # via recall_memory. See docs/butterfly/session_engine/design.md.
+        # via memory_recall. See docs/butterfly/session_engine/design.md.
 
         # App notifications from core/apps/*.md (sorted, non-empty only)
         apps_dir = self.core_dir / "apps"
@@ -315,7 +315,7 @@ class Session:
                 parent_session_id=self._session_id,
                 sessions_base=self._base_dir,
                 system_sessions_base=self._system_base,
-                entity_base=self._base_dir.parent / "entity",
+                agent_base=self._base_dir.parent / "agenthub",
             )
             # Load tools from tools.md (toolhub), fallback to legacy tool.md
             tools_md_path = self.core_dir / "tools.md"
@@ -1392,15 +1392,15 @@ class Session:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         except Exception:
             return
-        entity_name = manifest.get("entity", "")
-        if not entity_name:
+        agent_name = manifest.get("agent", "")
+        if not agent_name:
             return
         # Skip the meta session itself
-        if self._session_id == f"{entity_name}_meta":
+        if self._session_id == f"{agent_name}_meta":
             return
         try:
-            from butterfly.session_engine.entity_state import get_meta_version
-            meta_version = get_meta_version(entity_name)
+            from butterfly.session_engine.agent_state import get_meta_version
+            meta_version = get_meta_version(agent_name)
         except Exception:
             return
         session_version = read_session_status(self.system_dir).get("agent_version")

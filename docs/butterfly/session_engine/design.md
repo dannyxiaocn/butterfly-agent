@@ -1,44 +1,44 @@
 # Session Engine — Design
 
-The session engine is the **bridge between static entity definitions and live runtime sessions**.
+The session engine is the **bridge between static agent definitions and live runtime sessions**.
 
 ## Responsibilities
 
-- Parse entity `config.yaml` manifests
-- Build `Agent` objects from fully self-contained entity directories
-- Manage meta sessions (entity → meta → child session lifecycle)
+- Parse agent `config.yaml` manifests
+- Build `Agent` objects from fully self-contained agent directories
+- Manage meta sessions (agent → meta → child session lifecycle)
 - Create session directory structures on disk
 - Wrap `Agent` with persistent, file-backed `Session` behavior
 - Track agent versions and notify stale sessions
 
 ## Key Concepts
 
-### Entity → Meta → Session Flow
+### Agent → Meta → Session Flow
 
 ```
-entity/<name>/          ← static template, version-controlled
-  → populate_meta_from_entity()  ← one-time seed at meta session creation
-    → sessions/<entity>_meta/   ← authoritative living config (evolves independently)
+agenthub/<name>/          ← static template, version-controlled
+  → populate_meta_from_agent()  ← one-time seed at meta session creation
+    → sessions/<agent>_meta/   ← authoritative living config (evolves independently)
       → init_session()           ← each new child session
         → sessions/<id>/         ← child session (seeded from meta, then independent)
 ```
 
 ### Meta Sessions
 
-Each entity has a meta session (`<entity>_meta`) that:
-- Holds the canonical, evolving config for all future child sessions of that entity
+Each agent has a meta session (`<agent>_meta`) that:
+- Holds the canonical, evolving config for all future child sessions of that agent
 - Acts as shared mutable state store (memory, playground)
 - Runs as a real persistent agent with "dream cycle" task schedule
 - Maintains `agent_version` in `core/config.yaml`
-- Syncs improvements back to `entity/` via PRs on the `mecam/entity-update` branch
+- Syncs improvements back to `agenthub/` via PRs on the `mecam/agent-update` branch
 
-### Entity Templates
+### Agent Templates
 
-`entity/<name>/` is a **static seed**, not a live config:
+`agenthub/<name>/` is a **static seed**, not a live config:
 - Used once to bootstrap the meta session
-- Each entity is fully self-contained — all prompts, tools, skills are physically present
+- Each agent is fully self-contained — all prompts, tools, skills are physically present
 - `init_from` in `config.yaml` documents provenance but has no runtime effect
-- New entities are created with `butterfly entity new --init-from <source>` (one-time copy) or `--blank`
+- New agents are created with `butterfly agent new --init-from <source>` (one-time copy) or `--blank`
 
 ### Version Staleness Notices
 
@@ -108,9 +108,9 @@ When the dispatcher folds multiple `user_input` events into one user message (th
 
 `_sessions/<id>/manifest.json` is what `SessionWatcher._scan()` checks to decide whether to spawn a `Session` task for a given session_id. Therefore:
 
-- **manifest.json MUST be written last** in `init_session()`, only after `sessions/<id>/core/config.yaml` (and any other required seed files) is fully populated from the entity/meta.
+- **manifest.json MUST be written last** in `init_session()`, only after `sessions/<id>/core/config.yaml` (and any other required seed files) is fully populated from the agenthub/meta.
 - If manifest.json is published early, the server-side watcher can race `init_session()` and spawn `Session(session_id)` whose `Session.__init__` calls `ensure_config(session_dir)` → that writes `DEFAULT_CONFIG` (with `model=None`, `provider=None`) into the session core before `init_session` gets a chance to copy the real config. Once the stub is on disk, the `if not session_config_path.exists()` guard inside `init_session()` would silently skip the copy, leaving the session permanently stuck on `model: null`.
-- As a belt-and-braces safeguard, `init_session()` also treats a config with `model` unset/null as "still needs seeding" rather than a finished session config. This way, even if a different code path writes a stub config first, the entity's model/provider still make it onto disk.
+- As a belt-and-braces safeguard, `init_session()` also treats a config with `model` unset/null as "still needs seeding" rather than a finished session config. This way, even if a different code path writes a stub config first, the agent's model/provider still make it onto disk.
 
 This invariant was added in v2.0.8 after a first-run repro: `butterfly-server` daemon + `butterfly new` would consistently produce `sessions/<id>/core/config.yaml` with `model: null`.
 
@@ -139,11 +139,11 @@ sessions/<id>/core/
 - repo_map: Cached map of key modules and their responsibilities
 ```
 
-The agent discovers available sub-memories by reading main memory (which is always in prompt). To access a sub-memory's full contents, the agent calls `recall_memory(name="dev_sop")`.
+The agent discovers available sub-memories by reading main memory (which is always in prompt). To access a sub-memory's full contents, the agent calls `memory_recall(name="dev_sop")`.
 
 ### Write path
 
-Sub-memory is edited exclusively via `update_memory(name, old_string, new_string, description?)`:
+Sub-memory is edited exclusively via `memory_update(name, old_string, new_string, description?)`:
 - Creates `core/memory/<name>.md` on first write, applying `new_string` as initial content.
 - On subsequent writes, behaves like `edit`: exact replacement with uniqueness enforcement.
 - Always upserts the index line `<name>: <description>` in main memory. On first-time creation, `description` is required.
@@ -160,7 +160,7 @@ Main `memory.md` itself is edited via `edit` / `write` like any other file — n
 
 - `Session._load_session_capabilities` stops populating `self._agent.memory_layers` from `core/memory/*.md`. The attribute is removed from the `Agent` class.
 - System-prompt assembly (in `Agent`) drops the `memory_layers` rendering block.
-- `recall_memory` and `update_memory` tool executors share a `memory_dir` + `main_memory_path` context injected by `ToolLoader`.
+- `memory_recall` and `memory_update` tool executors share a `memory_dir` + `main_memory_path` context injected by `ToolLoader`.
 
 ---
 
@@ -183,7 +183,7 @@ Main `memory.md` itself is edited via `edit` / `write` like any other file — n
 ```jsonc
 {
   "session_id": "2026-04-16_21-30-11-abcd",
-  "entity": "agent",
+  "agent": "agent",
   "created_at": "...",
   // present only on sub-agent children:
   "parent_session_id": "<parent id>",

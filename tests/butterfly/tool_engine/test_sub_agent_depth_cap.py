@@ -20,7 +20,7 @@ def _make_parent_manifest(sys_base: Path, sid: str, depth: int | None = None) ->
     d = sys_base / sid
     d.mkdir(parents=True)
     payload = {
-        "session_id": sid, "entity": "agent",
+        "session_id": sid, "agent": "agent",
         "created_at": datetime.now().isoformat(),
     }
     if depth is not None:
@@ -28,8 +28,8 @@ def _make_parent_manifest(sys_base: Path, sid: str, depth: int | None = None) ->
     (d / "manifest.json").write_text(json.dumps(payload), encoding="utf-8")
 
 
-def _entity_base(tmp_path: Path) -> Path:
-    base = tmp_path / "entity"
+def _agent_base(tmp_path: Path) -> Path:
+    base = tmp_path / "agenthub"
     ag = base / "agent"
     ag.mkdir(parents=True)
     (ag / "config.yaml").write_text("name: agent\nmodel: test\nprovider: anthropic\n", encoding="utf-8")
@@ -45,14 +45,14 @@ def test_spawn_increments_depth_in_child_manifest(tmp_path: Path) -> None:
     sys_base = tmp_path / "_sessions"
     sessions_base.mkdir()
     sys_base.mkdir()
-    entity_base = _entity_base(tmp_path)
+    agent_base = _agent_base(tmp_path)
 
     _make_parent_manifest(sys_base, "top-parent")  # depth=0 (omitted)
-    child_id, _msg, _ent = _spawn_child(
+    child_id, _msg, _agt = _spawn_child(
         parent_session_id="top-parent", mode="explorer", task="x",
         sessions_base=sessions_base,
         system_sessions_base=sys_base,
-        entity_base=entity_base,
+        agent_base=agent_base,
     )
     child_manifest = json.loads((sys_base / child_id / "manifest.json").read_text(encoding="utf-8"))
     assert child_manifest["sub_agent_depth"] == 1
@@ -63,7 +63,7 @@ def test_spawn_refuses_when_parent_at_max_depth(tmp_path: Path) -> None:
     sys_base = tmp_path / "_sessions"
     sessions_base.mkdir()
     sys_base.mkdir()
-    entity_base = _entity_base(tmp_path)
+    agent_base = _agent_base(tmp_path)
 
     _make_parent_manifest(sys_base, "deep-parent", depth=_MAX_SUB_AGENT_DEPTH)
     with pytest.raises(RuntimeError, match="depth"):
@@ -71,5 +71,5 @@ def test_spawn_refuses_when_parent_at_max_depth(tmp_path: Path) -> None:
             parent_session_id="deep-parent", mode="explorer", task="x",
             sessions_base=sessions_base,
             system_sessions_base=sys_base,
-            entity_base=entity_base,
+            agent_base=agent_base,
         )

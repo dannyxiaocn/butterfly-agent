@@ -58,7 +58,7 @@ def get_session(session_id: str, sessions_dir: Path, system_sessions_dir: Path) 
     status = status_payload.get("status", "active")
     return {
         "id": session_id,
-        "entity": manifest.get("entity", "?"),
+        "agent": manifest.get("agent", "?"),
         "created_at": manifest.get("created_at", ""),
         "pid_alive": pid_alive,
         "status": status,
@@ -110,28 +110,28 @@ def list_sessions(sessions_dir: Path, system_sessions_dir: Path, exclude_meta: b
     return sort_sessions(result)
 
 
-def create_session(session_id: str, entity: str, sessions_dir: Path, system_sessions_dir: Path) -> dict:
+def create_session(session_id: str, agent: str, sessions_dir: Path, system_sessions_dir: Path) -> dict:
     """Create a new session."""
     _validate_session_id(session_id)
     from butterfly.session_engine.session_init import init_session
-    entity_path = Path(entity)
-    if len(entity_path.parts) >= 2 and entity_path.parts[0] == "entity":
-        entity_name = str(Path(*entity_path.parts[1:]))
-        entity_base = sessions_dir.parent / "entity"
-    elif entity_path.is_absolute() or entity_path.parent != Path('.'):
-        entity_name = entity_path.name
-        entity_base = entity_path.parent.resolve() if not entity_path.is_absolute() else entity_path.parent
+    agent_path = Path(agent)
+    if len(agent_path.parts) >= 2 and agent_path.parts[0] == "agenthub":
+        agent_name = str(Path(*agent_path.parts[1:]))
+        agent_base = sessions_dir.parent / "agenthub"
+    elif agent_path.is_absolute() or agent_path.parent != Path('.'):
+        agent_name = agent_path.name
+        agent_base = agent_path.parent.resolve() if not agent_path.is_absolute() else agent_path.parent
     else:
-        entity_name = entity
-        entity_base = sessions_dir.parent / "entity"
+        agent_name = agent
+        agent_base = sessions_dir.parent / "agenthub"
     init_session(
         session_id=session_id,
-        entity_name=entity_name,
+        agent_name=agent_name,
         sessions_base=sessions_dir,
         system_sessions_base=system_sessions_dir,
-        entity_base=entity_base,
+        agent_base=agent_base,
     )
-    return {"id": session_id, "entity": entity}
+    return {"id": session_id, "agent": agent}
 
 
 def delete_session(session_id: str, sessions_dir: Path, system_sessions_dir: Path) -> bool:

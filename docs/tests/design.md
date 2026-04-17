@@ -1,6 +1,6 @@
 # Tests — Design
 
-Automated coverage for the butterfly runtime, providers, CLI, entities, and tool system. Tests mirror the source code directory structure for natural discoverability.
+Automated coverage for the butterfly runtime, providers, CLI, agents, and tool system. Tests mirror the source code directory structure for natural discoverability.
 
 ## Layout
 
@@ -14,7 +14,7 @@ tests/
     session_engine/      session lifecycle, task cards, venv tests
     skill_engine/        skill loader and renderer tests
     tool_engine/         tool loader, executor, bash/skill tool tests
-  entity/                entity manifest and docs contract tests
+  agenthub/                agent manifest and docs contract tests
   ui/                    mirrors ui/ source tree
     cli/                 CLI command and helper tests
     web/                 web app and helper tests

@@ -1,4 +1,4 @@
-"""Tests for toolhub tools: recall_memory, web_search, and ToolLoader toolhub integration.
+"""Tests for toolhub tools: memory_recall, web_search, and ToolLoader toolhub integration.
 
 The unified `manage_task` executor was replaced in v2.0.5 by per-verb toolhub
 modules (task_create/task_update/task_list/task_pause/task_resume/task_finish);
@@ -17,18 +17,18 @@ from butterfly.tool_engine.loader import (
 )
 
 
-# ── recall_memory executor ───────────────────────────────────────────────────
+# ── memory_recall executor ───────────────────────────────────────────────────
 
 
-class TestRecallMemoryExecutor:
+class TestMemoryRecallExecutor:
     @pytest.fixture
     def executor(self, tmp_path):
-        from toolhub.recall_memory.executor import RecallMemoryExecutor
+        from toolhub.memory_recall.executor import MemoryRecallExecutor
         memory_dir = tmp_path / "memory"
         memory_dir.mkdir()
         (memory_dir / "facts.md").write_text("Important fact 1\nFact 2")
         (memory_dir / "empty.md").write_text("")
-        return RecallMemoryExecutor(memory_dir=memory_dir)
+        return MemoryRecallExecutor(memory_dir=memory_dir)
 
     @pytest.mark.asyncio
     async def test_list_layers(self, executor):
@@ -56,8 +56,8 @@ class TestRecallMemoryExecutor:
 
     @pytest.mark.asyncio
     async def test_no_memory_dir_error(self):
-        from toolhub.recall_memory.executor import RecallMemoryExecutor
-        executor = RecallMemoryExecutor(memory_dir=None)
+        from toolhub.memory_recall.executor import MemoryRecallExecutor
+        executor = MemoryRecallExecutor(memory_dir=None)
         result = await executor.execute()
         assert "not configured" in result
 
@@ -68,7 +68,7 @@ class TestRecallMemoryExecutor:
 
     def test_schema_allows_empty_name_for_listing(self):
         """tool.json must not require 'name' so the LLM can list layers."""
-        schema = _load_tool_schema("recall_memory")
+        schema = _load_tool_schema("memory_recall")
         assert schema is not None
         required = schema.get("input_schema", {}).get("required", [])
         assert "name" not in required

@@ -139,7 +139,7 @@ def _make_args(tmp_path, since=None, watch=False, num_turns=5, session_id="test-
     sess_dir = system_base / session_id
     sess_dir.mkdir()
     # Write a minimal manifest
-    (sess_dir / "manifest.json").write_text(json.dumps({"entity": "agent"}))
+    (sess_dir / "manifest.json").write_text(json.dumps({"agent": "agent"}))
 
     return types.SimpleNamespace(
         session_id=session_id,

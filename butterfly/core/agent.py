@@ -131,7 +131,7 @@ class Agent:
 
         dynamic_parts: list[str] = []
         # v2.0.5 memory (β): only the main memory.md is injected. Sub-memory
-        # layers under core/memory/*.md are fetched on demand via recall_memory.
+        # layers under core/memory/*.md are fetched on demand via memory_recall.
         if self.memory:
             dynamic_parts.append(
                 "\n\n---\n## Session Memory\n\n" + self.memory

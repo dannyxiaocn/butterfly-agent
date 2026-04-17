@@ -17,8 +17,10 @@ toolhub/
 ├── bash/          — BashExecutor (subprocess + PTY modes)
 ├── web_search/    — WebSearchExecutor → delegates to brave.py or tavily.py
 ├── skill/         — SkillExecutor (load + render SKILL.md)
-├── manage_task/   — ManageTaskExecutor (create/update/pause/resume/finish/list task cards)
-└── recall_memory/ — RecallMemoryExecutor (read memory layer files)
+├── task_create/, task_update/, task_finish/, task_pause/, task_resume/, task_list/
+│                  — Per-verb task card tools (replaced the unified `manage_task` in v2.0.5)
+├── memory_recall/ — MemoryRecallExecutor (read memory layer files)
+└── memory_update/ — MemoryUpdateExecutor (append/overwrite memory files)
 ```
 
 Each tool: `tool.json` (schema) + `executor.py` (implementation).
@@ -39,7 +41,7 @@ Session._load_session_capabilities()
 
 | Source | Example | How It Runs |
 |--------|---------|-------------|
-| ToolHub | `bash`, `manage_task`, `recall_memory` | Python executor with context injection |
+| ToolHub | `bash`, `task_create`, `memory_recall` | Python executor with context injection |
 | Session tool | `core/tools/foo.json` + `foo.sh` | `ShellExecutor` via stdin/stdout |
 | Injected | `reload_capabilities` | Created directly by `Session` |
 
@@ -68,8 +70,8 @@ tools = loader.load_from_tool_md(Path("core/tool.md"))
 - `bash` runs from the session directory by default; agent can override with `workdir`
 - `bash` auto-activates session `.venv` when `BUTTERFLY_SESSION_ID` is set
 - `web_search` backend switchable via `config.yaml` → `tool_providers.web_search`
-- `manage_task` actions: `create`, `update`, `pause`, `resume`, `finish`, `list`; `pause` is user-initiated stop, `resume` returns to `pending`
-- `manage_task` and `recall_memory` have path traversal protection
+- Task tools split by verb: `task_create`, `task_update`, `task_pause`, `task_resume`, `task_finish`, `task_list`; `task_pause` is user-initiated stop, `task_resume` returns to `pending`
+- Task tools and `memory_recall`/`memory_update` have path traversal protection
 
 ## v2.0.13 — Sub-agent + generalized background runners
 
@@ -91,7 +93,7 @@ tools = loader.load_from_tool_md(Path("core/tool.md"))
 - `toolhub/sub_agent/executor.py` re-exports the canonical classes so the
   `ToolLoader`'s conventional discovery path keeps working.
 - `ToolLoader` gained `guardian` + `parent_session_id` + `sessions_base` +
-  `system_sessions_base` + `entity_base` kwargs so Write/Edit/Bash receive the
+  `system_sessions_base` + `agent_base` kwargs so Write/Edit/Bash receive the
   `Guardian` boundary and `SubAgentTool` receives the base paths it needs to
   call `init_session`.
 - `butterfly/core/guardian.py` — `Guardian.check_write(path)` raises

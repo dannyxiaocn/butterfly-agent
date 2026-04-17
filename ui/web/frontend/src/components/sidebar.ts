@@ -44,7 +44,7 @@ export function createSidebar(): HTMLElement {
       const pulseClass = isRunning ? ' running-pulse' : '';
       const dotPulse = tone === 'running' ? ' pulse' : '';
       const childClass = depth > 0 ? ' child' : '';
-      const entityLabel = s.entity.replace(/^entity\//, '');
+      const agentLabel = s.agent.replace(/^agenthub\//, '');
       const isWeixinLinked = s.id === weixinSession;
       const dotHtml = isWeixinLinked
         ? `<span class="session-dot weixin-dot" title="WeChat linked">⇄</span>`
@@ -56,12 +56,12 @@ export function createSidebar(): HTMLElement {
         ? `<span class="session-indent" aria-hidden="true">↳</span>`
         : '';
       const own = `
-        <div class="session-item${active}${pulseClass}${childClass}" data-id="${escHtml(s.id)}" data-depth="${depth}" title="${escHtml(s.id)} · ${escHtml(s.entity)}">
+        <div class="session-item${active}${pulseClass}${childClass}" data-id="${escHtml(s.id)}" data-depth="${depth}" title="${escHtml(s.id)} · ${escHtml(s.agent)}">
           ${indent}
           ${dotHtml}
           <span class="session-item-info">
             <span class="session-item-name">${escHtml(s.id)}${modeChip}</span>
-            <span class="session-item-entity">${escHtml(entityLabel)}</span>
+            <span class="session-item-agent">${escHtml(agentLabel)}</span>
           </span>
         </div>
       `;
@@ -92,8 +92,8 @@ export function createSidebar(): HTMLElement {
           <input id="ns-id" type="text" placeholder="my-session (optional)" />
         </div>
         <div class="form-field">
-          <label>Entity</label>
-          <input id="ns-entity" type="text" value="entity/agent" />
+          <label>Agent</label>
+          <input id="ns-agent" type="text" value="agenthub/agent" />
         </div>
         <div class="form-row">
           <button class="btn-sm btn-primary" id="ns-create">Create</button>
@@ -115,9 +115,9 @@ export function createSidebar(): HTMLElement {
 
     el.querySelector('#ns-create')?.addEventListener('click', async () => {
       const idEl = el.querySelector('#ns-id') as HTMLInputElement;
-      const entityEl = el.querySelector('#ns-entity') as HTMLInputElement;
-      const body: { id?: string; entity: string } = {
-        entity: entityEl.value.trim() || 'entity/agent',
+      const agentEl = el.querySelector('#ns-agent') as HTMLInputElement;
+      const body: { id?: string; agent: string } = {
+        agent: agentEl.value.trim() || 'agenthub/agent',
       };
       if (idEl.value.trim()) body.id = idEl.value.trim();
       try {

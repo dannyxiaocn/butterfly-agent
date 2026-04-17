@@ -131,14 +131,6 @@ def test_main_status_subcommand():
                 m.assert_called_once()
 
 
-def test_main_update_subcommand():
-    with mock.patch("sys.argv", ["butterfly-server", "update"]):
-        with mock.patch("butterfly.runtime.server._cmd_update", return_value=0) as m:
-            with mock.patch("sys.exit"):
-                main()
-                m.assert_called_once()
-
-
 def test_main_foreground_flag_without_subcommand():
     """butterfly-server --foreground should call _cmd_start with foreground=True."""
     with mock.patch("sys.argv", ["butterfly-server", "--foreground"]):

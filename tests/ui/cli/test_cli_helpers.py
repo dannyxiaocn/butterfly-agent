@@ -6,7 +6,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from ui.cli.main import _parse_inject_memory, _write_inject_memory
-from ui.cli.new_agent import create_entity
+from ui.cli.new_agent import create_agent
 
 
 class CliHelpersTest(unittest.TestCase):
@@ -26,23 +26,23 @@ class CliHelpersTest(unittest.TestCase):
                 "value",
             )
 
-    def test_create_entity_scaffolds_blank_and_init_from_layouts(self) -> None:
+    def test_create_agent_scaffolds_blank_and_init_from_layouts(self) -> None:
         with TemporaryDirectory() as tmp:
-            entity_root = Path(tmp) / "entity"
-            (entity_root / "agent" / "prompts").mkdir(parents=True)
-            (entity_root / "agent" / "tools").mkdir()
-            (entity_root / "agent" / "config.yaml").write_text("name: agent\n", encoding="utf-8")
-            (entity_root / "agent" / "prompts" / "system.md").write_text("sys", encoding="utf-8")
-            (entity_root / "agent" / "prompts" / "task.md").write_text("beat", encoding="utf-8")
-            (entity_root / "agent" / "prompts" / "env.md").write_text("sess", encoding="utf-8")
-            (entity_root / "agent" / "tools" / "bash.json").write_text('{"name":"bash"}', encoding="utf-8")
-            (entity_root / "agent" / "tools" / "web_search.json").write_text('{"name":"web_search"}', encoding="utf-8")
-            blank = create_entity("blank", entity_root, None)
-            child = create_entity("child", entity_root, "agent")
-            # Blank entity: empty prompt placeholders, no tools
+            agent_root = Path(tmp) / "agenthub"
+            (agent_root / "agent" / "prompts").mkdir(parents=True)
+            (agent_root / "agent" / "tools").mkdir()
+            (agent_root / "agent" / "config.yaml").write_text("name: agent\n", encoding="utf-8")
+            (agent_root / "agent" / "prompts" / "system.md").write_text("sys", encoding="utf-8")
+            (agent_root / "agent" / "prompts" / "task.md").write_text("beat", encoding="utf-8")
+            (agent_root / "agent" / "prompts" / "env.md").write_text("sess", encoding="utf-8")
+            (agent_root / "agent" / "tools" / "bash.json").write_text('{"name":"bash"}', encoding="utf-8")
+            (agent_root / "agent" / "tools" / "web_search.json").write_text('{"name":"web_search"}', encoding="utf-8")
+            blank = create_agent("blank", agent_root, None)
+            child = create_agent("child", agent_root, "agent")
+            # Blank agent: empty prompt placeholders, no tools
             self.assertTrue((blank / "prompts" / "system.md").exists())
             self.assertFalse((blank / "tools" / "bash.json").exists())
-            # init_from entity: all files copied from source
+            # init_from agent: all files copied from source
             self.assertTrue((child / "tools" / "bash.json").exists())
             self.assertTrue((child / "tools" / "web_search.json").exists())
             self.assertEqual((child / "prompts" / "system.md").read_text(), "sys")

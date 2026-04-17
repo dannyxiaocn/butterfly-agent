@@ -12,7 +12,7 @@ from typing import Any
 
 # Curated list of providers and their most common models.
 # default_model mirrors each provider's DEFAULT_MODEL / documented default.
-# Model strings here match the CLI and entity/<name>/config.yaml literals.
+# Model strings here match the CLI and agenthub/<name>/config.yaml literals.
 # Effort vocabularies differ by provider. `xhigh` is codex-only — sending it
 # to openai-responses 400s at agent-start. We expose each provider's supported
 # list so the web UI can render a filtered dropdown (PR #24 review item 7/13).

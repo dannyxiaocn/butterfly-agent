@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from butterfly.core.agent import Agent
 from butterfly.runtime.ipc import FileIPC
-from butterfly.session_engine.entity_config import AgentConfig
+from butterfly.session_engine.agent_config import AgentConfig
 from butterfly.session_engine.session_init import init_session
 from butterfly.session_engine.session_config import read_config, write_config
 from butterfly.session_engine.session import Session
@@ -21,23 +21,23 @@ from butterfly.session_engine.session_status import ensure_session_status, read_
 class SessionEngineTest(unittest.TestCase):
     def test_agent_config_reads_manifest_fields(self) -> None:
         with TemporaryDirectory() as tmp:
-            entity_dir = Path(tmp) / "demo"
-            entity_dir.mkdir()
-            (entity_dir / "config.yaml").write_text(
+            agent_dir = Path(tmp) / "demo"
+            agent_dir.mkdir()
+            (agent_dir / "config.yaml").write_text(
                 "name: demo\nmodel: claude-sonnet-4-6\nprovider: anthropic\n",
                 encoding="utf-8",
             )
-            config = AgentConfig.from_path(entity_dir)
+            config = AgentConfig.from_path(agent_dir)
         self.assertEqual(config.manifest["name"], "demo")
         self.assertEqual(config.manifest["model"], "claude-sonnet-4-6")
 
     def test_agent_config_requires_config_yaml(self) -> None:
         """AgentConfig raises FileNotFoundError when config.yaml is absent."""
         with TemporaryDirectory() as tmp:
-            entity_dir = Path(tmp) / "demo"
-            entity_dir.mkdir()
+            agent_dir = Path(tmp) / "demo"
+            agent_dir.mkdir()
             with self.assertRaises(FileNotFoundError):
-                AgentConfig.from_path(entity_dir)
+                AgentConfig.from_path(agent_dir)
 
     def test_session_config_read_write_roundtrip(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -71,18 +71,18 @@ class SessionEngineTest(unittest.TestCase):
             root = Path(tmp)
             sessions_base = root / "sessions"
             system_base = root / "_sessions"
-            entity_base = root / "entity"
-            entity_dir = entity_base / "demo"
+            agent_base = root / "agenthub"
+            agent_dir = agent_base / "demo"
             meta_dir = sessions_base / "demo_meta"
 
-            (entity_dir / "prompts").mkdir(parents=True)
-            (entity_dir / "config.yaml").write_text(
+            (agent_dir / "prompts").mkdir(parents=True)
+            (agent_dir / "config.yaml").write_text(
                 "name: demo\nprovider: anthropic\nmodel: claude-sonnet-4-6\n",
                 encoding="utf-8",
             )
-            (entity_dir / "prompts" / "system.md").write_text("sys", encoding="utf-8")
-            (entity_dir / "prompts" / "task.md").write_text("task", encoding="utf-8")
-            (entity_dir / "prompts" / "env.md").write_text("env", encoding="utf-8")
+            (agent_dir / "prompts" / "system.md").write_text("sys", encoding="utf-8")
+            (agent_dir / "prompts" / "task.md").write_text("task", encoding="utf-8")
+            (agent_dir / "prompts" / "env.md").write_text("env", encoding="utf-8")
 
             (meta_dir / "core" / "memory").mkdir(parents=True)
             (meta_dir / "playground").mkdir(parents=True)
@@ -110,13 +110,13 @@ class SessionEngineTest(unittest.TestCase):
                 "butterfly.session_engine.session_init.ensure_gene_initialized"
             ), patch(
                 "butterfly.session_engine.session_init.start_meta_agent"
-            ), patch("butterfly.session_engine.session_init.sync_from_entity"):
+            ), patch("butterfly.session_engine.session_init.sync_from_agent"):
                 init_session(
                     "s1",
                     "demo",
                     sessions_base=sessions_base,
                     system_sessions_base=system_base,
-                    entity_base=entity_base,
+                    agent_base=agent_base,
                 )
 
             core_dir = sessions_base / "s1" / "core"

@@ -36,7 +36,7 @@ from butterfly.tool_engine.background import BackgroundContext, BackgroundEvent
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 _DEFAULT_SESSIONS_BASE = _REPO_ROOT / "sessions"
 _DEFAULT_SYSTEM_SESSIONS_BASE = _REPO_ROOT / "_sessions"
-_DEFAULT_ENTITY_BASE = _REPO_ROOT / "entity"
+_DEFAULT_AGENT_BASE = _REPO_ROOT / "agenthub"
 
 _VALID_MODES = ("explorer", "executor")
 _DEFAULT_TIMEOUT_SECONDS = 600
@@ -77,8 +77,8 @@ def _read_parent_manifest(parent_session_id: str, sys_base: Path) -> dict:
         return {}
 
 
-def _read_parent_entity(parent_session_id: str, sys_base: Path) -> str:
-    return _read_parent_manifest(parent_session_id, sys_base).get("entity", "")
+def _read_parent_agent(parent_session_id: str, sys_base: Path) -> str:
+    return _read_parent_manifest(parent_session_id, sys_base).get("agent", "")
 
 
 def _parent_sub_agent_depth(parent_session_id: str, sys_base: Path) -> int:
@@ -108,19 +108,19 @@ def _spawn_child(
     task: str,
     sessions_base: Path,
     system_sessions_base: Path,
-    entity_base: Path,
+    agent_base: Path,
 ) -> tuple[str, str, str]:
-    """Create the child session on disk. Returns ``(child_id, msg_id, entity_name)``.
+    """Create the child session on disk. Returns ``(child_id, msg_id, agent_name)``.
 
     Raises ``RuntimeError`` when the parent has already reached
     ``_MAX_SUB_AGENT_DEPTH`` — otherwise a runaway executor chain could
     fork sessions unbounded.
     """
     parent_manifest = _read_parent_manifest(parent_session_id, system_sessions_base)
-    entity_name = parent_manifest.get("entity", "")
-    if not entity_name:
+    agent_name = parent_manifest.get("agent", "")
+    if not agent_name:
         raise RuntimeError(
-            f"sub_agent: cannot read parent entity from {parent_session_id}/manifest.json"
+            f"sub_agent: cannot read parent agent from {parent_session_id}/manifest.json"
         )
     try:
         parent_depth = int(parent_manifest.get("sub_agent_depth", 0))
@@ -136,17 +136,17 @@ def _spawn_child(
     msg_id = str(uuid.uuid4())
     init_session(
         session_id=child_id,
-        entity_name=entity_name,
+        agent_name=agent_name,
         sessions_base=sessions_base,
         system_sessions_base=system_sessions_base,
-        entity_base=entity_base,
+        agent_base=agent_base,
         initial_message=_compose_initial_message(task, mode),
         initial_message_id=msg_id,
         parent_session_id=parent_session_id,
         mode=mode,
         sub_agent_depth=parent_depth + 1,
     )
-    return child_id, msg_id, entity_name
+    return child_id, msg_id, agent_name
 
 
 async def _wait_for_reply(
@@ -189,14 +189,14 @@ class SubAgentTool:
         parent_session_id: str | None = None,
         sessions_base: Path | None = None,
         system_sessions_base: Path | None = None,
-        entity_base: Path | None = None,
+        agent_base: Path | None = None,
     ) -> None:
         self._parent_session_id = parent_session_id
         self._sessions_base = Path(sessions_base) if sessions_base else _DEFAULT_SESSIONS_BASE
         self._system_sessions_base = (
             Path(system_sessions_base) if system_sessions_base else _DEFAULT_SYSTEM_SESSIONS_BASE
         )
-        self._entity_base = Path(entity_base) if entity_base else _DEFAULT_ENTITY_BASE
+        self._agent_base = Path(agent_base) if agent_base else _DEFAULT_AGENT_BASE
 
     async def execute(self, **kwargs: Any) -> str:
         if not self._parent_session_id:
@@ -218,13 +218,13 @@ class SubAgentTool:
             float(_MIN_TIMEOUT_SECONDS),
         )
         try:
-            child_id, msg_id, _entity = _spawn_child(
+            child_id, msg_id, _agent = _spawn_child(
                 parent_session_id=self._parent_session_id,
                 mode=mode,
                 task=task,
                 sessions_base=self._sessions_base,
                 system_sessions_base=self._system_sessions_base,
-                entity_base=self._entity_base,
+                agent_base=self._agent_base,
             )
         except Exception as exc:  # noqa: BLE001 — surface spawn failures cleanly
             return f"Error: sub_agent spawn failed: {exc}"
@@ -258,12 +258,12 @@ class SubAgentRunner:
         parent_session_id: str,
         sessions_base: Path,
         system_sessions_base: Path,
-        entity_base: Path,
+        agent_base: Path,
     ) -> None:
         self._parent_session_id = parent_session_id
         self._sessions_base = Path(sessions_base)
         self._system_sessions_base = Path(system_sessions_base)
-        self._entity_base = Path(entity_base)
+        self._agent_base = Path(agent_base)
 
     def validate(self, input: dict[str, Any]) -> None:
         if not input.get("task"):
@@ -285,13 +285,13 @@ class SubAgentRunner:
             float(_MIN_TIMEOUT_SECONDS),
         )
         try:
-            child_id, msg_id, entity_name = _spawn_child(
+            child_id, msg_id, agent_name = _spawn_child(
                 parent_session_id=self._parent_session_id,
                 mode=mode,
                 task=task,
                 sessions_base=self._sessions_base,
                 system_sessions_base=self._system_sessions_base,
-                entity_base=self._entity_base,
+                agent_base=self._agent_base,
             )
         except Exception as exc:  # noqa: BLE001
             entry.meta = {**(entry.meta or {}), "error": str(exc)}
@@ -302,7 +302,7 @@ class SubAgentRunner:
             **(entry.meta or {}),
             "child_session_id": child_id,
             "mode": mode,
-            "entity": entity_name,
+            "agent": agent_name,
             "timeout_seconds": timeout,
         }
         ctx.save_entry(entry)

@@ -5,7 +5,7 @@ Reads token from ~/.openclaw/openclaw-weixin/accounts/ (requires OpenClaw QR log
 Runs as an asyncio background task alongside the FastAPI web server.
 
 Supported WeChat commands (send as message text):
-  /new [entity]   — create a new session and make it active
+  /new [agent]    — create a new session and make it active
   /stop           — stop current session
   /start          — resume current session
   /switch <id>    — switch active session
@@ -235,13 +235,13 @@ class WeixinBridge:
         arg = parts[1].strip() if len(parts) > 1 else ""
 
         if cmd == "/new":
-            entity = arg or "entity/agent"
+            agent = arg or "agenthub/agent"
             sid = datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + "-" + uuid.uuid4().hex[:4]
             try:
                 from butterfly.service.sessions_service import create_session as _create_session
-                _create_session(sid, entity, sessions_dir=self._sessions_dir, system_sessions_dir=self._sys_dir)
+                _create_session(sid, agent, sessions_dir=self._sessions_dir, system_sessions_dir=self._sys_dir)
                 self._current_session = sid
-                reply = f"✅ 新 session 已创建: {sid}\nEntity: {entity}"
+                reply = f"✅ 新 session 已创建: {sid}\nAgent: {agent}"
             except Exception as exc:
                 reply = f"⚠️ 创建失败: {exc}"
 
@@ -295,7 +295,7 @@ class WeixinBridge:
             reply = (
                 f"未知命令: {cmd}\n"
                 "可用命令:\n"
-                "  /new [entity]   — 新建 session\n"
+                "  /new [agent]    — 新建 session\n"
                 "  /stop           — 暂停当前 session\n"
                 "  /start          — 恢复当前 session\n"
                 "  /switch <id>    — 切换 session\n"

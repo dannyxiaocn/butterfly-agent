@@ -15,8 +15,10 @@ butterfly codex login
 #   prompts for your API key, writes it to .env (chmod 0600), and validates.
 butterfly kimi login
 
-butterfly-server                # auto-daemonizes
+butterfly                       # start server + web UI; print URL; hang
 butterfly chat "hello"          # auto-starts server if needed
+butterfly server                # tail the running server's log
+butterfly update                # git pull + pip install + rebuild + restart
 ```
 
 Both login commands are idempotent and print step-by-step tutorials if any
@@ -26,7 +28,7 @@ dependency is missing (e.g. the `codex` CLI isn't on PATH yet).
 
 One skill carries the full guide — load it inside Claude Code / Butterfly when you need it:
 
-- **`butterfly`** — unified guide covering CLI usage (run agents, manage sessions, create entities) and codebase development (runtime, providers, tool/skill engine, etc.)
+- **`butterfly`** — unified guide covering CLI usage (run agents, manage sessions, create agents) and codebase development (runtime, providers, tool/skill engine, etc.)
 
 ## Documentation
 
@@ -41,5 +43,5 @@ Everything else lives in [`docs/`](docs/), mirroring the source tree. Each compo
 Start here:
 
 - [`docs/butterfly/design.md`](docs/butterfly/design.md) — runtime architecture
-- [`docs/entity/design.md`](docs/entity/design.md) — entity template system
+- [`docs/agent/design.md`](docs/agent/design.md) — agent template system
 - [`docs/ui/design.md`](docs/ui/design.md) — CLI and Web frontends

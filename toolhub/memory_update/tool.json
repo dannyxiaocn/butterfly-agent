@@ -1,0 +1,30 @@
+{
+  "name": "memory_update",
+  "description": "Edit a sub-memory file under core/memory/<name>.md, and in the same operation upsert a one-line index entry in the main memory.md so future sessions can discover it. On first-time creation of a sub-memory, `description` is REQUIRED (it becomes the index line); on subsequent edits of an existing sub-memory, `description` is optional (omit to leave the index line alone). For brand-new sub-memory files, pass an empty `old_string` and put the full initial content in `new_string`.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "name": {
+        "type": "string",
+        "description": "Sub-memory file stem (e.g. 'dev_sop'). Maps to core/memory/<name>.md."
+      },
+      "old_string": {
+        "type": "string",
+        "description": "Exact string to replace. Must be unique in the file (unless replace_all=true). Pass '' to create a new file initialized with new_string."
+      },
+      "new_string": {
+        "type": "string",
+        "description": "Replacement text."
+      },
+      "replace_all": {
+        "type": "boolean",
+        "description": "If true, replace every occurrence of old_string. Default false."
+      },
+      "description": {
+        "type": "string",
+        "description": "Required for first-time creation of <name>. Optional for edits. Becomes the index line: '- <name>: <description>' under the '## Memory files' section of main memory.md."
+      }
+    },
+    "required": ["name", "old_string", "new_string"]
+  }
+}

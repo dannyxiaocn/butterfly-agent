@@ -6,22 +6,23 @@
 |------|---------|
 | `main.py` | Subcommand registration and top-level orchestration |
 | `chat.py` | Single-shot chat helper for `butterfly chat` |
-| `new_agent.py` | Entity scaffolding (`butterfly entity new`) |
+| `new_agent.py` | Agent scaffolding (`butterfly agent new`) |
 
 ## Available Commands
 
 ```bash
+butterfly                               # boot server + web UI; print URL; hang
 butterfly chat MESSAGE                  # new session + send message
 butterfly chat --session ID MSG         # send to existing session
-butterfly new [ID] [--entity NAME]      # create session (no message)
+butterfly new [ID] [--agent NAME]       # create session (no message)
 butterfly sessions                      # list sessions
 butterfly log [ID] [-n N] [--watch]     # conversation history
 butterfly tasks [ID]                    # session task board
 butterfly stop ID                       # stop session
 butterfly start ID                      # resume session
-butterfly entity new ...                # scaffold a new entity
-butterfly server                        # start the server daemon
-butterfly web                           # start the web UI
+butterfly agent new ...                 # scaffold a new agent
+butterfly server                        # tail the running server's log (read-only)
+butterfly update [--skip-frontend]      # git pull + pip install + rebuild web + restart
 
 # Auth helpers (v2.0.13+)
 butterfly codex login                   # device-code OAuth → ~/.butterfly/auth.json
@@ -37,15 +38,14 @@ butterfly kimi login --env-file PATH    # write to a specific .env file
 
 `butterfly chat` and `butterfly new` automatically start the server daemon if it is not already running. The `_ensure_server_running()` helper checks via `_is_server_running()` and calls `_start_daemon()` if needed, passing through any custom `sessions_dir` and `system_sessions_dir` from CLI args.
 
-## Server Management (butterfly-server)
+## Server Lifecycle (unified CLI, v2.0.16)
 
-```bash
-butterfly-server                # start (auto-daemonize)
-butterfly-server start          # same as above
-butterfly-server stop           # graceful shutdown
-butterfly-server status         # show running/stopped + PID
-butterfly-server update         # reinstall package + restart
-butterfly-server --foreground   # run in foreground (no daemonize)
-```
+The separate `butterfly` + `-server` / `-web` console scripts were removed in v2.0.16. Everything flows through the single `butterfly` entry point:
 
-All flags work at top level and on subcommands. PID stored in `_sessions/server.pid`, logs in `_sessions/server.log`.
+| Command | Behavior |
+|---------|----------|
+| `butterfly` | Backgrounds the server daemon (`_start_daemon`) if none is running, then runs uvicorn in-process; prints `http://localhost:7720`; blocks until Ctrl+C. Ctrl+C stops the server **only if this invocation started it**; a pre-existing daemon is left alone so another `butterfly` session keeps working. |
+| `butterfly server` | Tails `_sessions/server.log` via `tail -F`. Read-only. Exits with "not running" if the daemon is down. |
+| `butterfly update` | `git status --porcelain` refuses on dirty/untracked; stops the server **if it was running**; `git pull --ff-only` + `pip install -e .` + `npm run build` (unless `--skip-frontend`); restarts the server if it was running. Restores the server on git / pip failure so the user is never left without a daemon. If no server was running at start, none is started at end. |
+
+Invoke the server module directly with `python -m butterfly.runtime.server --foreground` for in-process daemon use (this is what `_start_daemon` Popens and what the auto-update `execvp` path rebinds to). PID stored in `_sessions/server.pid`, logs in `_sessions/server.log`.

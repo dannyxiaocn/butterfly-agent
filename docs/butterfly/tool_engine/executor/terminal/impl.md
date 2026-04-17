@@ -5,7 +5,7 @@
 | File | Purpose |
 |------|---------|
 | `bash_terminal.py` | Built-in `bash` tool with subprocess and PTY modes |
-| `shell_terminal.py` | Executor for session/entity tools backed by `.sh` scripts |
+| `shell_terminal.py` | Executor for session/agent tools backed by `.sh` scripts |
 
 ## Usage
 

@@ -176,10 +176,10 @@ def test_session_init_creates_duty_card_from_config(tmp_path):
     from butterfly.session_engine.session_init import init_session
     from unittest.mock import patch
 
-    entity_base = tmp_path / "entity"
-    entity_dir = entity_base / "test_ent"
-    entity_dir.mkdir(parents=True)
-    (entity_dir / "config.yaml").write_text(
+    agent_base = tmp_path / "agenthub"
+    agent_dir = agent_base / "test_ent"
+    agent_dir.mkdir(parents=True)
+    (agent_dir / "config.yaml").write_text(
         "name: test_ent\n"
         "model: claude-sonnet-4-6\n"
         "provider: anthropic\n"
@@ -188,11 +188,11 @@ def test_session_init_creates_duty_card_from_config(tmp_path):
         '  description: "Check mail"\n',
         encoding="utf-8",
     )
-    (entity_dir / "tools.md").write_text("bash\n", encoding="utf-8")
-    (entity_dir / "prompts").mkdir()
-    (entity_dir / "prompts" / "system.md").write_text("sys", encoding="utf-8")
-    (entity_dir / "prompts" / "task.md").write_text("task", encoding="utf-8")
-    (entity_dir / "prompts" / "env.md").write_text("env", encoding="utf-8")
+    (agent_dir / "tools.md").write_text("bash\n", encoding="utf-8")
+    (agent_dir / "prompts").mkdir()
+    (agent_dir / "prompts" / "system.md").write_text("sys", encoding="utf-8")
+    (agent_dir / "prompts" / "task.md").write_text("task", encoding="utf-8")
+    (agent_dir / "prompts" / "env.md").write_text("env", encoding="utf-8")
 
     sessions_base = tmp_path / "sessions"
     system_base = tmp_path / "_sessions"
@@ -203,13 +203,13 @@ def test_session_init_creates_duty_card_from_config(tmp_path):
         return venv
 
     with patch("butterfly.session_engine.session_init._create_session_venv", side_effect=fake_venv), \
-         patch("butterfly.session_engine.entity_state._create_meta_venv", side_effect=fake_venv):
+         patch("butterfly.session_engine.agent_state._create_meta_venv", side_effect=fake_venv):
         init_session(
             "s1",
             "test_ent",
             sessions_base=sessions_base,
             system_sessions_base=system_base,
-            entity_base=entity_base,
+            agent_base=agent_base,
         )
 
     duty = load_card(sessions_base / "s1" / "core" / "tasks", "duty")
@@ -226,15 +226,15 @@ def test_session_init_no_duty_keeps_empty_tasks(tmp_path):
     from butterfly.session_engine.session_init import init_session
     from unittest.mock import patch
 
-    entity_base = tmp_path / "entity"
-    entity_dir = entity_base / "plain"
-    entity_dir.mkdir(parents=True)
-    (entity_dir / "config.yaml").write_text(
+    agent_base = tmp_path / "agenthub"
+    agent_dir = agent_base / "plain"
+    agent_dir.mkdir(parents=True)
+    (agent_dir / "config.yaml").write_text(
         "name: plain\nmodel: claude-sonnet-4-6\nprovider: anthropic\n",
         encoding="utf-8",
     )
-    (entity_dir / "prompts").mkdir()
-    (entity_dir / "prompts" / "system.md").write_text("sys", encoding="utf-8")
+    (agent_dir / "prompts").mkdir()
+    (agent_dir / "prompts" / "system.md").write_text("sys", encoding="utf-8")
 
     sessions_base = tmp_path / "sessions"
     system_base = tmp_path / "_sessions"
@@ -245,13 +245,13 @@ def test_session_init_no_duty_keeps_empty_tasks(tmp_path):
         return venv
 
     with patch("butterfly.session_engine.session_init._create_session_venv", side_effect=fake_venv), \
-         patch("butterfly.session_engine.entity_state._create_meta_venv", side_effect=fake_venv):
+         patch("butterfly.session_engine.agent_state._create_meta_venv", side_effect=fake_venv):
         init_session(
             "s2",
             "plain",
             sessions_base=sessions_base,
             system_sessions_base=system_base,
-            entity_base=entity_base,
+            agent_base=agent_base,
         )
 
     tasks_dir = sessions_base / "s2" / "core" / "tasks"

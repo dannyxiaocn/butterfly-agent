@@ -16,12 +16,12 @@ class FullSystemTest(unittest.TestCase):
             root = Path(tmp)
             sessions_base = root / "sessions"
             system_base = root / "_sessions"
-            entity_base = root / "entity"
-            entity_dir = entity_base / "demo"
+            agent_base = root / "agenthub"
+            agent_dir = agent_base / "demo"
             meta_dir = sessions_base / "demo_meta"
 
-            (entity_dir / "prompts").mkdir(parents=True)
-            (entity_dir / "config.yaml").write_text("name: demo\nprovider: anthropic\n", encoding="utf-8")
+            (agent_dir / "prompts").mkdir(parents=True)
+            (agent_dir / "config.yaml").write_text("name: demo\nprovider: anthropic\n", encoding="utf-8")
             (meta_dir / "core" / "tools").mkdir(parents=True)
             (meta_dir / "core" / "skills").mkdir(parents=True)
             (meta_dir / "core" / "memory").mkdir(parents=True)
@@ -41,13 +41,13 @@ class FullSystemTest(unittest.TestCase):
                 "butterfly.session_engine.session_init.ensure_gene_initialized"
             ), patch(
                 "butterfly.session_engine.session_init.start_meta_agent"
-            ), patch("butterfly.session_engine.session_init.sync_from_entity"):
+            ), patch("butterfly.session_engine.session_init.sync_from_agent"):
                 init_session(
                     "demo-session",
                     "demo",
                     sessions_base=sessions_base,
                     system_sessions_base=system_base,
-                    entity_base=entity_base,
+                    agent_base=agent_base,
                 )
 
             ipc = FileIPC(system_base / "demo-session")

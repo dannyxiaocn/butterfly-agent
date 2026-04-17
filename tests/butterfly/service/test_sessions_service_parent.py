@@ -11,7 +11,7 @@ from butterfly.service.sessions_service import get_session
 def _manifest(tmp_path: Path, sid: str, **fields) -> Path:
     sys_dir = tmp_path / "_sessions" / sid
     sys_dir.mkdir(parents=True)
-    payload = {"session_id": sid, "entity": "agent", "created_at": datetime.now().isoformat()}
+    payload = {"session_id": sid, "agent": "agent", "created_at": datetime.now().isoformat()}
     payload.update(fields)
     (sys_dir / "manifest.json").write_text(json.dumps(payload), encoding="utf-8")
     # Minimal status so get_session doesn't crash on read_session_status path.

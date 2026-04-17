@@ -75,7 +75,7 @@ def test_runner_validate_requires_task_and_mode() -> None:
         parent_session_id="p",
         sessions_base=Path("/tmp"),
         system_sessions_base=Path("/tmp"),
-        entity_base=Path("/tmp"),
+        agent_base=Path("/tmp"),
     )
     with pytest.raises(ValueError, match="task is required"):
         runner.validate({"mode": "explorer"})

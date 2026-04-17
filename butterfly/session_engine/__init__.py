@@ -1,1 +1,1 @@
-"""Butterfly session engine — session lifecycle, entity config, and entity state management."""
+"""Butterfly session engine — session lifecycle, agent config, and agent state management."""

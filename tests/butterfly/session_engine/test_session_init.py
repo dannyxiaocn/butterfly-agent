@@ -21,28 +21,28 @@ def _repo_root() -> Path:
 
 class SessionInitUnitTests(unittest.TestCase):
     def test_init_session_stays_inside_custom_bases(self) -> None:
-        unique_entity = f"unit_test_entity_{uuid.uuid4().hex}"
-        leaked_meta_dir = _repo_root() / "sessions" / f"{unique_entity}_meta"
+        unique_agent = f"unit_test_agent_{uuid.uuid4().hex}"
+        leaked_meta_dir = _repo_root() / "sessions" / f"{unique_agent}_meta"
         try:
             with TemporaryDirectory() as td, patch(
-                "butterfly.session_engine.entity_state._create_meta_venv",
+                "butterfly.session_engine.agent_state._create_meta_venv",
                 side_effect=lambda p: p / ".venv",
             ), patch(
                 "butterfly.session_engine.session_init._create_session_venv",
                 side_effect=lambda p: p / ".venv",
-            ), patch("butterfly.session_engine.entity_state.start_meta_agent"):
+            ), patch("butterfly.session_engine.agent_state.start_meta_agent"):
                 root = Path(td)
-                entity_base = root / "entity"
+                agent_base = root / "agenthub"
                 sessions_base = root / "sessions"
                 system_base = root / "_sessions"
-                entity_dir = entity_base / unique_entity
-                (entity_dir / "prompts").mkdir(parents=True)
-                (entity_dir / "tools.md").write_text("", encoding="utf-8")
-                (entity_dir / "skills.md").write_text("", encoding="utf-8")
-                (entity_dir / "prompts" / "system.md").write_text("system", encoding="utf-8")
-                (entity_dir / "prompts" / "task.md").write_text("task", encoding="utf-8")
-                (entity_dir / "prompts" / "env.md").write_text("env", encoding="utf-8")
-                (entity_dir / "config.yaml").write_text(
+                agent_dir = agent_base / unique_agent
+                (agent_dir / "prompts").mkdir(parents=True)
+                (agent_dir / "tools.md").write_text("", encoding="utf-8")
+                (agent_dir / "skills.md").write_text("", encoding="utf-8")
+                (agent_dir / "prompts" / "system.md").write_text("system", encoding="utf-8")
+                (agent_dir / "prompts" / "task.md").write_text("task", encoding="utf-8")
+                (agent_dir / "prompts" / "env.md").write_text("env", encoding="utf-8")
+                (agent_dir / "config.yaml").write_text(
                     "\n".join(
                         [
                             "prompts:",
@@ -58,14 +58,14 @@ class SessionInitUnitTests(unittest.TestCase):
 
                 init_session(
                     session_id="demo",
-                    entity_name=unique_entity,
+                    agent_name=unique_agent,
                     sessions_base=sessions_base,
                     system_sessions_base=system_base,
-                    entity_base=entity_base,
+                    agent_base=agent_base,
                 )
 
                 self.assertTrue((sessions_base / "demo").exists())
-                self.assertTrue((sessions_base / f"{unique_entity}_meta").exists())
+                self.assertTrue((sessions_base / f"{unique_agent}_meta").exists())
                 self.assertFalse(leaked_meta_dir.exists())
         finally:
             if leaked_meta_dir.exists():
@@ -97,35 +97,35 @@ def test_init_session_config_not_clobbered_by_concurrent_ensure_config(tmp_path)
     starts a Session for a new session_id, Session.__init__ calls
     ensure_config() which writes DEFAULT_CONFIG (model=None) into
     sessions/<id>/core/config.yaml. If this happens BEFORE init_session copies
-    the real entity/meta config.yaml, init_session's `if not exists()` guard
+    the real agent/meta config.yaml, init_session's `if not exists()` guard
     skips the copy, leaving model=null persisted on disk.
 
     Reproduced by simulating the watcher-side write: we pre-create an empty/
     defaults-only config.yaml in the session core/ before init_session runs.
-    After init_session, the session's config.yaml MUST carry the entity's
+    After init_session, the session's config.yaml MUST carry the agent's
     model and provider, not DEFAULT_CONFIG's null values.
     """
-    unique_entity = f"unit_test_entity_{uuid.uuid4().hex}"
+    unique_agent = f"unit_test_agent_{uuid.uuid4().hex}"
     with TemporaryDirectory() as td, patch(
-        "butterfly.session_engine.entity_state._create_meta_venv",
+        "butterfly.session_engine.agent_state._create_meta_venv",
         side_effect=lambda p: p / ".venv",
     ), patch(
         "butterfly.session_engine.session_init._create_session_venv",
         side_effect=lambda p: p / ".venv",
-    ), patch("butterfly.session_engine.entity_state.start_meta_agent"):
+    ), patch("butterfly.session_engine.agent_state.start_meta_agent"):
         root = Path(td)
-        entity_base = root / "entity"
+        agent_base = root / "agenthub"
         sessions_base = root / "sessions"
         system_base = root / "_sessions"
 
-        entity_dir = entity_base / unique_entity
-        (entity_dir / "prompts").mkdir(parents=True)
-        (entity_dir / "tools.md").write_text("", encoding="utf-8")
-        (entity_dir / "skills.md").write_text("", encoding="utf-8")
-        (entity_dir / "prompts" / "system.md").write_text("system", encoding="utf-8")
-        (entity_dir / "prompts" / "task.md").write_text("task", encoding="utf-8")
-        (entity_dir / "prompts" / "env.md").write_text("env", encoding="utf-8")
-        (entity_dir / "config.yaml").write_text(
+        agent_dir = agent_base / unique_agent
+        (agent_dir / "prompts").mkdir(parents=True)
+        (agent_dir / "tools.md").write_text("", encoding="utf-8")
+        (agent_dir / "skills.md").write_text("", encoding="utf-8")
+        (agent_dir / "prompts" / "system.md").write_text("system", encoding="utf-8")
+        (agent_dir / "prompts" / "task.md").write_text("task", encoding="utf-8")
+        (agent_dir / "prompts" / "env.md").write_text("env", encoding="utf-8")
+        (agent_dir / "config.yaml").write_text(
             "\n".join(
                 [
                     "prompts:",
@@ -151,18 +151,18 @@ def test_init_session_config_not_clobbered_by_concurrent_ensure_config(tmp_path)
 
         init_session(
             session_id=session_id,
-            entity_name=unique_entity,
+            agent_name=unique_agent,
             sessions_base=sessions_base,
             system_sessions_base=system_base,
-            entity_base=entity_base,
+            agent_base=agent_base,
         )
 
         cfg = read_config(sessions_base / session_id)
         assert cfg["model"] == "gpt-5.4", (
-            f"first-run session must inherit entity model, got {cfg['model']!r}"
+            f"first-run session must inherit agent model, got {cfg['model']!r}"
         )
         assert cfg["provider"] == "codex-oauth", (
-            f"first-run session must inherit entity provider, got {cfg['provider']!r}"
+            f"first-run session must inherit agent provider, got {cfg['provider']!r}"
         )
         assert cfg["fallback_model"] == "kimi-for-coding"
         assert cfg["fallback_provider"] == "kimi-coding-plan"
@@ -174,27 +174,27 @@ def test_init_session_writes_manifest_after_config_populated(tmp_path):
     Otherwise the watcher spawns a Session whose ensure_config() races and
     clobbers the config with DEFAULT_CONFIG (model=None).
     """
-    unique_entity = f"unit_test_entity_{uuid.uuid4().hex}"
+    unique_agent = f"unit_test_agent_{uuid.uuid4().hex}"
     with TemporaryDirectory() as td, patch(
-        "butterfly.session_engine.entity_state._create_meta_venv",
+        "butterfly.session_engine.agent_state._create_meta_venv",
         side_effect=lambda p: p / ".venv",
     ), patch(
         "butterfly.session_engine.session_init._create_session_venv",
         side_effect=lambda p: p / ".venv",
-    ), patch("butterfly.session_engine.entity_state.start_meta_agent"):
+    ), patch("butterfly.session_engine.agent_state.start_meta_agent"):
         root = Path(td)
-        entity_base = root / "entity"
+        agent_base = root / "agenthub"
         sessions_base = root / "sessions"
         system_base = root / "_sessions"
 
-        entity_dir = entity_base / unique_entity
-        (entity_dir / "prompts").mkdir(parents=True)
-        (entity_dir / "tools.md").write_text("", encoding="utf-8")
-        (entity_dir / "skills.md").write_text("", encoding="utf-8")
-        (entity_dir / "prompts" / "system.md").write_text("system", encoding="utf-8")
-        (entity_dir / "prompts" / "task.md").write_text("task", encoding="utf-8")
-        (entity_dir / "prompts" / "env.md").write_text("env", encoding="utf-8")
-        (entity_dir / "config.yaml").write_text(
+        agent_dir = agent_base / unique_agent
+        (agent_dir / "prompts").mkdir(parents=True)
+        (agent_dir / "tools.md").write_text("", encoding="utf-8")
+        (agent_dir / "skills.md").write_text("", encoding="utf-8")
+        (agent_dir / "prompts" / "system.md").write_text("system", encoding="utf-8")
+        (agent_dir / "prompts" / "task.md").write_text("task", encoding="utf-8")
+        (agent_dir / "prompts" / "env.md").write_text("env", encoding="utf-8")
+        (agent_dir / "config.yaml").write_text(
             "provider: anthropic\nmodel: claude-demo\n",
             encoding="utf-8",
         )
@@ -217,10 +217,10 @@ def test_init_session_writes_manifest_after_config_populated(tmp_path):
         with patch.object(Path, "write_text", spy_write_text):
             init_session(
                 session_id=session_id,
-                entity_name=unique_entity,
+                agent_name=unique_agent,
                 sessions_base=sessions_base,
                 system_sessions_base=system_base,
-                entity_base=entity_base,
+                agent_base=agent_base,
             )
 
         assert observed["seen"], "spy didn't see the session's manifest.json write"
@@ -240,29 +240,29 @@ def _run_init_with_stub_config(tmp_path, *, stub_content: str) -> dict:
     The stub content simulates various ways a racing ensure_config() or a
     hand-edited file could leave the session config.yaml in a non-mapping /
     malformed / empty shape. The fix under test is `_needs_seed`: regardless
-    of stub content, init_session should re-seed from the entity config.
+    of stub content, init_session should re-seed from the agent config.
     """
-    unique_entity = f"unit_test_entity_{uuid.uuid4().hex}"
+    unique_agent = f"unit_test_agent_{uuid.uuid4().hex}"
     with TemporaryDirectory() as td, patch(
-        "butterfly.session_engine.entity_state._create_meta_venv",
+        "butterfly.session_engine.agent_state._create_meta_venv",
         side_effect=lambda p: p / ".venv",
     ), patch(
         "butterfly.session_engine.session_init._create_session_venv",
         side_effect=lambda p: p / ".venv",
-    ), patch("butterfly.session_engine.entity_state.start_meta_agent"):
+    ), patch("butterfly.session_engine.agent_state.start_meta_agent"):
         root = Path(td)
-        entity_base = root / "entity"
+        agent_base = root / "agenthub"
         sessions_base = root / "sessions"
         system_base = root / "_sessions"
 
-        entity_dir = entity_base / unique_entity
-        (entity_dir / "prompts").mkdir(parents=True)
-        (entity_dir / "tools.md").write_text("", encoding="utf-8")
-        (entity_dir / "skills.md").write_text("", encoding="utf-8")
-        (entity_dir / "prompts" / "system.md").write_text("system", encoding="utf-8")
-        (entity_dir / "prompts" / "task.md").write_text("task", encoding="utf-8")
-        (entity_dir / "prompts" / "env.md").write_text("env", encoding="utf-8")
-        (entity_dir / "config.yaml").write_text(
+        agent_dir = agent_base / unique_agent
+        (agent_dir / "prompts").mkdir(parents=True)
+        (agent_dir / "tools.md").write_text("", encoding="utf-8")
+        (agent_dir / "skills.md").write_text("", encoding="utf-8")
+        (agent_dir / "prompts" / "system.md").write_text("system", encoding="utf-8")
+        (agent_dir / "prompts" / "task.md").write_text("task", encoding="utf-8")
+        (agent_dir / "prompts" / "env.md").write_text("env", encoding="utf-8")
+        (agent_dir / "config.yaml").write_text(
             "provider: anthropic\nmodel: claude-demo\n",
             encoding="utf-8",
         )
@@ -274,10 +274,10 @@ def _run_init_with_stub_config(tmp_path, *, stub_content: str) -> dict:
 
         init_session(
             session_id=session_id,
-            entity_name=unique_entity,
+            agent_name=unique_agent,
             sessions_base=sessions_base,
             system_sessions_base=system_base,
-            entity_base=entity_base,
+            agent_base=agent_base,
         )
 
         from butterfly.session_engine.session_config import read_config
@@ -315,7 +315,7 @@ def test_needs_seed_reseeds_when_stub_is_invalid_yaml(tmp_path):
 
 def test_needs_seed_reseeds_when_stub_has_model_but_no_provider(tmp_path):
     """Stub with model set but provider=None (hypothetical hand-edit) — the
-    widened predicate should still trigger a reseed from the entity.
+    widened predicate should still trigger a reseed from the agent.
     """
     cfg = _run_init_with_stub_config(
         tmp_path,

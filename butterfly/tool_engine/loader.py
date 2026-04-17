@@ -12,8 +12,8 @@ only business-intent parameters:
   - session_shell: workdir + venv_env_provider
   - read/write/edit/glob/grep: workdir
   - task_*: tasks_dir
-  - recall_memory: memory_dir
-  - update_memory: memory_dir + main_memory_path
+  - memory_recall: memory_dir
+  - memory_update: memory_dir + main_memory_path
   - tool_output: panel_dir
   - skill: skills list
   - web_search / web_fetch: no injection (provider config via registry)
@@ -81,7 +81,7 @@ class ToolLoader:
         default_workdir: Default working directory for bash/shell executors.
         skills: List of Skill objects for the skill executor.
         tasks_dir: Path to core/tasks/ for task_* tools.
-        memory_dir: Path to core/memory/ for recall_memory tool.
+        memory_dir: Path to core/memory/ for memory_recall tool.
         toolhub_dir: Override toolhub directory (for testing).
     """
 
@@ -106,7 +106,7 @@ class ToolLoader:
         parent_session_id: str | None = None,
         sessions_base: Path | None = None,
         system_sessions_base: Path | None = None,
-        entity_base: Path | None = None,
+        agent_base: Path | None = None,
     ) -> None:
         self._default_workdir = default_workdir
         self._skills = list(skills or [])
@@ -121,7 +121,7 @@ class ToolLoader:
         self._parent_session_id = parent_session_id
         self._sessions_base = sessions_base
         self._system_sessions_base = system_sessions_base
-        self._entity_base = entity_base
+        self._agent_base = agent_base
 
     def _create_executor(self, tool_name: str) -> Callable | None:
         """Create an executor callable for a toolhub tool."""
@@ -157,8 +157,8 @@ class ToolLoader:
                     return await executor.execute(**kwargs)
                 return _impl
 
-        elif tool_name == "update_memory":
-            executor_cls = getattr(mod, "UpdateMemoryExecutor", None)
+        elif tool_name == "memory_update":
+            executor_cls = getattr(mod, "MemoryUpdateExecutor", None)
             if executor_cls:
                 executor = executor_cls(
                     memory_dir=self._memory_dir,
@@ -198,7 +198,7 @@ class ToolLoader:
                     parent_session_id=self._parent_session_id,
                     sessions_base=self._sessions_base,
                     system_sessions_base=self._system_sessions_base,
-                    entity_base=self._entity_base,
+                    agent_base=self._agent_base,
                 )
                 async def _impl(**kwargs: Any) -> str:
                     return await executor.execute(**kwargs)
@@ -276,8 +276,8 @@ class ToolLoader:
                     return await executor.execute(**kwargs)
                 return _impl
 
-        elif tool_name == "recall_memory":
-            executor_cls = getattr(mod, "RecallMemoryExecutor", None)
+        elif tool_name == "memory_recall":
+            executor_cls = getattr(mod, "MemoryRecallExecutor", None)
             if executor_cls:
                 executor = executor_cls(memory_dir=self._memory_dir)
                 async def _impl(**kwargs: Any) -> str:

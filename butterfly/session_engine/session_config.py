@@ -1,6 +1,6 @@
-"""Unified session/entity configuration — config.yaml reader/writer.
+"""Unified session/agent configuration — config.yaml reader/writer.
 
-Replaces session_params.py. Both entity/ and session core/ use identical
+Replaces session_params.py. Both agenthub/ and session core/ use identical
 config.yaml files. System runtime state (agent_version, pid, etc.) lives
 in _sessions/<id>/status.json instead.
 """
@@ -53,8 +53,8 @@ def _atomic_write_text(path: Path, text: str) -> None:
             pass
         raise
 
-# User-configurable defaults. Entity config.yaml and session core/config.yaml
-# share the same schema — entity defines defaults, session inherits and can override.
+# User-configurable defaults. Agent config.yaml and session core/config.yaml
+# share the same schema — agent defines defaults, session inherits and can override.
 DEFAULT_CONFIG: dict[str, Any] = {
     "name": "",
     "description": "",
@@ -79,9 +79,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
 
 
 def config_path(base_dir: Path) -> Path:
-    """Return path to config.yaml. Works for both entity dirs and session dirs.
+    """Return path to config.yaml. Works for both agent dirs and session dirs.
 
-    For entities: entity/<name>/config.yaml
+    For agents: agenthub/<name>/config.yaml
     For sessions: sessions/<id>/core/config.yaml
     """
     core_dir = base_dir / "core"

@@ -4,7 +4,7 @@ All four have been fixed on ``fix/llm-engine-v202-bugs`` — these tests now
 pass and serve as ongoing regression coverage.
 
 NEW-1  🔴 Critical  — cross-provider fallback leaks reasoning blocks into
-                      non-reasoning providers; default entity config breaks.
+                      non-reasoning providers; default agent config breaks.
                       Fixed: anthropic._sanitize_content_for_anthropic and
                       openai_api._build_messages assistant-placeholder branch.
 NEW-2  🟠 Medium    — ``_is_codex_compatible_model`` is a blocklist of

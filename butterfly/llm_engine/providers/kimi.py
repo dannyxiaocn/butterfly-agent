@@ -201,7 +201,7 @@ class KimiOpenAIProvider(OpenAIProvider):
 # Back-compat shim
 # ---------------------------------------------------------------------------
 
-# Older code (entity configs, live sessions, external callers) imports
+# Older code (agent configs, live sessions, external callers) imports
 # ``KimiForCodingProvider`` directly. The class has been split in two; keep
 # the historical name as an alias to the Anthropic variant so existing
 # sessions keep working unchanged. Callers that want the new default should

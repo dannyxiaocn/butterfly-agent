@@ -19,7 +19,7 @@ def _seed_context(tmp_path, session_id: str, events: list[dict]) -> tuple:
     system_dir = tmp_path / "_sessions" / session_id
     (sessions_dir / session_id / "core").mkdir(parents=True)
     system_dir.mkdir(parents=True)
-    (system_dir / "manifest.json").write_text(json.dumps({"entity": "agent"}), encoding="utf-8")
+    (system_dir / "manifest.json").write_text(json.dumps({"agent": "agent"}), encoding="utf-8")
     (system_dir / "context.jsonl").write_text(
         "\n".join(json.dumps(event) for event in events) + "\n",
         encoding="utf-8",

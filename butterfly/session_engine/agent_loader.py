@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Callable
 
 from butterfly.core.loader import BaseLoader
-from butterfly.session_engine.entity_config import AgentConfig
+from butterfly.session_engine.agent_config import AgentConfig
 from butterfly.core.agent import Agent
 from butterfly.skill_engine.loader import SkillLoader
 from butterfly.tool_engine.loader import ToolLoader
@@ -14,9 +14,9 @@ def _load_prompt(path: Path) -> str:
 
 
 class AgentLoader(BaseLoader[Agent]):
-    """Load a complete Agent from an entity directory containing config.yaml.
+    """Load a complete Agent from an agent directory containing config.yaml.
 
-    Each entity is fully self-contained — prompts in config.yaml, tools in
+    Each agent is fully self-contained — prompts in config.yaml, tools in
     tools.md, skills in skills.md.
     """
 

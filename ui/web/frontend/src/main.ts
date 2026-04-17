@@ -233,6 +233,88 @@ async function init(): Promise<void> {
   if (store.sessions.length > 0) {
     await attachSession(store.sessions[0].id);
   }
+
+  startUpdateNotifier();
+}
+
+// ====== Auto-update notifier ======
+//
+// Polls `/api/update_status` every 30s. The server's auto-update worker
+// writes this file when it detects new upstream commits:
+//   - `applied: true` means a silent update landed → force-reload the page
+//     so the browser picks up the rebuilt bundle.
+//   - `dirty: true` + `available: true` means the tree has uncommitted local
+//     changes and the worker refused to apply → show a top-right banner so
+//     the user can commit/stash and run `butterfly update` manually.
+
+function startUpdateNotifier() {
+  // Baseline `applied_at` seen on the page's first observation — if we see a
+  // different one later, the bundle is stale relative to what the server now
+  // serves and we force-reload. Starts `null` so we can distinguish "no
+  // status file on page load" from "file present, this is the baseline".
+  let baselineAppliedAt: string | null = null;
+  let baselineStamped = false;
+  let bannerCommits = -1;
+  let banner: HTMLElement | null = null;
+
+  const renderBanner = (commitsBehind: number) => {
+    const text = `🔔 ${commitsBehind} new commit${commitsBehind === 1 ? '' : 's'} upstream — commit local changes and run \`butterfly update\` to apply.`;
+    if (!banner) {
+      banner = document.createElement('div');
+      banner.id = 'update-banner';
+      document.body.appendChild(banner);
+    }
+    banner.textContent = text;
+    bannerCommits = commitsBehind;
+  };
+
+  const hideBanner = () => {
+    if (!banner) return;
+    banner.remove();
+    banner = null;
+    bannerCommits = -1;
+  };
+
+  const poll = async () => {
+    try {
+      const s = await api.getUpdateStatus();
+      if (s.applied && s.applied_at) {
+        // Explicit reload signal from the worker always wins — the server
+        // just finished `execvp`-ing, so the cached bundle is stale.
+        if (s.reload) {
+          window.location.reload();
+          return;
+        }
+        // First observation baselines the value; later polls that see a
+        // different `applied_at` indicate the server silently respawned
+        // while we weren't watching (e.g. worker cleared and re-wrote).
+        if (!baselineStamped) {
+          baselineAppliedAt = s.applied_at;
+          baselineStamped = true;
+          hideBanner();
+          return;
+        }
+        if (baselineAppliedAt !== s.applied_at) {
+          window.location.reload();
+          return;
+        }
+        hideBanner();
+      } else if (s.dirty && s.available && s.commits_behind) {
+        // Stamp baseline even on dirty so a later clean apply is detected.
+        if (!baselineStamped) baselineStamped = true;
+        // Re-render when commit count changes so users see fresh counts.
+        if (s.commits_behind !== bannerCommits) renderBanner(s.commits_behind);
+      } else {
+        if (!baselineStamped) baselineStamped = true;
+        hideBanner();
+      }
+    } catch {
+      // ignore — server may be restarting during auto-update respawn
+    }
+  };
+
+  void poll();
+  setInterval(poll, 30_000);
 }
 
 init().catch(console.error);

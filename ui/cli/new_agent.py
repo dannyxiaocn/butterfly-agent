@@ -1,4 +1,4 @@
-"""butterfly-new-agent: scaffold a new agent entity directory.
+"""butterfly-new-agent: scaffold a new agent directory.
 
 Usage (interactive — recommended):
     butterfly-new-agent
@@ -6,11 +6,11 @@ Usage (interactive — recommended):
 Usage (non-interactive / scripted):
     butterfly-new-agent -n my-agent
     butterfly-new-agent -n my-agent --init-from agent
-    butterfly-new-agent -n my-agent --entity-dir path/to/entity
+    butterfly-new-agent -n my-agent --agent-dir path/to/agenthub
 
-When run without --init-from, creates a blank entity with empty prompt files.
-With --init-from <source>, copies all files from the source entity and sets
-the new entity's name in config.yaml. The copied entity is fully self-contained
+When run without --init-from, creates a blank agent with empty prompt files.
+With --init-from <source>, copies all files from the source agent and sets
+the new agent's name in config.yaml. The copied agent is fully self-contained
 and can be modified freely — there is no live inheritance link.
 """
 from __future__ import annotations
@@ -41,14 +41,14 @@ skills: []
 """
 
 
-# ── Entity detection ──────────────────────────────────────────────────────────
+# ── Agent detection ──────────────────────────────────────────────────────────
 
-def _list_entities(entity_dir: Path) -> list[str]:
-    """Return sorted list of entity names (dirs with config.yaml) in entity_dir."""
-    if not entity_dir.is_dir():
+def _list_entities(agent_dir: Path) -> list[str]:
+    """Return sorted list of agent names (dirs with config.yaml) in agent_dir."""
+    if not agent_dir.is_dir():
         return []
     return sorted(
-        d.name for d in entity_dir.iterdir()
+        d.name for d in agent_dir.iterdir()
         if d.is_dir() and (d / "config.yaml").exists()
     )
 
@@ -63,26 +63,26 @@ def _ask_name() -> str:
         print("  Name cannot be empty.")
 
 
-def _ask_init_from(entity_dir: Path) -> str | None:
-    """Show numbered entity list, return selected entity name or None (blank)."""
-    entities = _list_entities(entity_dir)
-    default_idx = next((i for i, n in enumerate(entities, 1) if n == "agent"), 1)
+def _ask_init_from(agent_dir: Path) -> str | None:
+    """Show numbered agent list, return selected agent name or None (blank)."""
+    agents = _list_entities(agent_dir)
+    default_idx = next((i for i, n in enumerate(agents, 1) if n == "agent"), 1)
 
-    print("\nInitialize from which entity?")
-    for i, name in enumerate(entities, 1):
+    print("\nInitialize from which agent?")
+    for i, name in enumerate(agents, 1):
         suffix = "  (default)" if i == default_idx else ""
         print(f"  {i}. {name}{suffix}")
-    blank_idx = len(entities) + 1
-    print(f"  {blank_idx}. Blank (empty entity)")
+    blank_idx = len(agents) + 1
+    print(f"  {blank_idx}. Blank (empty agent)")
 
     while True:
         raw = input(f"\nChoice [{default_idx}]: ").strip()
         if not raw:
-            return entities[default_idx - 1] if entities else None
+            return agents[default_idx - 1] if agents else None
         try:
             n = int(raw)
-            if 1 <= n <= len(entities):
-                return entities[n - 1]
+            if 1 <= n <= len(agents):
+                return agents[n - 1]
             if n == blank_idx:
                 return None
         except ValueError:
@@ -92,36 +92,36 @@ def _ask_init_from(entity_dir: Path) -> str | None:
 
 # ── File scaffolding ──────────────────────────────────────────────────────────
 
-def _find_config_path(entity_dir: Path) -> Path | None:
-    """Find config.yaml in an entity directory."""
-    p = entity_dir / "config.yaml"
+def _find_config_path(agent_dir: Path) -> Path | None:
+    """Find config.yaml in an agent directory."""
+    p = agent_dir / "config.yaml"
     return p if p.exists() else None
 
 
-def create_entity(name: str, base_dir: Path, init_from: str | None) -> Path:
-    """Create a new entity directory.
+def create_agent(name: str, base_dir: Path, init_from: str | None) -> Path:
+    """Create a new agent directory.
 
-    If init_from is given, copies all files from that entity and updates the
-    name in config.yaml. Otherwise, creates a blank entity with empty prompt
+    If init_from is given, copies all files from that agent and updates the
+    name in config.yaml. Otherwise, creates a blank agent with empty prompt
     files and a minimal config.yaml.
 
-    Returns the path to the created entity directory.
+    Returns the path to the created agent directory.
     """
-    entity_dir = base_dir / name
-    if entity_dir.exists():
-        print(f"Error: entity '{name}' already exists at {entity_dir}", file=sys.stderr)
+    agent_dir = base_dir / name
+    if agent_dir.exists():
+        print(f"Error: agent '{name}' already exists at {agent_dir}", file=sys.stderr)
         sys.exit(1)
 
     if init_from is not None:
         src_dir = base_dir / init_from
         if _find_config_path(src_dir) is None:
-            raise ValueError(f"Source entity '{init_from}' not found in {base_dir}")
+            raise ValueError(f"Source agent '{init_from}' not found in {base_dir}")
 
-        # Copy entire source entity tree
-        shutil.copytree(src_dir, entity_dir)
+        # Copy entire source agent tree
+        shutil.copytree(src_dir, agent_dir)
 
         # Update config: set new name and record init_from
-        yaml_path = entity_dir / "config.yaml"
+        yaml_path = agent_dir / "config.yaml"
 
         import yaml as _yaml
         manifest = _yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
@@ -135,18 +135,18 @@ def create_entity(name: str, base_dir: Path, init_from: str | None) -> Path:
         )
 
     else:
-        # Blank entity
-        (entity_dir / "prompts").mkdir(parents=True)
-        (entity_dir / "skills").mkdir()
-        (entity_dir / "tools").mkdir()
+        # Blank agent
+        (agent_dir / "prompts").mkdir(parents=True)
+        (agent_dir / "skills").mkdir()
+        (agent_dir / "tools").mkdir()
 
-        (entity_dir / "config.yaml").write_text(
+        (agent_dir / "config.yaml").write_text(
             _CONFIG_YAML_EMPTY.format(name=name),
             encoding="utf-8",
         )
-        (entity_dir / "prompts" / "system.md").write_text("", encoding="utf-8")
-        (entity_dir / "prompts" / "task.md").write_text("", encoding="utf-8")
-        (entity_dir / "prompts" / "env.md").write_text("", encoding="utf-8")
-        (entity_dir / "tool.md").write_text("bash\nweb_search\nskill\nmanage_task\nrecall_memory\n", encoding="utf-8")
+        (agent_dir / "prompts" / "system.md").write_text("", encoding="utf-8")
+        (agent_dir / "prompts" / "task.md").write_text("", encoding="utf-8")
+        (agent_dir / "prompts" / "env.md").write_text("", encoding="utf-8")
+        (agent_dir / "tools.md").write_text("bash\nweb_search\nskill\nmemory_recall\nmemory_update\n", encoding="utf-8")
 
-    return entity_dir
+    return agent_dir

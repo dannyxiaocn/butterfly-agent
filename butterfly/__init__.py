@@ -7,7 +7,7 @@ from butterfly.core.types import AgentResult, Message, ToolCall
 from butterfly.core.provider import Provider
 from butterfly.llm_engine.providers.anthropic import AnthropicProvider
 from butterfly.core.loader import BaseLoader
-from butterfly.session_engine.entity_config import AgentConfig
+from butterfly.session_engine.agent_config import AgentConfig
 from butterfly.session_engine.session import Session, SESSION_FINISHED
 from butterfly.runtime.ipc import FileIPC
 from butterfly.tool_engine.loader import ToolLoader

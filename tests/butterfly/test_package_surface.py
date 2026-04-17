@@ -52,11 +52,14 @@ class PackageSurfaceTest(unittest.TestCase):
             self.assertIsNotNone(importlib.import_module(module_name))
 
     def test_pyproject_exports_runtime_entrypoints(self) -> None:
+        # v2.0.16 unified CLI: `butterfly-server` and `butterfly-web` entry
+        # points were removed; everything lives under the single `butterfly`
+        # entry (server auto-daemonizes, web is in-process).
         data = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
         scripts = data["project"]["scripts"]
         self.assertEqual(scripts["butterfly"], "ui.cli.main:main")
-        self.assertEqual(scripts["butterfly-server"], "butterfly.runtime.server:main")
-        self.assertEqual(scripts["butterfly-web"], "ui.web.app:main")
+        self.assertNotIn("butterfly-server", scripts)
+        self.assertNotIn("butterfly-web", scripts)
 
 
 if __name__ == "__main__":

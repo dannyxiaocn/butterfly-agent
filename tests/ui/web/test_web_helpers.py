@@ -46,15 +46,15 @@ class WebHelpersTest(unittest.TestCase):
         ordered = sort_sessions(sessions)
         self.assertEqual(ordered[0]["id"], "idle")
 
-    def test_create_session_resolves_entity_name_from_relative_path(self) -> None:
+    def test_create_session_resolves_agent_name_from_relative_path(self) -> None:
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             sessions_dir = root / "sessions"
             system_dir = root / "_sessions"
             with patch("butterfly.session_engine.session_init.init_session") as init_mock:
-                create_session("demo", "entity/agent", sessions_dir=sessions_dir, system_sessions_dir=system_dir)
+                create_session("demo", "agenthub/agent", sessions_dir=sessions_dir, system_sessions_dir=system_dir)
         kwargs = init_mock.call_args.kwargs
-        self.assertEqual(kwargs["entity_name"], "agent")
+        self.assertEqual(kwargs["agent_name"], "agent")
 
     def test_create_app_lists_seeded_sessions_and_blocks_meta_chat(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -66,11 +66,11 @@ class WebHelpersTest(unittest.TestCase):
             (system_sessions_dir / "demo").mkdir(parents=True)
             (system_sessions_dir / "agent_meta").mkdir(parents=True)
             (system_sessions_dir / "demo" / "manifest.json").write_text(
-                json.dumps({"entity": "agent", "created_at": "2026-01-01T00:00:00"}),
+                json.dumps({"agent": "agent", "created_at": "2026-01-01T00:00:00"}),
                 encoding="utf-8",
             )
             (system_sessions_dir / "agent_meta" / "manifest.json").write_text(
-                json.dumps({"entity": "agent", "created_at": "2026-01-01T00:00:00"}),
+                json.dumps({"agent": "agent", "created_at": "2026-01-01T00:00:00"}),
                 encoding="utf-8",
             )
             (system_sessions_dir / "demo" / "status.json").write_text(json.dumps({"status": "active"}), encoding="utf-8")

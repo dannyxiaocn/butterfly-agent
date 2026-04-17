@@ -132,8 +132,8 @@ async def test_session_shell_with_guardian_pins_workdir(tmp_path: Path) -> None:
 # ── Gap #6: sub-agent child sees parent's playground via symlink ──────────────
 
 
-def _entity(tmp_path: Path) -> Path:
-    base = tmp_path / "entity"
+def _agent_base(tmp_path: Path) -> Path:
+    base = tmp_path / "agenthub"
     ag = base / "agent"
     ag.mkdir(parents=True)
     (ag / "config.yaml").write_text("name: agent\nmodel: m\nprovider: anthropic\n", encoding="utf-8")
@@ -149,13 +149,13 @@ def test_child_session_links_parent_playground(tmp_path: Path) -> None:
     sys_base = tmp_path / "_sessions"
     sessions_base.mkdir()
     sys_base.mkdir()
-    entity_base = _entity(tmp_path)
+    agent_base = _agent_base(tmp_path)
 
     # 1) Create the parent session FIRST so its playground exists on disk
     #    when the child tries to link it.
     init_session(
         "parent-1", "agent",
-        sessions_base=sessions_base, system_sessions_base=sys_base, entity_base=entity_base,
+        sessions_base=sessions_base, system_sessions_base=sys_base, agent_base=agent_base,
     )
     parent_play = sessions_base / "parent-1" / "playground"
     (parent_play / "notes.txt").write_text("from parent", encoding="utf-8")
@@ -163,7 +163,7 @@ def test_child_session_links_parent_playground(tmp_path: Path) -> None:
     # 2) Spawn the child with parent_session_id.
     init_session(
         "child-1", "agent",
-        sessions_base=sessions_base, system_sessions_base=sys_base, entity_base=entity_base,
+        sessions_base=sessions_base, system_sessions_base=sys_base, agent_base=agent_base,
         parent_session_id="parent-1",
         mode="explorer",
     )
@@ -184,10 +184,10 @@ def test_child_without_parent_has_no_link(tmp_path: Path) -> None:
     sys_base = tmp_path / "_sessions"
     sessions_base.mkdir()
     sys_base.mkdir()
-    entity_base = _entity(tmp_path)
+    agent_base = _agent_base(tmp_path)
     init_session(
         "lone-1", "agent",
-        sessions_base=sessions_base, system_sessions_base=sys_base, entity_base=entity_base,
+        sessions_base=sessions_base, system_sessions_base=sys_base, agent_base=agent_base,
     )
     assert not (sessions_base / "lone-1" / "playground" / "parent").exists()
 
@@ -209,10 +209,10 @@ def test_hud_endpoint_reports_sub_agent_count(tmp_path: Path) -> None:
     sys_base = tmp_path / "_sessions"
     sessions_base.mkdir()
     sys_base.mkdir()
-    entity_base = _entity(tmp_path)
+    agent_base = _agent_base(tmp_path)
     init_session(
         "host", "agent",
-        sessions_base=sessions_base, system_sessions_base=sys_base, entity_base=entity_base,
+        sessions_base=sessions_base, system_sessions_base=sys_base, agent_base=agent_base,
     )
     panel_dir = sessions_base / "host" / "core" / "panel"
     # Two running sub_agent entries + one already-completed entry that

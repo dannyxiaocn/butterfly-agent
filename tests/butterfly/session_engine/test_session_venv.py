@@ -27,18 +27,18 @@ def test_init_session_creates_venv(tmp_path):
     """init_session should create a .venv directory in the session dir."""
     sessions_base = tmp_path / "sessions"
     sys_base = tmp_path / "_sessions"
-    entity_base = tmp_path / "entity"
+    agent_base = tmp_path / "agenthub"
 
-    # Minimal entity so init_session doesn't need a real one
-    entity_dir = entity_base / "test_ent"
-    entity_dir.mkdir(parents=True)
+    # Minimal agent so init_session doesn't need a real one
+    agent_dir = agent_base / "test_ent"
+    agent_dir.mkdir(parents=True)
 
     sid = init_session(
         "test-001",
         "test_ent",
         sessions_base=sessions_base,
         system_sessions_base=sys_base,
-        entity_base=entity_base,
+        agent_base=agent_base,
     )
     venv = sessions_base / sid / ".venv"
     assert venv.is_dir(), ".venv directory should exist after init_session"

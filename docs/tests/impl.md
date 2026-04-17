@@ -11,7 +11,7 @@ Tests mirror the source code layout:
 - `butterfly/session_engine/` — session lifecycle, task cards, venv, params
 - `butterfly/skill_engine/` — skill loader, frontmatter parsing, renderer
 - `butterfly/tool_engine/` — tool loader, executors, bash/skill/reload tools
-- `entity/` — entity manifest contracts, docs existence
+- `agenthub/` — agent manifest contracts, docs existence
 - `ui/cli/` — CLI command tests
 - `ui/web/` — web app and helper tests
 - `integration/` — cross-component end-to-end tests

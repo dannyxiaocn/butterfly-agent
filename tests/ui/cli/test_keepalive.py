@@ -58,7 +58,7 @@ class TestKeepAliveCLIArg:
             mock_ns.return_value = 0
             args = mock.MagicMock()
             args.session = None
-            args.entity = "agent"
+            args.agent = "agent"
             args.message = "hello"
             args.no_wait = False
             args.timeout = 10.0
@@ -81,7 +81,7 @@ class TestKeepAliveCLIArg:
             mock_ns.return_value = 0
             args = mock.MagicMock()
             args.session = None
-            args.entity = "agent"
+            args.agent = "agent"
             args.message = "hello"
             args.no_wait = False
             args.timeout = 10.0
@@ -172,12 +172,17 @@ class TestKeepAliveBranching:
         return code, popen_mock, captured_stdout.getvalue(), captured_stderr.getvalue()
 
     def test_keep_alive_true_calls_popen(self):
-        """keep_alive=True should call subprocess.Popen with butterfly-server."""
+        """keep_alive=True should spawn the daemon via `python -m`.
+
+        v2.0.16 removed the standalone daemon console script; keep-alive
+        now spawns the same module the rest of the codebase uses.
+        """
+        import sys as _sys
         code, popen_mock, stdout, stderr = self._run_new_session(keep_alive=True)
         assert code == 0
         popen_mock.assert_called_once()
         args, kwargs = popen_mock.call_args
-        assert args[0] == ["butterfly-server"]
+        assert args[0] == [_sys.executable, "-m", "butterfly.runtime.server"]
         assert kwargs["start_new_session"] is True
         assert kwargs["stdout"] is subprocess.DEVNULL
         assert kwargs["stderr"] is subprocess.DEVNULL

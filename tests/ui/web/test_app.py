@@ -26,7 +26,7 @@ def _make_session(root: Path, session_id: str = "test-session") -> Path:
     (system_dir / "context.jsonl").touch()
     (system_dir / "events.jsonl").touch()
     (system_dir / "manifest.json").write_text(
-        json.dumps({"session_id": session_id, "entity": "agent", "created_at": "2026-01-01T00:00:00"}),
+        json.dumps({"session_id": session_id, "agent": "agent", "created_at": "2026-01-01T00:00:00"}),
         encoding="utf-8",
     )
     return root
@@ -60,7 +60,7 @@ class WebUnitTests(unittest.TestCase):
                     client.get("/api/sessions/bad.id/hud"),
                     client.get("/api/sessions/bad.id/events"),
                     client.post("/api/sessions/bad.id/messages", json={"content": "hi"}),
-                    client.post("/api/sessions", json={"id": "bad.id", "entity": "agent"}),
+                    client.post("/api/sessions", json={"id": "bad.id", "agent": "agent"}),
                 ]
 
             for response in responses:
@@ -444,8 +444,8 @@ class WebUnitTests(unittest.TestCase):
                 mock_dt.now.return_value = fixed
                 mock_dt.fromisoformat = datetime.fromisoformat
                 with TestClient(app) as client:
-                    first = client.post("/api/sessions", json={"entity": "agent"})
-                    second = client.post("/api/sessions", json={"entity": "agent"})
+                    first = client.post("/api/sessions", json={"agent": "agent"})
+                    second = client.post("/api/sessions", json={"agent": "agent"})
 
             self.assertEqual(first.status_code, 200)
             self.assertTrue(

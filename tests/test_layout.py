@@ -16,7 +16,7 @@ EXPECTED_DIRS = [
     "butterfly/session_engine",
     "butterfly/skill_engine",
     "butterfly/tool_engine",
-    "entity",
+    "agent",
     "ui/cli",
     "ui/web",
     "integration",

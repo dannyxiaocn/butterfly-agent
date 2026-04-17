@@ -158,7 +158,7 @@ rm -rf sessions/YOUR_ID/core/skills/my-skill
 
 ## Task board
 
-`core/tasks/` drives task execution. Each `.json` file is a task card. Use the `manage_task` tool to create, update, and manage tasks.
+`core/tasks/` drives task execution. Each `.json` file is a task card. Use the `task_create` / `task_update` / `task_finish` / `task_pause` / `task_resume` / `task_list` tools to manage tasks.
 
 ### Task card JSON format
 
@@ -193,7 +193,7 @@ ls sessions/YOUR_ID/core/tasks/*.json
 cat sessions/YOUR_ID/core/tasks/duty.json
 ```
 
-Use the `manage_task` tool to create/update/delete tasks programmatically. **Write progress notes your future self can resume from cold** — use the `progress` and `comments` fields to track state across activations.
+Use the `task_create` / `task_update` / `task_finish` / `task_pause` / `task_resume` / `task_list` tools to manage tasks programmatically. **Write progress notes your future self can resume from cold** — use the `progress` and `comments` fields to track state across activations.
 
 ---
 
@@ -249,7 +249,7 @@ echo '{"arg1": "value"}' | bash sessions/YOUR_ID/core/tools/my_tool.sh
 
 ## Making improvements stick
 
-Session tools/skills are local to this session. If you want an improvement to persist for future sessions, edit the checked-out repository copy directly with `bash`, update the relevant entity files, run tests, and commit the change in that repo.
+Session tools/skills are local to this session. If you want an improvement to persist for future sessions, edit the checked-out repository copy directly with `bash`, update the relevant agent files, run tests, and commit the change in that repo.
 
 ---
 
@@ -268,6 +268,6 @@ System tools loaded by default (always available, no .json needed in core/tools/
 ## Gotchas
 
 - `reload_capabilities` cannot be overridden — always injected last; any disk tool with that name is filtered out.
-- A session tool with the same name as an entity tool overrides it — use this to patch a built-in for this session.
+- A session tool with the same name as an agent tool overrides it — use this to patch a built-in for this session.
 - Background processes are not managed by the session — store the PID in the playground if you need to stop them.
 - **Skill descriptions must be specific.** Vague descriptions cause under-triggering. Include exact user phrases and task types.

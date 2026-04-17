@@ -1,4 +1,4 @@
-"""Shared session initialization — creates session directory structure from an entity.
+"""Shared session initialization — creates session directory structure from an agent.
 
 Used by:
   - butterfly/service/sessions_service.py  (web UI new-session endpoint)
@@ -15,19 +15,19 @@ from pathlib import Path
 from butterfly.session_engine.session_config import read_config, write_config, ensure_config
 from butterfly.session_engine.session_status import ensure_session_status, write_session_status
 from butterfly.session_engine.task_cards import ensure_card
-from butterfly.session_engine.entity_state import (
+from butterfly.session_engine.agent_state import (
     ensure_gene_initialized,
     ensure_meta_session,
     get_meta_version,
-    populate_meta_from_entity,
+    populate_meta_from_agent,
     start_meta_agent,
-    sync_from_entity,
+    sync_from_agent,
 )
 
 _REPO_ROOT = Path(__file__).parent.parent.parent
 _DEFAULT_SESSIONS_BASE = _REPO_ROOT / "sessions"
 _DEFAULT_SYSTEM_SESSIONS_BASE = _REPO_ROOT / "_sessions"
-_DEFAULT_ENTITY_BASE = _REPO_ROOT / "entity"
+_DEFAULT_AGENT_BASE = _REPO_ROOT / "agenthub"
 _TOOLHUB_DIR = _REPO_ROOT / "toolhub"
 _VALID_MODES = frozenset({"explorer", "executor"})
 
@@ -77,27 +77,27 @@ def _create_session_venv(session_dir: Path) -> Path:
 
 def init_session(
     session_id: str,
-    entity_name: str,
+    agent_name: str,
     *,
     sessions_base: Path | None = None,
     system_sessions_base: Path | None = None,
-    entity_base: Path | None = None,
+    agent_base: Path | None = None,
     initial_message: str | None = None,
     initial_message_id: str | None = None,
     parent_session_id: str | None = None,
     mode: str | None = None,
     sub_agent_depth: int | None = None,
 ) -> str:
-    """Create a new session on disk from an entity, ready for the server to pick up.
+    """Create a new session on disk from an agent, ready for the server to pick up.
 
     Returns the session_id. Idempotent: only writes files that do not exist yet.
 
     Args:
         session_id:          The unique session identifier (e.g. '2026-03-25_10-00-00').
-        entity_name:         Name of the entity in entity_base/ (e.g. 'agent', 'butterfly_dev').
+        agent_name:          Name of the agent in agent_base/ (e.g. 'agent', 'butterfly_dev').
         sessions_base:       Root of agent-visible sessions/ directory.
         system_sessions_base: Root of _sessions/ directory.
-        entity_base:         Root of entity/ directory.
+        agent_base:          Root of agenthub/ directory.
         initial_message:     Optional first user message to write to context.jsonl.
         initial_message_id:  Optional UUID for the initial message — lets the
                               caller correlate the eventual reply (sub_agent
@@ -122,7 +122,7 @@ def init_session(
         raise ValueError(f"init_session: invalid mode {mode!r}; expected one of {sorted(_VALID_MODES)}")
     s_base = sessions_base or _DEFAULT_SESSIONS_BASE
     sys_base = system_sessions_base or _DEFAULT_SYSTEM_SESSIONS_BASE
-    ent_base = entity_base or _DEFAULT_ENTITY_BASE
+    ent_base = agent_base or _DEFAULT_AGENT_BASE
 
     session_dir = s_base / session_id
     system_dir = sys_base / session_id
@@ -146,7 +146,7 @@ def init_session(
 
     # NOTE (first-run race fix — see docs/butterfly/session_engine/design.md):
     # manifest.json is the watcher's discovery signal. It MUST be written LAST —
-    # after sessions/<id>/core/config.yaml is populated with the entity's real
+    # after sessions/<id>/core/config.yaml is populated with the agent's real
     # model and provider. If we publish manifest.json first, the server-side
     # watcher races us: it spawns Session(session_id) whose Session.__init__
     # calls ensure_config(session_dir), which writes DEFAULT_CONFIG
@@ -154,16 +154,16 @@ def init_session(
     # Our `if not session_config_path.exists()` guard then skips the real
     # copy, leaving model=null persisted on disk. The manifest write is
     # deferred to the end of this function for that reason.
-    entity_dir = ent_base / entity_name
+    agent_dir = ent_base / agent_name
 
-    # Config always comes from meta session; meta is initially populated from entity.
-    meta_dir = ensure_meta_session(entity_name, s_base=s_base)
-    if entity_dir.exists():
+    # Config always comes from meta session; meta is initially populated from agent.
+    meta_dir = ensure_meta_session(agent_name, s_base=s_base)
+    if agent_dir.exists():
         meta_config = meta_dir / 'core' / 'config.yaml'
         if not meta_config.exists() or not meta_config.read_text(encoding='utf-8').strip():
-            populate_meta_from_entity(entity_name, ent_base, s_base)
-        ensure_gene_initialized(entity_name, ent_base, s_base)
-        start_meta_agent(entity_name, entity_base=ent_base, s_base=s_base, sys_base=sys_base)
+            populate_meta_from_agent(agent_name, ent_base, s_base)
+        ensure_gene_initialized(agent_name, ent_base, s_base)
+        start_meta_agent(agent_name, agent_base=ent_base, s_base=s_base, sys_base=sys_base)
 
     meta_core_dir = meta_dir / "core"
     # Copy prompts
@@ -171,24 +171,24 @@ def init_session(
         src = meta_core_dir / name
         _write_if_absent(core_dir / name, src.read_text(encoding="utf-8") if src.exists() else "")
 
-    # Copy tools.md from meta or entity (toolhub-based tool list), fallback to legacy tool.md
-    for tools_md_src in (meta_core_dir / "tools.md", entity_dir / "tools.md",
-                         meta_core_dir / "tool.md", entity_dir / "tool.md"):
+    # Copy tools.md from meta or agent (toolhub-based tool list), fallback to legacy tool.md
+    for tools_md_src in (meta_core_dir / "tools.md", agent_dir / "tools.md",
+                         meta_core_dir / "tool.md", agent_dir / "tool.md"):
         if tools_md_src.exists():
             _write_if_absent(core_dir / "tools.md", tools_md_src.read_text(encoding="utf-8"))
             break
 
-    # Copy skills.md from meta or entity (skillhub-based skill list)
-    for skills_md_src in (meta_core_dir / "skills.md", entity_dir / "skills.md"):
+    # Copy skills.md from meta or agent (skillhub-based skill list)
+    for skills_md_src in (meta_core_dir / "skills.md", agent_dir / "skills.md"):
         if skills_md_src.exists():
             _write_if_absent(core_dir / "skills.md", skills_md_src.read_text(encoding="utf-8"))
             break
 
-    # Copy config.yaml from meta (or entity) into session core/.
+    # Copy config.yaml from meta (or agent) into session core/.
     #
     # If a stub config.yaml already exists (e.g. a racing Session.__init__
     # called ensure_config() and wrote DEFAULT_CONFIG before we got here),
-    # we still need to seed model/provider from the entity — otherwise the
+    # we still need to seed model/provider from the agent — otherwise the
     # session ships with `model: null` and the agent has no model to run
     # (v2.0.8 first-run bug).
     meta_config_path = meta_core_dir / "config.yaml"
@@ -205,42 +205,42 @@ def init_session(
         # safe_load returns None for empty files, and may return lists/scalars
         # for malformed-but-valid YAML. Anything that isn't a mapping is
         # treated as "needs seed" — safer to overwrite a broken stub with the
-        # real entity config than to trust it.
+        # real agent config than to trust it.
         if not isinstance(loaded, dict):
             return True
         # Stub DEFAULT_CONFIG written by ensure_config has model=None and
-        # provider=None; real entity configs always carry both. If either
-        # is missing/falsy, re-seed from the entity.
+        # provider=None; real agent configs always carry both. If either
+        # is missing/falsy, re-seed from the agent.
         return not loaded.get("model") or not loaded.get("provider")
 
     if _needs_seed(session_config_path):
         if meta_config_path.exists() and meta_config_path.read_text(encoding="utf-8").strip():
             shutil.copy2(meta_config_path, session_config_path)
         else:
-            # No meta config yet — bootstrap from entity config.yaml
-            entity_config_path = entity_dir / "config.yaml"
-            if entity_config_path.exists():
-                shutil.copy2(entity_config_path, session_config_path)
+            # No meta config yet — bootstrap from agent config.yaml
+            agent_config_path = agent_dir / "config.yaml"
+            if agent_config_path.exists():
+                shutil.copy2(agent_config_path, session_config_path)
             else:
                 ensure_config(session_dir)
     # Record meta version in status.json so staleness can be detected later.
-    meta_version = get_meta_version(entity_name, sys_base=sys_base)
+    meta_version = get_meta_version(agent_name, sys_base=sys_base)
     if meta_version:
         write_session_status(system_dir, agent_version=meta_version)
-    # Seed mutable state from meta session, with entity memory as bootstrap fallback.
-    sync_from_entity(entity_name, ent_base, s_base=s_base)
+    # Seed mutable state from meta session, with agent memory as bootstrap fallback.
+    sync_from_agent(agent_name, ent_base, s_base=s_base)
 
     meta_memory = meta_dir / "core" / "memory.md"
-    entity_memory = (ent_base / entity_name / "memory.md") if entity_dir.exists() else None
+    agent_memory = (ent_base / agent_name / "memory.md") if agent_dir.exists() else None
     if meta_memory.exists() and _is_real_memory(meta_memory.read_text(encoding="utf-8")):
         _write_if_absent(core_dir / "memory.md", meta_memory.read_text(encoding="utf-8"))
-    elif entity_memory and entity_memory.exists() and _is_real_memory(entity_memory.read_text(encoding="utf-8")):
-        _write_if_absent(core_dir / "memory.md", entity_memory.read_text(encoding="utf-8"))
+    elif agent_memory and agent_memory.exists() and _is_real_memory(agent_memory.read_text(encoding="utf-8")):
+        _write_if_absent(core_dir / "memory.md", agent_memory.read_text(encoding="utf-8"))
     else:
         _write_if_absent(core_dir / "memory.md", "")
 
-    # Seed layered memory from <entity>_meta/core/memory/ first, then entity/<entity>/memory/.
-    memory_seed_dirs = [src_dir for src_dir in (meta_dir / "core" / "memory", ent_base / entity_name / "memory") if src_dir.is_dir()]
+    # Seed layered memory from <agent>_meta/core/memory/ first, then agenthub/<agent>/memory/.
+    memory_seed_dirs = [src_dir for src_dir in (meta_dir / "core" / "memory", ent_base / agent_name / "memory") if src_dir.is_dir()]
     seed_files = [f for src_dir in memory_seed_dirs for f in sorted(src_dir.glob("*.md"))]
     if seed_files:
         session_memory_dir = core_dir / "memory"
@@ -326,7 +326,7 @@ def init_session(
     # is a no-op instead of clobbering model/provider with DEFAULT_CONFIG.
     manifest: dict = {
         "session_id": session_id,
-        "entity": entity_name,
+        "agent": agent_name,
         "created_at": datetime.now().isoformat(),
     }
     if parent_session_id is not None:

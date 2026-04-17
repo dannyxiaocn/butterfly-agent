@@ -13,9 +13,9 @@ import pytest
 from butterfly.session_engine.session_init import init_session
 
 
-def _entity_dir(tmp_path: Path) -> Path:
-    """Build a minimal entity tree: just enough for init_session to copy."""
-    base = tmp_path / "entity"
+def _agent_dir(tmp_path: Path) -> Path:
+    """Build a minimal agent tree: just enough for init_session to copy."""
+    base = tmp_path / "agenthub"
     ag = base / "agent"
     ag.mkdir(parents=True)
     (ag / "config.yaml").write_text("name: agent\nmodel: test-model\nprovider: anthropic\n", encoding="utf-8")
@@ -29,31 +29,31 @@ def _entity_dir(tmp_path: Path) -> Path:
 def _bases(tmp_path: Path) -> tuple[Path, Path, Path]:
     sessions_base = tmp_path / "sessions"
     sys_base = tmp_path / "_sessions"
-    entity_base = _entity_dir(tmp_path)
+    agent_base = _agent_dir(tmp_path)
     sessions_base.mkdir()
     sys_base.mkdir()
-    return sessions_base, sys_base, entity_base
+    return sessions_base, sys_base, agent_base
 
 
 def test_manifest_records_parent_and_mode(tmp_path: Path) -> None:
-    sessions_base, sys_base, entity_base = _bases(tmp_path)
+    sessions_base, sys_base, agent_base = _bases(tmp_path)
     init_session(
         "child-1", "agent",
-        sessions_base=sessions_base, system_sessions_base=sys_base, entity_base=entity_base,
+        sessions_base=sessions_base, system_sessions_base=sys_base, agent_base=agent_base,
         parent_session_id="parent-x",
         mode="explorer",
     )
     manifest = json.loads((sys_base / "child-1" / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["parent_session_id"] == "parent-x"
     assert manifest["mode"] == "explorer"
-    assert manifest["entity"] == "agent"
+    assert manifest["agent"] == "agent"
 
 
 def test_top_level_session_omits_parent_and_mode(tmp_path: Path) -> None:
-    sessions_base, sys_base, entity_base = _bases(tmp_path)
+    sessions_base, sys_base, agent_base = _bases(tmp_path)
     init_session(
         "top", "agent",
-        sessions_base=sessions_base, system_sessions_base=sys_base, entity_base=entity_base,
+        sessions_base=sessions_base, system_sessions_base=sys_base, agent_base=agent_base,
     )
     manifest = json.loads((sys_base / "top" / "manifest.json").read_text(encoding="utf-8"))
     assert "parent_session_id" not in manifest
@@ -61,20 +61,20 @@ def test_top_level_session_omits_parent_and_mode(tmp_path: Path) -> None:
 
 
 def test_invalid_mode_raises(tmp_path: Path) -> None:
-    sessions_base, sys_base, entity_base = _bases(tmp_path)
+    sessions_base, sys_base, agent_base = _bases(tmp_path)
     with pytest.raises(ValueError, match="invalid mode"):
         init_session(
             "bad", "agent",
-            sessions_base=sessions_base, system_sessions_base=sys_base, entity_base=entity_base,
+            sessions_base=sessions_base, system_sessions_base=sys_base, agent_base=agent_base,
             mode="overlord",
         )
 
 
 def test_initial_message_id_persists_on_user_input(tmp_path: Path) -> None:
-    sessions_base, sys_base, entity_base = _bases(tmp_path)
+    sessions_base, sys_base, agent_base = _bases(tmp_path)
     init_session(
         "with-msg", "agent",
-        sessions_base=sessions_base, system_sessions_base=sys_base, entity_base=entity_base,
+        sessions_base=sessions_base, system_sessions_base=sys_base, agent_base=agent_base,
         initial_message="hello",
         initial_message_id="msg-fixed-123",
     )
@@ -92,10 +92,10 @@ def test_explorer_mode_copies_mode_md_from_toolhub(tmp_path: Path) -> None:
     silently recording an inconsistent manifest — that behaviour is
     covered by :func:`test_missing_mode_prompt_raises` below.
     """
-    sessions_base, sys_base, entity_base = _bases(tmp_path)
+    sessions_base, sys_base, agent_base = _bases(tmp_path)
     init_session(
         "explorer-child", "agent",
-        sessions_base=sessions_base, system_sessions_base=sys_base, entity_base=entity_base,
+        sessions_base=sessions_base, system_sessions_base=sys_base, agent_base=agent_base,
         mode="explorer",
     )
     mode_md = sessions_base / "explorer-child" / "core" / "mode.md"
@@ -109,7 +109,7 @@ def test_missing_mode_prompt_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     """If the toolhub prompt file doesn't exist, init_session refuses to
     record ``mode`` rather than leaving a mode-aware child without its
     agent-visible rule set. (Cubic review, PR #28.)"""
-    sessions_base, sys_base, entity_base = _bases(tmp_path)
+    sessions_base, sys_base, agent_base = _bases(tmp_path)
     # Point the toolhub lookup at an empty dir so explorer.md is missing.
     empty_toolhub = tmp_path / "fake_toolhub"
     (empty_toolhub / "sub_agent").mkdir(parents=True)
@@ -118,6 +118,6 @@ def test_missing_mode_prompt_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     with pytest.raises(FileNotFoundError, match="inconsistent state"):
         init_session(
             "child-no-prompt", "agent",
-            sessions_base=sessions_base, system_sessions_base=sys_base, entity_base=entity_base,
+            sessions_base=sessions_base, system_sessions_base=sys_base, agent_base=agent_base,
             mode="explorer",
         )

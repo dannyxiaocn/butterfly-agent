@@ -28,7 +28,7 @@ When the primary provider is reasoning-aware (Codex, OpenAI Responses) and emits
 - `anthropic._sanitize_content_for_anthropic` strips any block type not on Anthropic's allow-list; a fully-filtered assistant message collapses to a single `[continued]` text block.
 - `openai_api._build_messages` substitutes the same `[continued]` placeholder when a filtered assistant message has no text and no tool_calls.
 
-This keeps the default entity config (`codex-oauth` primary, `kimi-coding-plan` fallback) reliable.
+This keeps the default agent config (`codex-oauth` primary, `kimi-coding-plan` fallback) reliable.
 
 ## Agent fallback scope
 

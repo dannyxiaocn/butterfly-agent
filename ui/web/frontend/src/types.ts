@@ -1,6 +1,6 @@
 export interface Session {
   id: string;
-  entity: string;
+  agent: string;
   status: 'active' | 'stopped';
   pid: number | null;
   pid_alive: boolean;

@@ -13,7 +13,7 @@ from unittest.mock import patch
 def _make_system_dir(tmp_path: Path, session_id: str) -> Path:
     sdir = tmp_path / session_id
     sdir.mkdir(parents=True)
-    (sdir / "manifest.json").write_text(json.dumps({"entity": "agent"}))
+    (sdir / "manifest.json").write_text(json.dumps({"agent": "agent"}))
     (sdir / "context.jsonl").write_text("")
     (sdir / "status.json").write_text(json.dumps({"status": "active"}))
     (sdir / "events.jsonl").write_text("")

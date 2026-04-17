@@ -27,8 +27,21 @@ export const api = {
   getSession: (id: string): Promise<Session> =>
     request('GET', `/api/sessions/${encodeURIComponent(id)}`),
 
-  createSession: (body: { id?: string; entity: string }): Promise<{ id: string; entity: string }> =>
+  createSession: (body: { id?: string; agent: string }): Promise<{ id: string; agent: string }> =>
     request('POST', '/api/sessions', body),
+
+  getUpdateStatus: (): Promise<{
+    applied?: boolean;
+    available?: boolean;
+    dirty?: boolean;
+    commits_behind?: number;
+    local_head?: string;
+    remote_head?: string;
+    applied_at?: string;
+    checked_at?: string;
+    new_head?: string;
+    reload?: boolean;
+  }> => request('GET', '/api/update_status'),
 
   deleteSession: (id: string): Promise<void> =>
     request('DELETE', `/api/sessions/${encodeURIComponent(id)}`),

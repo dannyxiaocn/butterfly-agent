@@ -3,10 +3,10 @@
 Browser connects via SSE to receive real-time agent output; sends messages
 via POST. FastAPI is a thin HTTP wrapper over FileIPC — no agent logic here.
 
-Usage:
-    butterfly-web
-    butterfly-web --port 7720 --sessions-dir ./sessions
-    python -m butterfly.ui.web
+Not exposed as a console script. v2.0.16 dropped `butterfly-web` from
+pyproject.toml; `butterfly` (no args, in `ui/cli/main.py::cmd_default`)
+calls `create_app()` and runs uvicorn in-process. `main()` below stays
+for `python -m ui.web.app` use cases (scripts / direct invocation).
 """
 from __future__ import annotations
 
@@ -51,7 +51,7 @@ from butterfly.service.sessions_service import _validate_session_id as _service_
 
 SESSIONS_DIR = Path(__file__).parent.parent.parent / "sessions"
 _SYSTEM_SESSIONS_DIR = Path(__file__).parent.parent.parent / "_sessions"
-_DEFAULT_ENTITY = "entity/agent"
+_DEFAULT_AGENT = "agenthub/agent"
 _DEFAULT_PORT = 7720
 _DIST_DIR = Path(__file__).parent / "frontend" / "dist"
 
@@ -154,6 +154,27 @@ def create_app(sessions_dir: Path, system_sessions_dir: Path | None = None) -> F
     async def index():
         return FileResponse(_DIST_DIR / "index.html")
 
+    @app.get("/api/update_status")
+    async def update_status():
+        """Return the auto-update worker's latest status, if any.
+
+        Shape (written by `butterfly/runtime/server.py::_auto_update_worker`):
+          - `{applied: true, new_head, applied_at, reload: true}` after a
+            silent update landed; the frontend force-reloads on seeing a
+            newer `applied_at` than its last-seen value.
+          - `{available: true, dirty: true, commits_behind, ...}` when the
+            worker sees upstream commits but the tree is dirty — frontend
+            shows a top-right notification.
+          - `{}` when no pending update.
+        """
+        status_path = system_sessions_dir / "update_status.json"
+        if not status_path.exists():
+            return {}
+        try:
+            return json.loads(status_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+
     @app.get("/api/sessions")
     async def list_sessions():
         return service_list_sessions(sessions_dir, system_sessions_dir, exclude_meta=False)
@@ -172,9 +193,9 @@ def create_app(sessions_dir: Path, system_sessions_dir: Path | None = None) -> F
     @app.post("/api/sessions")
     async def create_session(body: dict):
         session_id = body.get("id") or (datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + "-" + uuid.uuid4().hex[:4])
-        entity = body.get("entity", _DEFAULT_ENTITY)
+        agent = body.get("agent", _DEFAULT_AGENT)
         try:
-            return service_create_session(session_id, entity, sessions_dir=sessions_dir, system_sessions_dir=system_sessions_dir)
+            return service_create_session(session_id, agent, sessions_dir=sessions_dir, system_sessions_dir=system_sessions_dir)
         except ValueError as exc:
             raise HTTPException(400, str(exc))
 

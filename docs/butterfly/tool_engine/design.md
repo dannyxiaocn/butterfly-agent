@@ -1,6 +1,6 @@
 # Tool Engine — Design
 
-The tool engine turns tool definitions into executable `Tool` objects. Tools live in `toolhub/` (centralized, repo-wide) and are enabled per-entity via `tools.md` (one tool name per line; legacy `tool.md` is still accepted as a fallback but `tools.md` is canonical). The `ToolLoader` dynamically imports executors at session init and injects session context (workdir, tasks_dir, memory_dir, etc.) into their constructors so agents never pass environmental parameters.
+The tool engine turns tool definitions into executable `Tool` objects. Tools live in `toolhub/` (centralized, repo-wide) and are enabled per-agent via `tools.md` (one tool name per line; legacy `tool.md` is still accepted as a fallback but `tools.md` is canonical). The `ToolLoader` dynamically imports executors at session init and injects session context (workdir, tasks_dir, memory_dir, etc.) into their constructors so agents never pass environmental parameters.
 
 This file is the authoritative spec for v2.0.5. It covers the catalog, the backgroundable protocol, the panel, and the shell / bash split.
 
@@ -16,6 +16,12 @@ This file is the authoritative spec for v2.0.5. It covers the catalog, the backg
 
 ---
 
+### Naming convention
+
+Built-in tools follow a `<component>_<action>` naming convention: `memory_recall`, `memory_update`, `task_create`, `task_update`, `task_finish`, `task_pause`, `task_resume`, `task_list`. This groups related tools together in alphabetical listings and makes the tool surface readable at a glance.
+
+---
+
 ## 2. Tool catalog (v2.0.5)
 
 The catalog is split into **toolhub tools** (declared in `toolhub/<name>/`) and **session-authored tools** (`.json`+`.sh` pairs agents create at runtime).
@@ -23,7 +29,7 @@ The catalog is split into **toolhub tools** (declared in `toolhub/<name>/`) and 
 | Name | Purpose | Backgroundable | Agent sees |
 |---|---|---|---|
 | `bash` | One-shot shell command, fresh process every call | **Yes** | `command, timeout?, stdin?, run_in_background?, polling_interval?` |
-| `sub_agent` | Spawn a child session (same entity), return its FINAL reply | **Yes** | `task, mode (explorer\|executor), timeout_seconds?, run_in_background?, polling_interval?` |
+| `sub_agent` | Spawn a child session (same agent), return its FINAL reply | **Yes** | `task, mode (explorer\|executor), timeout_seconds?, run_in_background?, polling_interval?` |
 | `session_shell` | Persistent long-lived shell, `cd`/env survive across calls | No | `command, timeout?, reset?` |
 | `read` | Read file contents (paginated) | No | `path, offset?, limit?` |
 | `write` | Write/overwrite a file | No | `path, content` |
@@ -33,8 +39,8 @@ The catalog is split into **toolhub tools** (declared in `toolhub/<name>/`) and 
 | `web_search` | Multi-provider search (brave/tavily) | No | `query, count?, freshness?, ...` |
 | `web_fetch` | Multi-provider URL fetch + text extraction | No | `url, max_chars?` |
 | `skill` | Load a SKILL.md into context | No | `skill, args?` |
-| `recall_memory` | Read full sub-memory file | No | `name?` |
-| `update_memory` | Edit sub-memory **and** update main-memory index line | No | `name, old_string, new_string, description?` |
+| `memory_recall` | Read full sub-memory file | No | `name?` |
+| `memory_update` | Edit sub-memory **and** update main-memory index line | No | `name, old_string, new_string, description?` |
 | `task_create` | Create a task card | No | `name, description, interval?, start_at?, end_at?` |
 | `task_update` | Update a task card (description, interval, progress, comments) | No | `name, ...` |
 | `task_finish` | Mark a task card finished | No | `name` |
@@ -229,10 +235,10 @@ Defaults:
 
 Starting in v2.0.5, sub-memory is **not** injected into the system prompt. Only `core/memory.md` (main) is. Full rationale and flow in `docs/butterfly/session_engine/design.md`.
 
-- `recall_memory(name?)`: read-only. If `name` omitted, lists available sub-memories (derived from main memory's index lines). Otherwise returns full `core/memory/<name>.md`.
-- `update_memory(name, old_string, new_string, description?)`: Edit-style patch on `core/memory/<name>.md` (creates the file if new), AND upserts the one-line index entry `<name>: <description>` in `core/memory.md`. `description` is required the first time a sub-memory is created; optional for subsequent edits (leaves the existing index line alone).
+- `memory_recall(name?)`: read-only. If `name` omitted, lists available sub-memories (derived from main memory's index lines). Otherwise returns full `core/memory/<name>.md`.
+- `memory_update(name, old_string, new_string, description?)`: Edit-style patch on `core/memory/<name>.md` (creates the file if new), AND upserts the one-line index entry `<name>: <description>` in `core/memory.md`. `description` is required the first time a sub-memory is created; optional for subsequent edits (leaves the existing index line alone).
 
-No free-standing `memory_write` — everything goes through `update_memory` to keep the index in sync.
+No free-standing `memory_write` — everything goes through `memory_update` to keep the index in sync.
 
 ---
 
@@ -263,8 +269,8 @@ Per-tool context injection table (v2.0.5):
 | `glob`/`grep` | `workdir` |
 | `web_search`/`web_fetch` | (provider-registry driven; no constructor injection) |
 | `skill` | skills list |
-| `recall_memory` | `memory_dir` |
-| `update_memory` | `memory_dir`, `main_memory_path` |
+| `memory_recall` | `memory_dir` |
+| `memory_update` | `memory_dir`, `main_memory_path` |
 | `task_*` | `tasks_dir` |
 | `tool_output` | `panel_dir`, `tool_results_dir` |
 
@@ -281,14 +287,14 @@ Agents can still create `.json` + `.sh` pairs in `core/tools/`; the `.sh` script
 
 ## 11. Backward compatibility
 
-**None.** v2.0.5 is a breaking release; `shell`, `manage_task`, `reload_capabilities` are removed. Entities (`entity/agent`, `entity/butterfly_dev`) have their `tools.md` rewritten as part of this release. Sessions created before v2.0.5 will fail to load removed tools — users must create new sessions or manually edit their session `core/tools.md`.
+**None.** v2.0.5 is a breaking release; `shell`, `manage_task`, `reload_capabilities` are removed. Agents (`agenthub/agent`, `agenthub/butterfly_dev`) have their `tools.md` rewritten as part of this release. Sessions created before v2.0.5 will fail to load removed tools — users must create new sessions or manually edit their session `core/tools.md`.
 
 ---
 
 ## 12. Sub-agent tool (v2.0.13)
 
 `sub_agent` is a backgroundable tool that spawns a **child session** of the
-same entity as the parent. It exists so a parent can delegate context-heavy
+same agent as the parent. It exists so a parent can delegate context-heavy
 work (research, sandboxed experiments, large refactors) without polluting
 its own conversation history.
 

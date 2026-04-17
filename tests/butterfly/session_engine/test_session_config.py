@@ -24,8 +24,8 @@ def test_config_path_in_session_dir(tmp_path):
     assert config_path(tmp_path) == core / "config.yaml"
 
 
-def test_config_path_in_entity_dir(tmp_path):
-    """config_path returns config.yaml for entity dirs (no core/)."""
+def test_config_path_in_agent_dir(tmp_path):
+    """config_path returns config.yaml for agent dirs (no core/)."""
     assert config_path(tmp_path) == tmp_path / "config.yaml"
 
 
