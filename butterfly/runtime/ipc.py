@@ -95,55 +95,27 @@ def _context_event_to_display(event: dict, *, for_history: bool = False) -> list
                                 })
 
         # Thinking content:
-        #   * Prefer ``turn.thinking_blocks`` — server-persisted list of
-        #     ``{block_id, text, duration_ms, ts}`` dicts captured by the
-        #     session callback (v2.0.17+). Covers every provider uniformly,
-        #     since most of them don't embed ``{"type":"thinking"}`` in
-        #     message.content (codex uses ``{"type":"reasoning"}``,
-        #     Anthropic's content_text joiner drops thinking blocks).
-        #   * Fallback: legacy sessions written before ``thinking_blocks``
-        #     may still have Anthropic-style ``{"type":"thinking"}`` blocks
-        #     in message.content. Read them as a back-compat path.
-        #   * For live SSE: thinking_start/thinking_done events already
-        #     rendered the cell, so we only emit when both
-        #     ``has_streaming_thinking`` is absent AND no persisted
-        #     thinking_blocks exist — otherwise we'd double-render.
-        persisted = event.get("thinking_blocks") or []
-        if isinstance(persisted, list) and persisted:
-            if for_history:
-                for i, block in enumerate(persisted):
-                    if not isinstance(block, dict):
-                        continue
-                    text = block.get("text", "")
-                    if not text:
-                        continue
-                    thinking_ev: dict = {
-                        "type": "thinking",
-                        "content": text,
-                        "ts": block.get("ts") or ts,
-                        "id": f"thinking:{ts}:persisted:{i}",
-                    }
-                    if block.get("duration_ms") is not None:
-                        thinking_ev["duration_ms"] = block["duration_ms"]
-                    if block.get("block_id"):
-                        thinking_ev["block_id"] = block["block_id"]
-                    result.append(thinking_ev)
-        elif for_history or not event.get("has_streaming_thinking"):
+        #   * For history replay: always emit so the transcript includes
+        #     prior turns' reasoning.
+        #   * For live SSE: when the turn was streamed with the new
+        #     thinking_start/thinking_done events, don't re-emit from the
+        #     serialized turn content — the live events already rendered the
+        #     cells and re-emitting would duplicate them.
+        if for_history or not event.get("has_streaming_thinking"):
             thinking_idx = 0
             for msg in event.get("messages", []):
                 if msg["role"] == "assistant":
                     content = msg.get("content", [])
                     if isinstance(content, list):
-                        for inner in content:
-                            if isinstance(inner, dict) and inner.get("type") == "thinking":
-                                thinking_text = inner.get("thinking", "")
+                        for block in content:
+                            if isinstance(block, dict) and block.get("type") == "thinking":
+                                thinking_text = block.get("thinking", "")
                                 if thinking_text:
-                                    thinking_ev = {
-                                        "type": "thinking",
-                                        "content": thinking_text,
-                                        "ts": ts,
-                                        "id": f"thinking:{ts}:{thinking_idx}",
-                                    }
+                                    thinking_ev: dict = {"type": "thinking", "content": thinking_text, "ts": ts}
+                                    # Always set id (not guarded by for_history) so thinking events
+                                    # returned by the history endpoint can also be deduped client-side,
+                                    # preventing repeat renders on visibilitychange.
+                                    thinking_ev["id"] = f"thinking:{ts}:{thinking_idx}"
                                     thinking_idx += 1
                                     result.append(thinking_ev)
 

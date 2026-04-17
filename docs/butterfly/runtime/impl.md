@@ -69,7 +69,6 @@ Client-side handle for frontends:
 
 - `last_running_event_offset()`: returns byte offset of last `model_status:running` for SSE reconnect
 - Thinking blocks use per-block IDs (`thinking:{ts}:{idx}`) for multi-block dedup
-- **v2.0.17**: history replay prefers `turn.thinking_blocks` (server-persisted list from the session callback — covers every provider uniformly) before falling back to scanning `message.content` for Anthropic-style `{"type":"thinking"}` blocks. Live SSE still skips both paths when `has_streaming_thinking` is set so the live `thinking_start`/`thinking_done` pair is the only rendered cell.
 - Stopped sessions can auto-expire back to active after several hours
 
 ## v2.0.13 — Sub-agent / background UI events
