@@ -37,6 +37,26 @@ def get_hud(session_id: str, sessions_dir: Path, system_sessions_dir: Path) -> d
         except Exception:
             pass
     params = read_config(session_dir) if session_dir.exists() else {}
+    # Resolve the model label the HUD should display:
+    #   1. explicit `model` field in config.yaml (user picked a specific one)
+    #   2. otherwise look up the provider's default via the models catalog —
+    #      the agent runs against that same default, so the HUD should show
+    #      "gpt-5.4" rather than "(default)" which hides what's actually in use.
+    display_model: str | None = params.get('model') or None
+    if display_model is None:
+        provider = params.get('provider') or None
+        if provider:
+            try:
+                from .models_service import get_models_catalog
+                catalog = get_models_catalog()
+                for entry in catalog.get('providers', []):
+                    if entry.get('provider') == provider:
+                        default_model = entry.get('default_model')
+                        if default_model:
+                            display_model = f"{default_model} (provider default)"
+                        break
+            except Exception:
+                pass
     from butterfly.runtime.ipc import FileIPC
     ipc = FileIPC(system_dir)
     latest_usage = None
@@ -78,7 +98,7 @@ def get_hud(session_id: str, sessions_dir: Path, system_sessions_dir: Path) -> d
     return {
         'cwd': git_root or str(project_root),
         'context_bytes': ipc.context_size(),
-        'model': params.get('model') or None,
+        'model': display_model,
         'git': {'files': git_files, 'added': git_added, 'deleted': git_deleted},
         'usage': latest_usage,
         'sub_agents_running': sub_agents_running,

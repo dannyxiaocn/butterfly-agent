@@ -76,8 +76,14 @@ export function createChat(): HTMLElement {
   // <details> element. Mirrors the msg-tool running/done lifecycle.
   const runningThinking = new Map<string, HTMLElement>();
 
-  // Streaming bubble lives INSIDE the messages div so it scrolls with the conversation
+  // Streaming bubble lives INSIDE the messages div so it scrolls with the conversation.
+  // Text is accumulated in `streamingText` so each partial_text event appends
+  // to what we've already rendered — backend emits each chunk as a delta
+  // (see Session._make_text_chunk_callback), not a cumulative buffer. Without
+  // accumulation the body would flash the last 150-char slice on every flush
+  // and then "jump" to the full reply when the final agent event arrives.
   let streamingEl: HTMLDivElement | null = null;
+  let streamingText = '';
   let isStreaming = false;
 
   function getOrCreateStreamingBubble(): HTMLDivElement {
@@ -87,12 +93,9 @@ export function createChat(): HTMLElement {
       streamingEl.innerHTML = `
         <div class="msg-header">
           <span class="msg-label">agent</span>
-          <span class="streaming-badge">
-            <span class="streaming-dot"></span><span class="streaming-dot"></span><span class="streaming-dot"></span>
-            <span class="streaming-label">generating…</span>
-          </span>
         </div>
         <div class="msg-body msg-streaming-body markdown-body"></div>
+        <span class="streaming-cursor" aria-hidden="true">Working… <span class="streaming-caret"></span></span>
       `;
       messages.appendChild(streamingEl);
     }
@@ -104,7 +107,24 @@ export function createChat(): HTMLElement {
       streamingEl.remove();
       streamingEl = null;
     }
+    streamingText = '';
     isStreaming = false;
+  }
+
+  function markRunningThinkingInterrupted() {
+    // Flip any still-running thinking cells (no matching thinking_done)
+    // to a final "interrupted" state when the turn gets cancelled — otherwise
+    // the cell would spin forever with "Thinking…".
+    for (const [blockId, cell] of runningThinking) {
+      const summary = cell.querySelector('.tool-status-summary') as HTMLElement | null;
+      if (summary) {
+        summary.innerHTML = `<span class="tool-status-icon">⚠</span><span class="tool-status-name">Thinking interrupted</span><span class="tool-status-meta">cancelled</span>`;
+      }
+      cell.classList.remove('msg-thinking-running');
+      cell.classList.add('msg-thinking-done', 'msg-thinking-interrupted');
+      cell.dataset.interrupted = '1';
+      runningThinking.delete(blockId);
+    }
   }
 
   function clearMessages() {
@@ -120,20 +140,46 @@ export function createChat(): HTMLElement {
     updateHudDot('idle');
   }
 
-  function scrollToBottom() {
-    messages.scrollTop = messages.scrollHeight;
+  // Auto-scroll only when the user is already pinned to the bottom — this
+  // keeps streaming replies from yanking the viewport away when the user
+  // has scrolled up to read earlier context (Bug 6, chat area).
+  // 80 px leeway covers the case where a short new message pushes the
+  // current bottom line slightly above the fold.
+  //
+  // IMPORTANT: ``isNearBottom()`` MUST be sampled BEFORE the DOM mutation
+  // that extends ``scrollHeight``. If we check afterwards (e.g. after
+  // appending a 400 px message), the new height pushes the measured
+  // distance past the 80 px threshold even though the user was glued to
+  // the bottom — so auto-follow would silently stop. Callers that append
+  // new content use ``stickyBottomNow()`` to capture the pre-mutation
+  // state and pass it to ``scrollToBottom(wasBottom)``. (cubic P2,
+  // PR #33 review.)
+  function isNearBottom(): boolean {
+    return messages.scrollHeight - messages.scrollTop - messages.clientHeight < 80;
+  }
+
+  function stickyBottomNow(): boolean {
+    return isNearBottom();
+  }
+
+  function scrollToBottom(wasBottom?: boolean) {
+    const shouldScroll = wasBottom ?? isNearBottom();
+    if (shouldScroll) {
+      messages.scrollTop = messages.scrollHeight;
+    }
   }
 
   function appendEvent(event: DisplayEvent) {
     const msgEl = renderEvent(event);
     if (msgEl) {
+      const wasBottom = stickyBottomNow();
       // Keep streaming bubble at the bottom: insert new events before it when streaming
       if (streamingEl && messages.contains(streamingEl)) {
         messages.insertBefore(msgEl, streamingEl);
       } else {
         messages.appendChild(msgEl);
       }
-      scrollToBottom();
+      scrollToBottom(wasBottom);
     }
   }
 
@@ -141,16 +187,22 @@ export function createChat(): HTMLElement {
     switch (event.type) {
       case 'model_status':
         if (event.state === 'running') {
-          // Show streaming bubble with dots (no text yet)
+          // New turn starting: reset the streaming buffer so leftover text
+          // from a prior turn doesn't bleed into the next bubble.
+          const wasBottom = stickyBottomNow();
           isStreaming = true;
+          streamingText = '';
           const bubble = getOrCreateStreamingBubble();
           const body = bubble.querySelector('.msg-streaming-body') as HTMLElement;
           body.innerHTML = '';
-          scrollToBottom();
+          scrollToBottom(wasBottom);
           store.modelState = { state: 'running', source: event.source ?? null };
           updateHudDot('running');
         } else {
-          // Idle: if no agent message came, remove bubble
+          // Idle: any thinking cell still open at this point was interrupted
+          // (the provider never got to emit thinking_done) — flip it to a
+          // terminal state so the UI doesn't spin forever.
+          markRunningThinkingInterrupted();
           if (isStreaming) removeStreamingBubble();
           store.modelState = { state: 'idle', source: null };
           updateHudDot('idle');
@@ -164,26 +216,47 @@ export function createChat(): HTMLElement {
         break;
 
       case 'partial_text':
-        // Live-update the streaming bubble body with the thinking text
+        // Backend emits each chunk as a delta (~150 char flushes), NOT a
+        // cumulative buffer. Append so the bubble grows incrementally
+        // instead of flashing only the last slice.
         if (!isStreaming) isStreaming = true;
         {
+          const wasBottom = stickyBottomNow();
           const bubble = getOrCreateStreamingBubble();
           const body = bubble.querySelector('.msg-streaming-body') as HTMLElement;
           if (event.content) {
-            body.innerHTML = renderMarkdown(event.content);
+            streamingText += event.content;
+            body.innerHTML = renderMarkdown(streamingText);
           }
-          scrollToBottom();
+          scrollToBottom(wasBottom);
         }
         break;
 
       case 'thinking':
         // Thinking block from a COMPLETED turn (history replay or legacy
         // session where thinking_start/thinking_done weren't emitted).
-        // Append as a collapsed cell above the agent text.
-        appendEvent(event);
+        // Dedup against:
+        //   (a) a cell with the same block_id already on-screen from the
+        //       live thinking_start/thinking_done path (visibilitychange
+        //       reconnects re-fetch context.jsonl so the same block can
+        //       arrive via both channels).
+        //   (b) event.id already rendered — display events carry a stable
+        //       id like "thinking:<ts>:persisted:<i>".
+        {
+          const bid = event.block_id;
+          if (bid && messages.querySelector(`.msg-thinking[data-block-id="${CSS.escape(bid)}"]`)) {
+            break;
+          }
+          const evId = event.id;
+          if (evId && messages.querySelector(`.msg-thinking[data-event-id="${CSS.escape(evId)}"]`)) {
+            break;
+          }
+          appendEvent(event);
+        }
         break;
 
       case 'thinking_start': {
+        const wasBottom = stickyBottomNow();
         const blockId = event.block_id ?? `th:${Date.now()}`;
         // If an older cell for this id somehow exists, replace it.
         const existing = runningThinking.get(blockId);
@@ -209,11 +282,12 @@ export function createChat(): HTMLElement {
           messages.appendChild(cell);
         }
         runningThinking.set(blockId, cell);
-        scrollToBottom();
+        scrollToBottom(wasBottom);
         break;
       }
 
       case 'thinking_done': {
+        const wasBottom = stickyBottomNow();
         const blockId = event.block_id ?? '';
         let cell = blockId ? runningThinking.get(blockId) ?? null : null;
         if (!cell && blockId) {
@@ -255,14 +329,51 @@ export function createChat(): HTMLElement {
           }
         }
         if (blockId) runningThinking.delete(blockId);
-        scrollToBottom();
+        scrollToBottom(wasBottom);
         break;
       }
 
       case 'agent':
-        // Final response: remove streaming bubble, append real message
-        removeStreamingBubble();
-        appendEvent(event);
+        // Promote the streaming bubble in-place into a completed agent
+        // message — drops the cursor + streaming classes and replaces the
+        // body with the final rendered text. Avoids the old jump where the
+        // streaming bubble was removed and a fresh bubble appended,
+        // making it look like the reply arrived as one big block.
+        if (streamingEl && event.content) {
+          const wasBottom = stickyBottomNow();
+          const bubble = streamingEl;
+          bubble.classList.remove('msg-streaming');
+          const body = bubble.querySelector('.msg-streaming-body') as HTMLElement | null;
+          if (body) {
+            body.classList.remove('msg-streaming-body');
+            body.innerHTML = renderMarkdown(event.content);
+          }
+          const cursor = bubble.querySelector('.streaming-cursor');
+          if (cursor) cursor.remove();
+          const header = bubble.querySelector('.msg-header') as HTMLElement | null;
+          if (header) {
+            const isTask = event.triggered_by?.startsWith('task:');
+            const label = isTask ? '⏱ agent' : 'agent';
+            let usageHtml = '';
+            if (event.usage) {
+              const u = event.usage;
+              const parts: string[] = [];
+              if (u.input != null) parts.push(`in:${u.input}`);
+              if (u.output != null) parts.push(`out:${u.output}`);
+              if (u.cache_read != null) parts.push(`cached:${u.cache_read}`);
+              if (u.cache_write != null) parts.push(`wrote:${u.cache_write}`);
+              if (parts.length) usageHtml = `<span class="usage-stats">${escapeHtml(parts.join(' · '))}</span>`;
+            }
+            header.innerHTML = `<span class="msg-label">${escapeHtml(label)}</span>${usageHtml}<span class="msg-ts">${formatTs(event.ts)}</span>`;
+          }
+          streamingEl = null;
+          streamingText = '';
+          isStreaming = false;
+          scrollToBottom(wasBottom);
+        } else {
+          removeStreamingBubble();
+          appendEvent(event);
+        }
         // The 'agent' event carries the turn's token usage — update the HUD
         // pill inline so tokens don't freeze between explicit refreshHud()
         // calls (flagged in PR #24 review item 8).
@@ -588,12 +699,17 @@ function renderEvent(event: DisplayEvent): HTMLElement | null {
   switch (event.type) {
     case 'thinking': {
       if (!event.content) return null;
-      div.className = 'msg msg-thinking';
+      div.className = 'msg msg-thinking msg-thinking-done';
+      if (event.block_id) div.dataset.blockId = event.block_id;
+      if (event.id) div.dataset.eventId = event.id;
+      const durLabel = typeof event.duration_ms === 'number'
+        ? ` for ${(event.duration_ms / 1000).toFixed(1)}s`
+        : '';
       div.innerHTML = `
         <details class="thinking-details">
           <summary class="thinking-summary">
             <span class="thinking-icon">💭</span>
-            <span class="thinking-label">Thinking</span>
+            <span class="thinking-label">Thought${escapeHtml(durLabel)}</span>
             <span class="thinking-toggle-hint"></span>
           </summary>
           <div class="thinking-body markdown-body">${renderMarkdown(event.content)}</div>

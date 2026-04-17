@@ -177,3 +177,23 @@ Each task card is a `.json` file in `core/tasks/`:
   `sessions/<child>/playground/parent → sessions/<parent>/playground/`.
   Reads work; writes through the link resolve outside the child's
   Guardian root and are denied (PR #28 round 2 Gap #6).
+
+## v2.0.17 — thinking-block persistence
+
+- `Session._make_thinking_callbacks` now returns a **4-tuple**:
+  `(on_thinking_start, on_thinking_end, had_any, get_collected)`. The
+  new `get_collected()` accessor returns the list of `{block_id, text,
+  duration_ms, ts}` dicts captured as each `on_thinking_end` fires.
+- `_do_chat` (both success + CancelledError branches), `_do_tick`,
+  `_save_chat_turn`, and `_save_partial_chat_turn` persist the
+  collected blocks on the turn as `thinking_blocks: [...]`. History
+  replay reads that field in `FileIPC._context_event_to_display` and
+  emits `thinking` display events directly, so re-entering a session
+  restores the cells across every provider — including codex (whose
+  reasoning items were never embedded in the Anthropic-style
+  `{"type":"thinking"}` content blocks).
+- A started-but-unclosed block (CancelledError mid-thinking) is **not**
+  collected — `on_thinking_end` is the only append site. The on-disk
+  turn therefore never references a cell the frontend can't render;
+  the orphan running cell is handled by `markRunningThinkingInterrupted`
+  in `chat.ts` when `model_status:idle` lands.

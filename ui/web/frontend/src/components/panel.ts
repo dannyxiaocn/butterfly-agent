@@ -55,6 +55,12 @@ export function createPanel(): HTMLElement {
       return;
     }
 
+    // Snapshot panel content scroll so the 2 s panel-poll / 15 s task-poll
+    // doesn't yank the user back to the top while they're scrolling through
+    // a long task list or panel tail (Bug 6).
+    const prevContent = el.querySelector('#panel-content') as HTMLElement | null;
+    const prevScrollTop = prevContent ? prevContent.scrollTop : 0;
+
     const tabsHtml = `
       <div class="panel-tabs">
         <button class="panel-tab${activeTab === 'tasks' ? ' active' : ''}" data-tab="tasks">Tasks</button>
@@ -79,6 +85,9 @@ export function createPanel(): HTMLElement {
         ${contentHtml}
       </div>
     `;
+
+    const nextContent = el.querySelector('#panel-content') as HTMLElement | null;
+    if (nextContent && prevScrollTop > 0) nextContent.scrollTop = prevScrollTop;
 
     // Bind tab buttons
     el.querySelectorAll('.panel-tab').forEach(btn => {
