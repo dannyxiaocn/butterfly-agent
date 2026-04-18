@@ -34,9 +34,11 @@ export function createHeader(): HTMLElement {
       const tone = sessionTone(sess);
       const color = toneColor(tone);
       const label = toneLabel(tone);
+      const displayLabel = (sess.display_name && sess.display_name.trim()) ? sess.display_name : sess.id;
+      const headerTitle = displayLabel === sess.id ? sess.id : `${displayLabel} · ${sess.id}`;
       sessionInfo = `
-        <div class="header-session">
-          <span class="session-name">${escHtml(sess.id)}</span>
+        <div class="header-session" title="${escHtml(headerTitle)}">
+          <span class="session-name">${escHtml(displayLabel)}</span>
           <span class="status-pill" style="background:${color}22;color:${color};border-color:${color}44">
             <span class="dot" style="background:${color}"></span>${label}
           </span>

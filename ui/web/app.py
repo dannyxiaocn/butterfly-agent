@@ -204,10 +204,34 @@ def create_app(
 
     @app.post("/api/sessions")
     async def create_session(body: dict):
-        session_id = body.get("id") or (datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + "-" + uuid.uuid4().hex[:4])
+        # session_id is always server-generated: keeps the canonical identifier
+        # uniform (timestamp + 4-char uuid) regardless of what the user typed.
+        # The user's human-facing label arrives as ``display_name`` and is
+        # stored on the manifest for sidebar/panel rendering.
+        #
+        # Explicit 400 on body ``id`` (PR #37 review finding #4): silently
+        # dropping it would hide bugs in callers that still assume they can
+        # pick the id. The old contract accepted (and validated) ``id``; we
+        # surface the contract change instead of masking it.
+        if "id" in body:
+            raise HTTPException(
+                400,
+                "body field 'id' is no longer accepted; session_id is always "
+                "server-generated. Use 'display_name' for a human-readable "
+                "label.",
+            )
+        session_id = datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + "-" + uuid.uuid4().hex[:4]
         agent = body.get("agent", _DEFAULT_AGENT)
+        # display_name is normalized by service_create_session → the response's
+        # display_name mirrors what was actually persisted to the manifest.
         try:
-            return service_create_session(session_id, agent, sessions_dir=sessions_dir, system_sessions_dir=system_sessions_dir)
+            return service_create_session(
+                session_id,
+                agent,
+                sessions_dir=sessions_dir,
+                system_sessions_dir=system_sessions_dir,
+                display_name=body.get("display_name"),
+            )
         except ValueError as exc:
             raise HTTPException(400, str(exc))
 

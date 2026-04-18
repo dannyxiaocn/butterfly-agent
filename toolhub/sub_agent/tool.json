@@ -1,11 +1,15 @@
 {
   "name": "sub_agent",
-  "description": "Spawn a child session (same agent as you) to handle a delegated task. The child runs in its OWN isolated session — its intermediate tool calls, thinking, and partial messages are NOT forwarded to your context. You only see its FINAL reply. To inspect mid-run progress, open the child session in the sidebar (it appears indented under yours). Use 'explorer' mode for investigation tasks (read-only outside the child's playground/; safe defaults), and 'executor' mode when the child needs full write access (no sandbox). Set run_in_background=true to fire-and-forget; otherwise this call blocks until the child replies or the timeout fires.",
+  "description": "Spawn a child session (same agent as you) to handle a delegated task. The child runs in its OWN isolated session — its intermediate tool calls, thinking, and partial messages are NOT forwarded to your context. You only ever see the child's FINAL reply. Sync mode (run_in_background=false, default): this call blocks your turn until the child replies or the timeout fires, and the reply is returned directly as the tool result. Background mode (run_in_background=true): this call returns immediately with a task id; continue with your own work — when the child finishes, its final reply is automatically injected into your context as a new message. The runtime handles delivery end-to-end; no manual inspection of the child's files is needed. Use 'explorer' mode for investigation tasks (read-only outside the child's playground/; safe defaults), and 'executor' mode when the child needs full write access (no sandbox).",
   "backgroundable": true,
   "input_schema": {
     "type": "object",
-    "required": ["task", "mode"],
+    "required": ["name", "task", "mode"],
     "properties": {
+      "name": {
+        "type": "string",
+        "description": "Short display name for the child session (≤ 40 chars). Shown as the session label in the sidebar and in the sub_agent panel card so sibling children are distinguishable. Pick something task-descriptive, e.g. 'audit auth flow' or 'port kimi tests'."
+      },
       "task": {
         "type": "string",
         "description": "The task for the child agent. This becomes the child's first user_input — write it as you would write a clear, complete prompt to a fresh agent. Cite paths and constraints; do not assume the child has any context from your conversation."
@@ -17,7 +21,7 @@
       },
       "timeout_seconds": {
         "type": "integer",
-        "description": "Sync-mode wait timeout (default 600s). On timeout the child keeps running — open it in the sidebar to retrieve the result."
+        "description": "Sync-mode wait timeout (default 600s). On timeout the sync call returns a timeout notice; the child keeps running and its final reply still arrives later via the background-completion path."
       }
     }
   }

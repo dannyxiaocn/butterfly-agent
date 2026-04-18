@@ -177,6 +177,13 @@ Main `memory.md` itself is edited via `edit` / `write` like any other file — n
 - `initial_message_id: str | None` — lets the caller pre-pick the UUID for
   the seeded `user_input` event so it can later call
   `BridgeSession.async_wait_for_reply(msg_id)` and correlate the response.
+- `display_name: str | None` (v2.0.19) — user-facing label stored on
+  `manifest.json`. Sidebar/panel prefer this over the raw `session_id`.
+  Normalized via `_normalize_display_name` (trim + truncate to 40 chars);
+  empty/blank becomes `None` (no manifest entry written). Also settable
+  from the web `POST /api/sessions` body, so the new-session form can
+  ask the user for a name while the server keeps auto-generating the
+  canonical `session_id`.
 
 ### Manifest schema (additive)
 
@@ -187,7 +194,9 @@ Main `memory.md` itself is edited via `edit` / `write` like any other file — n
   "created_at": "...",
   // present only on sub-agent children:
   "parent_session_id": "<parent id>",
-  "mode": "explorer"
+  "mode": "explorer",
+  // present only when a display_name was provided (v2.0.19):
+  "display_name": "audit auth flow"
 }
 ```
 

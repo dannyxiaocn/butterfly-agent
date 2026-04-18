@@ -49,7 +49,7 @@ def test_spawn_increments_depth_in_child_manifest(tmp_path: Path) -> None:
 
     _make_parent_manifest(sys_base, "top-parent")  # depth=0 (omitted)
     child_id, _msg, _agt = _spawn_child(
-        parent_session_id="top-parent", mode="explorer", task="x",
+        parent_session_id="top-parent", mode="explorer", task="x", name="probe",
         sessions_base=sessions_base,
         system_sessions_base=sys_base,
         agent_base=agent_base,
@@ -68,7 +68,7 @@ def test_spawn_refuses_when_parent_at_max_depth(tmp_path: Path) -> None:
     _make_parent_manifest(sys_base, "deep-parent", depth=_MAX_SUB_AGENT_DEPTH)
     with pytest.raises(RuntimeError, match="depth"):
         _spawn_child(
-            parent_session_id="deep-parent", mode="explorer", task="x",
+            parent_session_id="deep-parent", mode="explorer", task="x", name="probe",
             sessions_base=sessions_base,
             system_sessions_base=sys_base,
             agent_base=agent_base,

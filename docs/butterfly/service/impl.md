@@ -34,12 +34,23 @@ CLI and Web should only call these functions, never access IPC/status files dire
 
 ## v2.0.13 — Sub-agent surface
 
-- `sessions_service.get_session()` / `list_sessions()` now return two new
+- `sessions_service.get_session()` / `list_sessions()` now return three
   optional fields read from `manifest.json`: `parent_session_id` (for the
-  sidebar's parent → child indent grouping) and `mode` (for the mode chip
-  rendered next to the session name). Fields are `None` when the manifest
-  doesn't set them (top-level sessions), preserving backwards compat for
-  any client that ignores unknown keys.
+  sidebar's parent → child indent grouping), `mode` (for the mode chip
+  rendered next to the session name), and `display_name` (v2.0.22 — the
+  human-readable label shown by the sidebar / header / sub_agent panel
+  card in place of the raw `session_id`). Fields are `None` when the
+  manifest doesn't set them, preserving backwards compat for any client
+  that ignores unknown keys.
+- `sessions_service.create_session(display_name=…)` (v2.0.22) runs the
+  input through `session_init._normalize_display_name` (trim + cap at
+  40 chars + non-string → `None`) and **returns the normalized value** —
+  so the `POST /api/sessions` response's `display_name` always mirrors
+  what was persisted to the manifest. Cap logic lives in one place to
+  prevent drift between create-reply and later `GET /api/sessions` reads
+  (PR #37 review finding #1).
+- `POST /api/sessions` (v2.0.22) rejects `id` in the body with HTTP 400;
+  `session_id` is always server-generated. See `ui/web/app.py::create_session`.
 - `ui/web/app.py` adds `GET /api/sessions/{id}/events_tail?n=N` which
   returns the last ``n`` events from the session's `events.jsonl` as a
   JSON list. Used by the parent's panel card to render the last 5

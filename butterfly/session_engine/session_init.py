@@ -75,6 +75,27 @@ def _create_session_venv(session_dir: Path) -> Path:
     return venv_path
 
 
+_DISPLAY_NAME_MAX_LEN = 40
+
+
+def _normalize_display_name(raw: str | None) -> str | None:
+    """Trim + length-cap a display name. Returns None when empty/absent.
+
+    Accepts ``None`` (no display name) or a non-empty trimmed string up to
+    ``_DISPLAY_NAME_MAX_LEN`` chars. Longer names are truncated rather than
+    rejected so the caller never hits a surprise 400. Non-string inputs
+    are treated as absent — the `sub_agent` tool boundary enforces string
+    type strictly via `_validate_name`, so coercing here would only hide
+    callers that pass the wrong shape (PR #37 review).
+    """
+    if not isinstance(raw, str):
+        return None
+    trimmed = raw.strip()
+    if not trimmed:
+        return None
+    return trimmed[:_DISPLAY_NAME_MAX_LEN]
+
+
 def init_session(
     session_id: str,
     agent_name: str,
@@ -87,6 +108,7 @@ def init_session(
     parent_session_id: str | None = None,
     mode: str | None = None,
     sub_agent_depth: int | None = None,
+    display_name: str | None = None,
 ) -> str:
     """Create a new session on disk from an agent, ready for the server to pick up.
 
@@ -335,6 +357,9 @@ def init_session(
         manifest["mode"] = mode
     if sub_agent_depth is not None:
         manifest["sub_agent_depth"] = int(sub_agent_depth)
+    normalized_display = _normalize_display_name(display_name)
+    if normalized_display:
+        manifest["display_name"] = normalized_display
     (system_dir / "manifest.json").write_text(
         json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
     )

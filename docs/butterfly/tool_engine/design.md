@@ -29,7 +29,7 @@ The catalog is split into **toolhub tools** (declared in `toolhub/<name>/`) and 
 | Name | Purpose | Backgroundable | Agent sees |
 |---|---|---|---|
 | `bash` | One-shot shell command, fresh process every call | **Yes** | `command, timeout?, stdin?, run_in_background?, polling_interval?` |
-| `sub_agent` | Spawn a child session (same agent), return its FINAL reply | **Yes** | `task, mode (explorer\|executor), timeout_seconds?, run_in_background?, polling_interval?` |
+| `sub_agent` | Spawn a child session (same agent), return its FINAL reply | **Yes** | `name, task, mode (explorer\|executor), timeout_seconds?, run_in_background?, polling_interval?` |
 | `session_shell` | Persistent long-lived shell, `cd`/env survive across calls | No | `command, timeout?, reset?` |
 | `read` | Read file contents (paginated) | No | `path, offset?, limit?` |
 | `write` | Write/overwrite a file | No | `path, content` |
@@ -307,11 +307,27 @@ its own conversation history.
   it explicitly so the LLM doesn't expect a transcript.
 - Sync mode (`run_in_background=false`, default): the parent's turn blocks
   until the child replies or `timeout_seconds` elapses. On timeout, the
-  child keeps running.
+  child keeps running — its final reply is still delivered via the
+  background-completion path when it lands.
 - Background mode (`run_in_background=true`): identical to bash bg —
   parent gets a `task_id=…` placeholder immediately and continues; the
   child's completion arrives later as a `user_input` notification appended
   to the parent's `context.jsonl` (with the child's full reply inline).
+  The tool description tells the agent this explicitly ("continue with
+  your own work — the runtime handles delivery") to stop it from
+  bash-catting the child's `events.jsonl` out of impatience (v2.0.19).
+
+### Required `name` parameter (v2.0.19)
+
+Every `sub_agent` call must supply a short human-readable `name` (≤ 40
+chars after trim). `name` is threaded through `_spawn_child` →
+`init_session(display_name=…)` → child manifest's `display_name` field,
+and also copied into the parent's `PanelEntry.meta.display_name` so the
+sub_agent card can render it without a round-trip to the child's
+manifest. The sidebar and panel prefer `display_name` over the raw
+`session_id` (which stays the canonical unique key). Truncation is
+defensive (both `_validate_name` and `_normalize_display_name` cap at
+40 chars) so the parent never hits a 400 from a slightly-too-long name.
 
 ### Modes
 
