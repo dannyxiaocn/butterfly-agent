@@ -216,7 +216,19 @@ All tools return strings for provider compatibility, but adopt conventions so th
 - **Search (grep/glob)**: standard ripgrep-style line output; truncation marker at the end if result size exceeds limit.
 - **Errors**: prefix `Error: ` followed by a concise message. The tool result's `is_error` flag is also set at the agent-loop layer when an exception is raised.
 
-### 6.1 Disk spillover
+### 6.1 Error classification (v2.0.23)
+
+Tools that complete normally (no raised exception) but whose output text encodes a failure — e.g. `bash` returning with `[exit 127, ...]`, an executor echoing a `Traceback (most recent call last):` — used to surface as green ✓ cells in the web UI, which was misleading. `butterfly/tool_engine/result_classifier.py` centralises the detection:
+
+- `classify_tool_result(tool_name, result) -> bool` — called once per call from `core/agent.py::_execute_tools` right after `tool.execute()` returns. The returned flag is combined with the exception-path `is_error` (tool-not-found, background-spawn-fail, raised exception) and threaded through `on_tool_done(name, input, result, tool_use_id, is_error)` so `Session._make_tool_done_callback` stamps `is_error` onto the `tool_done` event on `events.jsonl`.
+- Rule table lives at the module top of `result_classifier.py`. `bash` and `session_shell` share a rule that parses the last `[exit N, ...]` footer (last match wins so trailing multi-command output classifies on the final exit code) and treats any `[timed out after ...]` prefix as error. All other tools fall through to the default rule: `Traceback (most recent call last):` anywhere in the body, or the first non-empty line starting with `Error:` / `ERROR:` / `Error ` / `Traceback …`.
+- The classifier errs on the side of green. An unknown tool produces a false negative (error that should be red stays green) — never a false positive (success painted red). Add a dedicated rule in `_RULES` when a tool's failure idiom slips past the default.
+
+The web UI renders the same `is_error` bit two ways:
+- Live path: `tool_done` event carries `is_error`; `chat.ts` tool_done handler adds `.msg-tool.error` class and swaps the icon glyph to ✗.
+- History replay path: `ipc._context_event_to_display` already copies `is_error` from the paired `tool_result` block onto the replayed `tool` event (pre-v2.0.23); the new `renderEvent` branch just reads it.
+
+### 6.2 Disk spillover
 
 Per-tool `max_result_chars`. If exceeded:
 1. Write the full result to `_sessions/<id>/tool_results/<tool>_<uuid>.txt`.

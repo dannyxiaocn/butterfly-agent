@@ -190,18 +190,31 @@ export function createChat(): HTMLElement {
     // old code produced the placeholder "—" string, which looked like a
     // bug when the cell stayed mounted across a reload.
     const displayTs = finalTs ?? new Date().toISOString();
-    const usageHtml = formatUsageStats(usage);
+    // v2.0.23 round-7: tokens live in the dim footer inside the agent-body.
+    // Primary path — the canonical 'agent' event passes ``usage`` explicitly
+    // (per-call from turn.agent_output_usages). Fallback — mid-turn tool_call
+    // / cancel paths omit it; read the iteration_usage stash that the SSE
+    // handler parked on ``dataset.pendingUsage`` so the footer still appears.
+    let usageForFooter = usage;
+    if (!usageForFooter && streamingEl.dataset.pendingUsage) {
+      try {
+        usageForFooter = JSON.parse(streamingEl.dataset.pendingUsage);
+      } catch {
+        // Malformed stash — fall through and render without a footer.
+      }
+    }
+    const footer = renderUsageFooter(usageForFooter);
     streamingEl.innerHTML = `
       <details class="agent-details" open>
         <summary class="agent-summary">
           <span class="agent-label">
             <span class="agent-word">Agent</span>
             <span class="agent-meta">${escapeHtml(durSec)}</span>
-            ${usageHtml}
           </span>
           <span class="msg-ts">${formatTs(displayTs)}</span>
         </summary>
         <div class="agent-body markdown-body">${renderMarkdown(text)}</div>
+        ${footer}
       </details>
     `;
     streamingEl = null;
@@ -229,6 +242,33 @@ export function createChat(): HTMLElement {
       cell.dataset.interrupted = '1';
       runningThinking.delete(blockId);
     }
+  }
+
+  function markRunningToolsInterrupted() {
+    // v2.0.23: when the run is cancelled mid-tool (user hit ⚡ Interrupt, or
+    // a new interrupt-mode chat came in), no ``tool_done`` is ever emitted
+    // for the in-flight call. Without this, the yellow running cell spins
+    // forever and the user thinks nothing happened. Mirror the thinking
+    // interrupt: scan ``.msg-tool`` cells that haven't flipped to ``.done``
+    // yet and mark them interrupted. Also sweeps ``backgroundCells`` so
+    // bg tools (sub_agent, bash bg) that never saw a ``tool_finalize``
+    // land in the same terminal state. Safe to call on every idle — when
+    // the run ended cleanly every tool already transitioned, so both
+    // maps are empty and the DOM scan is a no-op.
+    const liveCells = Array.from(messages.querySelectorAll('.msg-tool:not(.done)')) as HTMLElement[];
+    for (const cell of liveCells) {
+      const summary = cell.querySelector('.tool-status-summary') as HTMLElement | null;
+      const name = cell.dataset.toolName ?? '';
+      const entry = runningTools.get(name);
+      const startTs = entry?.startTs ?? Number(cell.dataset.startedAt ?? Date.now());
+      const durSec = ((Date.now() - startTs) / 1000).toFixed(1) + 's';
+      cell.classList.add('done', 'interrupted');
+      if (summary) setToolStatus(summary, '✗', `interrupted ${durSec}`);
+    }
+    runningTools.clear();
+    backgroundCells.clear();
+    latestToolKey = null;
+    updateHudTool(null);
   }
 
   function clearMessages() {
@@ -288,6 +328,10 @@ export function createChat(): HTMLElement {
         } else {
           // Idle: flip any still-spinning thinking cell to interrupted.
           markRunningThinkingInterrupted();
+          // v2.0.23: same sweep for in-flight tool cells. Without this,
+          // the yellow "▶ bash running…" pill never flips and the user
+          // thinks ⚡ Interrupt didn't work (backend actually cancelled).
+          markRunningToolsInterrupted();
           setAgentStatus(false);
           // Bubble handling at idle: finalize any in-flight streaming
           // bubble with whatever text accumulated so the user sees where
@@ -461,7 +505,7 @@ export function createChat(): HTMLElement {
         if (!labelEl) break;
         let metaEl = labelEl.querySelector<HTMLElement>('.thinking-meta');
         const dur = labelEl.dataset.durationLabel ?? '';
-        const metaText = dur ? `${dur} for ${tokens} tokens` : `for ${tokens} tokens`;
+        const metaText = dur ? `${dur} for ${tokens} toks` : `for ${tokens} toks`;
         if (!metaEl) {
           // Running-state cell (no thinking_done yet) has no .thinking-meta
           // — create one so the tokens surface immediately. thinking_done
@@ -546,9 +590,14 @@ export function createChat(): HTMLElement {
         }
         if (target) {
           target.classList.add('done');
+          // v2.0.23: classifier (or core/agent exception path) flagged this
+          // call as a failure — flip icon to ✗ and add `.error` class so the
+          // cell picks up the red chrome from style.css. Mutually exclusive
+          // with the `.interrupted` terminal state set by the idle-sweep.
+          if (event.is_error) target.classList.add('error');
           const durSec = (durationMs / 1000).toFixed(1) + 's';
           const summary = target.querySelector('.tool-status-summary') as HTMLElement | null;
-          if (summary) setToolStatus(summary, '✓', durSec);
+          if (summary) setToolStatus(summary, event.is_error ? '✗' : '✓', durSec);
           const resultEl = target.querySelector('.tool-body-result .tool-body-content') as HTMLElement | null;
           if (resultEl && typeof event.result === 'string') {
             resultEl.innerHTML = renderToolResultBlock(event.result, event.result_truncated);
@@ -621,6 +670,47 @@ export function createChat(): HTMLElement {
         updateHudContext(event.context_tokens ?? null);
         updateHudSpeed(event.toks_per_s ?? null);
         if (event.usage) updateHudTokens(event.usage);
+        break;
+      }
+
+      case 'iteration_usage': {
+        // v2.0.23 round-7: per-LLM-call usage for LIVE footer stamping.
+        // Applies the ↑/⛀/↓ dim footer to:
+        //   1. Every tool cell whose ``data-tool-use-id`` is in
+        //      ``event.tool_use_ids`` — these are the tool_use blocks the
+        //      LLM emitted in this iteration.
+        //   2. The streaming agent cell (if ``event.has_text``) — the
+        //      usage rides along so the live footer matches what history
+        //      replay will paint after reload.
+        // History replay doesn't use this event — ipc.py pairs
+        // per_iteration_usages positionally onto the cells there.
+        const usage = event.usage;
+        if (!usage) break;
+        const ids = event.tool_use_ids ?? [];
+        for (const tuid of ids) {
+          const cell = Array
+            .from(messages.querySelectorAll<HTMLElement>('.msg-tool'))
+            .find(el => el.dataset.toolUseId === tuid);
+          if (!cell) continue;
+          // Append (or replace) the footer as a sibling of .tool-body (inside
+          // the <details> wrapper). Matches the agent-cell layout — putting
+          // it inside .tool-body would stack padding-bottoms and leave a
+          // visible chin under the dashed divider.
+          const details = cell.querySelector('.tool-details');
+          if (!details) continue;
+          const existing = details.querySelector(':scope > .cell-usage-footer');
+          if (existing) existing.remove();
+          details.insertAdjacentHTML('beforeend', renderUsageFooter(usage));
+        }
+        if (event.has_text && streamingEl) {
+          // Stash on the element so finalizeStreamingBubble() can read it
+          // during the mid-turn tool_call path (finalize called with no
+          // usage arg — it falls back to dataset.pendingUsage to still
+          // render the footer). The primary path — the canonical 'agent'
+          // event arriving later — passes usage explicitly so the stash is
+          // only a safety net for interleaved turns.
+          streamingEl.dataset.pendingUsage = JSON.stringify(usage);
+        }
         break;
       }
 
@@ -886,17 +976,24 @@ function renderEvent(event: DisplayEvent): HTMLElement | null {
       const durSec = event.duration_ms != null
         ? (event.duration_ms / 1000).toFixed(1) + 's'
         : '';
-      const tokens = event.reasoning_tokens ?? 0;
+      // v2.0.23 round-7: thinking cell's token info lives ENTIRELY in the
+      // summary pill ("Thought Xs for N toks") — no ↑/⛀/↓ footer here.
+      // Input/cache_read are prompt-level (shared with sibling tool/agent
+      // cells from the same call), and ``reasoning_tokens`` IS the thinking
+      // block's output. ``event.reasoning_tokens`` is the attributor-stamped
+      // fresher value; ``event.usage.reasoning`` is the per_iteration_usages
+      // positional pairing. Prefer the former, fall back to the latter so
+      // history replay matches live. Drop to "Thought Xs" when neither is
+      // positive (Anthropic doesn't report reasoning_tokens).
       let word = 'Thought';
       let metaText = '';
       if (event.interrupted) {
         word = 'Thinking interrupted';
-      } else if (durSec && tokens > 0) {
-        metaText = `${durSec} for ${tokens} tokens`;
       } else if (durSec) {
-        metaText = durSec;
-      } else if (tokens > 0) {
-        metaText = `for ${tokens} tokens`;
+        const reasoning = event.reasoning_tokens
+          ?? event.usage?.reasoning
+          ?? 0;
+        metaText = reasoning > 0 ? `${durSec} for ${reasoning} toks` : durSec;
       }
       const body = event.content ?? '';
       const bodyHtml = body
@@ -933,18 +1030,21 @@ function renderEvent(event: DisplayEvent): HTMLElement | null {
       const metaHtml = durSec
         ? `<span class="agent-meta">${escapeHtml(durSec)}</span>`
         : '';
-      const usageHtml = formatUsageStats(event.usage);
+      // v2.0.23 round-6: tokens moved from the summary pill into a dim
+      // footer inside the expanded body. Keeps the summary line compact
+      // (just "Agent 2.4s · 18:01") and matches thinking/tool cell chrome.
+      const footer = renderUsageFooter(event.usage);
       div.innerHTML = `
         <details class="agent-details" open>
           <summary class="agent-summary">
             <span class="agent-label">
               <span class="agent-word">Agent</span>
               ${metaHtml}
-              ${usageHtml}
             </span>
             <span class="msg-ts">${formatTs(event.ts)}</span>
           </summary>
           <div class="agent-body markdown-body">${renderMarkdown(event.content)}</div>
+          ${footer}
         </details>
       `;
       break;
@@ -952,13 +1052,26 @@ function renderEvent(event: DisplayEvent): HTMLElement | null {
 
     case 'user': {
       if (!event.content) return null;
-      div.className = 'msg msg-user';
+      // v2.0.23: collapsible glass-card chrome matching thinking/tool/agent
+      // cells. Three visual variants keyed off the backend-propagated
+      // caller/source fields:
+      //   - bg tool output: caller=system + source=panel → orange-yellow
+      //   - (reserved) task wakeup user_input: caller=task → sky blue
+      //   - everything else (human chat): green glass "You"
+      const variant = userCellVariant(event);
+      const { labelTitle, labelDim } = userCellLabel(event, variant);
+      div.className = `msg msg-user msg-user-${variant}`;
       div.innerHTML = `
-        <div class="msg-header">
-          <span class="msg-label">you</span>
-          <span class="msg-ts">${formatTs(event.ts)}</span>
-        </div>
-        <div class="msg-body markdown-body">${renderMarkdown(event.content)}</div>
+        <details class="user-details" open>
+          <summary class="user-summary">
+            <span class="user-label">
+              <span class="user-word">${labelTitle}</span>
+              ${labelDim ? `<span class="user-meta">${escapeHtml(labelDim)}</span>` : ''}
+            </span>
+            <span class="msg-ts">${formatTs(event.ts)}</span>
+          </summary>
+          <div class="user-body markdown-body">${renderMarkdown(event.content)}</div>
+        </details>
       `;
       break;
     }
@@ -967,8 +1080,19 @@ function renderEvent(event: DisplayEvent): HTMLElement | null {
       // Default to "done" styling because renderEvent is also used by history
       // replay (completed turns). handleEvent's live `tool` case explicitly
       // strips the .done class after appending to show the running state.
-      div.className = 'msg msg-tool done';
+      // v2.0.23: history replay also needs to surface error-classified calls
+      // — ipc.py stamps `is_error` onto reloaded tool events from the paired
+      // tool_result block so the red cell survives page reloads.
+      div.className = event.is_error
+        ? 'msg msg-tool done error'
+        : 'msg msg-tool done';
       div.dataset.toolName = event.name ?? 'tool';
+      // v2.0.23 round-7: stamp ``data-tool-use-id`` so the live
+      // ``iteration_usage`` handler can target this cell by id (reliable
+      // when two concurrent calls of the same tool fire in one iteration).
+      // ipc.py forwards it as ``event.id`` for both live (tool_call → tool)
+      // and history-replay (turn tool_use block) paths.
+      if (event.id) div.dataset.toolUseId = event.id;
       div.innerHTML = renderToolEvent(event);
       break;
     }
@@ -979,8 +1103,30 @@ function renderEvent(event: DisplayEvent): HTMLElement | null {
     // matches the uniform `✓ name (duration)` pattern the user asked for.
 
     case 'task_wakeup': {
-      div.className = 'msg msg-task-wakeup';
-      div.innerHTML = `<span>⏱ task wakeup${event.card ? `: ${escapeHtml(event.card)}` : ''}</span><span class="msg-ts">${formatTs(event.ts)}</span>`;
+      // v2.0.23: unified chrome with the `user` variants — sky-blue metallic
+      // "Wakeup" card. Summary shows "Wakeup — <card>"; body renders the
+      // resolved task prompt (session.py::_do_tick stamps it on the event
+      // from v2.0.23) as plain text so the wakeup is self-describing without
+      // needing to expand the turn below to figure out what the agent was
+      // told to do.
+      div.className = 'msg msg-user msg-user-task';
+      const cardDim = event.card ? `— ${event.card}` : '';
+      const promptBody = (event.prompt || '').trim();
+      const body = promptBody
+        ? `<div class="user-body">${renderMarkdown(promptBody)}</div>`
+        : `<div class="user-body"><em class="user-body-empty">(no prompt captured)</em></div>`;
+      div.innerHTML = `
+        <details class="user-details">
+          <summary class="user-summary">
+            <span class="user-label">
+              <span class="user-word">Wakeup</span>
+              ${cardDim ? `<span class="user-meta">${escapeHtml(cardDim)}</span>` : ''}
+            </span>
+            <span class="msg-ts">${formatTs(event.ts)}</span>
+          </summary>
+          ${body}
+        </details>
+      `;
       break;
     }
 
@@ -1013,22 +1159,6 @@ function renderEvent(event: DisplayEvent): HTMLElement | null {
   }
 
   return div;
-}
-
-// v2.0.20: compact token-usage pill for the agent-cell summary. Symbols
-// replace the old ``in:/out:/cached:`` labels (↑ = input, ↓ = output,
-// ⛀ = cache_read). ``cache_write`` is intentionally dropped — in practice
-// it only exceeds 0 on the very first cache-seeding call per session, so
-// it ends up looking like dead noise next to the other three.
-function formatUsageStats(usage?: DisplayEvent['usage']): string {
-  if (!usage) return '';
-  const u = usage as Record<string, number>;
-  const parts: string[] = [];
-  if (u.input != null) parts.push(`↑ ${u.input}`);
-  if (u.cache_read != null) parts.push(`⛀ ${u.cache_read}`);
-  if (u.output != null) parts.push(`↓ ${u.output}`);
-  if (!parts.length) return '';
-  return `<span class="usage-stats">${escapeHtml(parts.join(' '))}</span>`;
 }
 
 function renderToolEvent(event: DisplayEvent): string {
@@ -1064,10 +1194,19 @@ function renderToolEvent(event: DisplayEvent): string {
     ? (event.duration_ms / 1000).toFixed(1) + 's'
     : '';
 
+  // v2.0.23: flip the initial icon to ✗ when history replay or live tool_done
+  // carries is_error — renderEvent's `tool` case already added the `.error`
+  // class so CSS colours it red; this just swaps the glyph.
+  const icon = event.is_error ? '✗' : '✓';
+  // v2.0.23 round-7: footer lives as a SIBLING of .tool-body (not inside)
+  // so it matches the agent cell chrome — tool-body's own padding-bottom
+  // would otherwise stack with the footer's padding and produce a visible
+  // "chin" under the dashed divider.
+  const footer = renderUsageFooter(event.usage);
   return `
     <details class="tool-details">
       <summary class="tool-status-summary">
-        <span class="tool-status-icon">✓</span>
+        <span class="tool-status-icon">${icon}</span>
         <span class="tool-status-name">${escapeHtml(name)}</span>
         <span class="tool-status-duration">${escapeHtml(durationText)}</span>
         ${argHtml}
@@ -1083,8 +1222,69 @@ function renderToolEvent(event: DisplayEvent): string {
           <div class="tool-body-content">${resultBlock}</div>
         </div>
       </div>
+      ${footer}
     </details>
   `;
+}
+
+// v2.0.23 round-7: dim token footer for tool/agent cell bodies. A single
+// LLM call returns one ``usage`` dict — the same ↑/⛀/↓ values apply to
+// every content block that call emits (thinking + tool_use + text). We
+// cannot split input/cache across blocks (prompt-level, not block-level)
+// but we CAN split ``output``: ``reasoning_tokens`` is provider-reported
+// as a subset of ``output_tokens`` (OpenAI spec, mirrored by Anthropic
+// extended thinking + Codex + Kimi), so the thinking portion is attributed
+// to the thinking cell's summary pill ("for N toks") and the tool/agent
+// footer shows the *non-reasoning* remainder: ``output - reasoning``.
+// When reasoning is 0 (Anthropic standard, non-thinking models) the
+// footer falls back to full ``output`` — there's nothing else to take out.
+// Thinking cells do NOT call this helper; their token info lives entirely
+// in the summary pill per the round-7 design.
+function renderUsageFooter(usage?: DisplayEvent['usage']): string {
+  if (!usage) return '';
+  const u = usage as Record<string, number | undefined>;
+  const parts: string[] = [];
+  if (u.input != null) parts.push(`↑ ${u.input}`);
+  if (u.cache_read != null && u.cache_read > 0) parts.push(`⛀ ${u.cache_read}`);
+  // ↓ = non-reasoning output. If reasoning wasn't reported (0 or undefined),
+  // fall back to full output so the cell still shows something meaningful.
+  const output = u.output ?? 0;
+  const reasoning = u.reasoning ?? 0;
+  const nonReasoning = reasoning > 0 && output > reasoning ? output - reasoning : output;
+  if (nonReasoning > 0) parts.push(`↓ ${nonReasoning}`);
+  if (!parts.length) return '';
+  return `<div class="cell-usage-footer">${escapeHtml(parts.join('  '))}</div>`;
+}
+
+// v2.0.23: classify a 'user' display event into one of four card variants.
+// Pure function of the fields the backend propagates from the originating
+// user_input event (see runtime/ipc.py _context_event_to_display and
+// session.py _drain_background_events). `sub-agent` is a refinement of the
+// `tool-output` path — when the background tool is `sub_agent` it gets its
+// own orange metallic chrome + display_name sub-label, so the cell reads as
+// "Sub-agent — my-helper" instead of the generic "Tool output — sub_agent".
+type UserVariant = 'you' | 'tool-output' | 'sub-agent' | 'task';
+function userCellVariant(event: DisplayEvent): UserVariant {
+  if (event.caller === 'system' && event.source === 'panel') {
+    return event.tool_name === 'sub_agent' ? 'sub-agent' : 'tool-output';
+  }
+  if (event.caller === 'task') return 'task';
+  return 'you';
+}
+
+function userCellLabel(event: DisplayEvent, variant: UserVariant): { labelTitle: string; labelDim: string } {
+  if (variant === 'sub-agent') {
+    const name = event.display_name || event.tid || '';
+    return { labelTitle: 'Sub-agent', labelDim: name ? `— ${name}` : '' };
+  }
+  if (variant === 'tool-output') {
+    const tool = event.tool_name || event.name || '';
+    return { labelTitle: 'Tool output', labelDim: tool ? `— ${tool}` : '' };
+  }
+  if (variant === 'task') {
+    return { labelTitle: 'Wakeup', labelDim: event.card ? `— ${event.card}` : '' };
+  }
+  return { labelTitle: 'You', labelDim: '' };
 }
 
 function renderToolResultBlock(result: string, truncated?: boolean): string {

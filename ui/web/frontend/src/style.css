@@ -801,12 +801,129 @@ button:disabled {
   50% { opacity: 1; }
 }
 
+/* v2.0.23: user-side collapsible cards. Four variants split across two
+   visual treatments:
+     .msg-user-you              → transparent frosted-glass (human chat)
+     .msg-user-tool-output      → metallic gradient (orange-yellow)
+     .msg-user-sub-agent        → metallic gradient (orange)
+     .msg-user-task             → metallic gradient (sky blue)
+   All span full width like thinking/tool/agent cells — the pre-v2.0.23
+   right-align+80% cap was dropped to keep the chat column rhythm uniform.
+   Chrome (summary/body layout + caret) is shared; the per-variant blocks
+   below only set the surface colour + texture. */
 .msg-user {
-  background: var(--bg3);
-  border: 1px solid var(--border);
-  border-left: 3px solid var(--green);
-  align-self: flex-end;
-  max-width: 80%;
+  background: none;
+  border: none;
+  padding: 0 !important;
+  align-self: stretch;
+  max-width: none;
+}
+
+.msg-user .user-details {
+  border: 1px solid var(--user-border, rgba(127,207,127,0.38));
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.msg-user .user-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+.msg-user .user-summary::-webkit-details-marker { display: none; }
+.msg-user .user-summary::after {
+  content: '▸';
+  color: var(--dimmed);
+  font-size: 11px;
+  transition: transform 0.12s;
+}
+.msg-user .user-details[open] > .user-summary::after {
+  transform: rotate(90deg);
+}
+
+.msg-user .user-label {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+.msg-user .user-word {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--user-accent, var(--green));
+}
+.msg-user .user-meta {
+  font-size: 11px;
+  color: var(--dimmed);
+  font-family: var(--mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.msg-user .user-body {
+  padding: 8px 12px 10px;
+  border-top: 1px solid var(--user-border, rgba(127,207,127,0.25));
+  font-size: 13px;
+  line-height: 1.55;
+}
+.msg-user .user-body-empty {
+  color: var(--dimmed);
+  font-size: 12px;
+  font-style: italic;
+}
+
+/* ── Surface treatment: transparent glass (human chat only) ── */
+.msg-user-you .user-details {
+  background: rgba(127,207,127,0.10);
+  backdrop-filter: blur(10px) saturate(1.2);
+  -webkit-backdrop-filter: blur(10px) saturate(1.2);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.15), inset 0 1px 0 rgba(255,255,255,0.04);
+}
+.msg-user-you {
+  --user-accent: #7fcf7f;
+  --user-border: rgba(127,207,127,0.45);
+}
+
+/* ── Surface treatment: metallic (notifications — tool-output / sub-agent / task) ──
+   Diagonal coloured base + vertical light→shadow highlight + inset top rim
+   mimic brushed-metal finish without a runtime blur cost. No backdrop-filter
+   so these cells read as opaque notifications, clearly distinct from the
+   human-chat glass bubble. */
+.msg-user-tool-output .user-details,
+.msg-user-sub-agent .user-details,
+.msg-user-task .user-details {
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.055) 0%, rgba(0,0,0,0.18) 100%),
+    linear-gradient(135deg, var(--user-metal-hi) 0%, var(--user-metal-lo) 55%, var(--user-metal-hi) 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.08),
+    inset 0 -1px 0 rgba(0,0,0,0.25),
+    0 1px 2px rgba(0,0,0,0.3);
+}
+
+.msg-user-tool-output {
+  --user-accent: #e8a94a;
+  --user-border: rgba(232,169,74,0.45);
+  --user-metal-hi: rgba(232,169,74,0.24);
+  --user-metal-lo: rgba(232,169,74,0.10);
+}
+.msg-user-sub-agent {
+  --user-accent: #ff8c3a;
+  --user-border: rgba(255,140,58,0.48);
+  --user-metal-hi: rgba(255,140,58,0.26);
+  --user-metal-lo: rgba(255,140,58,0.11);
+}
+.msg-user-task {
+  --user-accent: #7ac3f2;
+  --user-border: rgba(122,195,242,0.45);
+  --user-metal-hi: rgba(122,195,242,0.24);
+  --user-metal-lo: rgba(122,195,242,0.10);
 }
 
 .msg-tool {
@@ -834,20 +951,8 @@ button:disabled {
   animation: none;
 }
 
-.msg-task-wakeup {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--dimmed);
-  font-size: 12px;
-  padding: 6px 0;
-  background: none;
-  border: none;
-  border-top: 1px solid var(--border);
-  border-radius: 0;
-  justify-content: center;
-  animation: none;
-}
+/* .msg-task-wakeup removed in v2.0.23 — task_wakeup events now render
+   through the unified .msg-user-task glass card chrome defined above. */
 
 .msg-task-finished {
   text-align: center;
@@ -876,10 +981,6 @@ button:disabled {
   opacity: 0.7;
 }
 
-.msg-user .msg-label {
-  color: var(--green);
-}
-
 .msg-tool .msg-label {
   color: var(--yellow);
 }
@@ -891,10 +992,21 @@ button:disabled {
   font-family: var(--mono);
 }
 
-.usage-stats {
-  font-size: 11px;
+/* v2.0.23 round-7: dim token footer for tool + agent cell bodies. Sits as
+   a SIBLING of .tool-body / .agent-body inside the <details> wrapper so
+   its padding stands alone (no stacking with a body padding-bottom).
+   Horizontal padding mirrors the summary pill's 12px gutter. Thinking
+   cells do NOT use this footer — their token info is in the summary
+   ("Thought Xs for N toks"). */
+.cell-usage-footer {
+  font-size: 10px;
   color: var(--dimmed);
   font-family: var(--mono);
+  margin: 0;
+  padding: 6px 12px 8px 12px;
+  border-top: 1px dashed var(--border);
+  letter-spacing: 0.3px;
+  opacity: 0.75;
 }
 
 .msg-body {
@@ -1290,26 +1402,89 @@ button:disabled {
   gap: 10px;
 }
 
+/* v2.0.23: .task-card is now a <details> — the summary is the closed view
+   (name + duty + status + interval pill), the body holds description,
+   progress, comments, window, last-run and the Edit button. Hover no longer
+   reveals the Edit button because it lives inside the body and is only
+   visible when the card is expanded. */
 .task-card {
   background: var(--bg3);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 12px;
   transition: border-color 0.15s;
   position: relative;
+  overflow: hidden;
 }
 
 .task-card:hover {
   border-color: var(--border2);
 }
 
-.task-card:hover .btn-edit {
-  opacity: 1;
+.task-card-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 12px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+.task-card-summary::-webkit-details-marker { display: none; }
+.task-card-summary::after {
+  content: '▸';
+  color: var(--dimmed);
+  font-size: 11px;
+  margin-left: auto;
+  transition: transform 0.12s;
+}
+.task-card[open] > .task-card-summary::after {
+  transform: rotate(90deg);
 }
 
-.btn-edit {
-  opacity: 0;
-  transition: opacity 0.15s;
+.task-card-summary-main {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+  flex: 1;
+}
+
+.task-card-body {
+  padding: 0 12px 12px;
+  border-top: 1px solid var(--border);
+  margin-top: 0;
+  padding-top: 10px;
+}
+
+.task-card-section {
+  margin: 8px 0;
+}
+.task-card-section-label {
+  font-size: 10px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--dimmed);
+  font-weight: 600;
+  margin-bottom: 3px;
+}
+.task-card-section-body {
+  font-size: 12px;
+  color: var(--text2);
+  font-family: var(--mono);
+  white-space: pre-wrap;
+  line-height: 1.5;
+}
+
+.task-interval-pill {
+  font-size: 10px;
+  color: var(--muted);
+  font-family: var(--mono);
+  background: rgba(139,148,158,0.08);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 1px 7px;
+  white-space: nowrap;
 }
 
 .task-card-header {
@@ -1429,19 +1604,6 @@ button:disabled {
   font-size: 11px;
   color: var(--dimmed);
   margin-bottom: 6px;
-}
-
-.task-preview {
-  font-size: 12px;
-  color: var(--text2);
-  font-family: var(--mono);
-  white-space: pre-wrap;
-  overflow: hidden;
-  max-height: 54px;
-  margin: 6px 0;
-  border-left: 2px solid var(--border2);
-  padding-left: 8px;
-  line-height: 1.5;
 }
 
 .task-card-actions {
@@ -1671,6 +1833,37 @@ button:disabled {
 .msg-tool.done .tool-status-duration {
   color: var(--green);
   opacity: 0.9;
+}
+/* v2.0.23: interrupted tool cell. Reached when the run is cancelled mid-tool
+   (user hit ⚡ Interrupt or a new interrupt-mode chat came in) — no tool_done
+   is ever emitted so the frontend sweeps running cells into this terminal
+   state on model_status=idle. Dim yellow border + ✗ icon signals "did not
+   complete" without implying the tool itself errored. */
+.msg-tool.interrupted .tool-details {
+  border-left-color: var(--yellow);
+  opacity: 0.75;
+}
+.msg-tool.interrupted .tool-status-icon {
+  color: var(--yellow);
+}
+.msg-tool.interrupted .tool-status-duration {
+  color: var(--yellow);
+  opacity: 0.85;
+}
+/* v2.0.23: error tool cell. Set when tool_engine.classify_tool_result matches
+   (bash non-zero exit, Traceback, leading "Error:" line) or core/agent caught
+   an exception from the executor. Takes precedence over the default green
+   `.done` chrome — `.error` rules below follow `.done` rules in source order
+   so they win on equal specificity. */
+.msg-tool.error .tool-details {
+  border-left-color: var(--red);
+}
+.msg-tool.error .tool-status-icon {
+  color: var(--red);
+}
+.msg-tool.error .tool-status-duration {
+  color: var(--red);
+  opacity: 0.85;
 }
 .tool-status-duration:empty { display: none; }
 /* Inline arg preview — lives between tool-status-name and tool-status-meta

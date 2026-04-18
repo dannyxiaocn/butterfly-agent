@@ -79,6 +79,14 @@ export class SSEConnection {
       'llm_call_usage',
       // v2.0.19: late reasoning_tokens attribution for the thinking cell
       'thinking_tokens_update',
+      // v2.0.20: first-text-chunk + per-call output duration (pre-round-7 the
+      // frontend's client-side fallback quietly masked that these weren't
+      // subscribed — only the iteration_usage regression made it obvious).
+      'agent_output_start', 'agent_output_done',
+      // v2.0.23 round-7: per-LLM-call footer signal — carries usage +
+      // tool_use_ids so the handler can stamp the ↑/⛀/↓ footer on live tool
+      // cells (matched by data-tool-use-id) and the streaming agent cell.
+      'iteration_usage',
     ];
 
     for (const type of eventTypes) {

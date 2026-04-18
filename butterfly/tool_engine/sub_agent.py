@@ -192,7 +192,11 @@ def _format_result(child_id: str, mode: str, reply: str | None, timeout: float) 
             f"{child_id}. The child session is still running — open it in "
             f"the sidebar to inspect progress."
         )
-    return f"[sub_agent · child={child_id} · mode={mode}]\n{reply}"
+    # v2.0.23: dropped the `[sub_agent · child=… · mode=…]` prefix line —
+    # the parent's UI now renders a dedicated "Sub-agent" notification cell
+    # carrying mode + display_name, so the bracket wrapper was redundant
+    # noise inside the LLM-visible reply body.
+    return reply
 
 
 # ── Sync tool ────────────────────────────────────────────────────────────────

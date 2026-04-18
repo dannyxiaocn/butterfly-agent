@@ -15,20 +15,32 @@ OnTextChunk = Callable[[str], None]             # streamed text fragment (assist
 # for back-compat; this signature describes the internal Agent→hook contract
 # that composed Session callbacks receive.
 OnToolCall  = Callable[[str, dict, str], None]
-# (name, input, result, tool_use_id)    — after execution (see OnToolCall note)
-OnToolDone  = Callable[[str, dict, str, str], None]
+# (name, input, result, tool_use_id, is_error) — after execution.
+# v2.0.23 added ``is_error`` as the 5th arg: Agent passes the combined
+# exception-caught / tool_engine.classify_tool_result outcome so Session can
+# stamp it into the ``tool_done`` event on events.jsonl (and the UI can paint
+# the cell red). External hooks registered via ``Session(on_tool_done=...)``
+# continue to receive the pre-v2.0.19 3-arg shape — the shim lives in
+# ``Session._make_tool_done_callback``.
+OnToolDone  = Callable[[str, dict, str, str, bool], None]
 OnLoopStart = Callable[[str], None]              # (input)                — before loop begins
 OnLoopEnd   = Callable[["AgentResult"], None]    # (result)               — after loop ends
 
 # Per-LLM-call hook (v2.0.19). Fires once per completed ``provider.complete()``
-# inside the Agent loop, AFTER ``total_usage += turn_usage``. Carries the usage
-# of the single call just finished plus wall-clock duration so HUD can compute
-# current context size (input + cache_read + cache_write + output) and tokens/s
-# (output / duration). ``iteration`` is 1-based and matches the iteration count
-# the loop reports at ``loop_end``.
+# inside the Agent loop, AFTER the assistant message has been committed to
+# ``Agent._history``. Carries the usage of the single call just finished plus
+# wall-clock duration so HUD can compute current context size (input +
+# cache_read + cache_write + output) and tokens/s (output / duration).
+# ``iteration`` is 1-based and matches the iteration count the loop reports at
+# ``loop_end``.
 #
-#   on_llm_call_end(usage, duration_ms, iteration)
-OnLLMCallEnd = Callable[["TokenUsage", int, int], None]
+# v2.0.23 round-7: ``tool_use_ids`` is the list of ``tool_use`` block ids the
+# LLM emitted in this call — Session uses it to build an ``iteration_usage``
+# event that stamps the same usage dict onto every live tool cell from this
+# iteration (without it, the live UI only shows the footer after reload).
+#
+#   on_llm_call_end(usage, duration_ms, iteration, tool_use_ids)
+OnLLMCallEnd = Callable[["TokenUsage", int, int, list[str]], None]
 
 # Thinking block lifecycle. Providers call these when a thinking / reasoning
 # block opens and closes. We do NOT stream thinking deltas to the UI (per

@@ -154,6 +154,41 @@ export interface DisplayEvent {
   // on_thinking_end closed it — history replay renders these as
   // "Thinking interrupted" instead of the normal "Thought" label.
   interrupted?: boolean;
+  // v2.0.23: tool_done + history-replayed tool event — ``true`` when the
+  // tool raised (core/agent.py) or the tool_engine classifier matched a
+  // failure pattern (bash non-zero exit, Traceback, leading "Error:" line).
+  // Frontend flips .msg-tool to the red ✗ state when set.
+  is_error?: boolean;
+  // v2.0.23: on 'user' display events, identifies which of the three input
+  // origins this row represents — drives the glass-card colour variant:
+  //   caller=human (or absent) + source=user → green (human chat)
+  //   caller=system + source=panel           → orange-yellow (bg tool output)
+  //   caller=task                            → sky blue (task wakeup) — not
+  //       currently emitted by the backend for task runs (task_wakeup is a
+  //       separate event type), reserved for future unification.
+  // The `task_wakeup` event itself carries `card` for the dim sub-label.
+  caller?: string;
+  // v2.0.23: background-tool-notification user_input rows carry the
+  // originating tool's name so the glass card's dim sub-label can read
+  // "tool output — bash" without parsing the free-form notification body.
+  tool_name?: string;
+  // v2.0.23: sub_agent completion notifications (tool_name=="sub_agent")
+  // carry the child session's display_name + permission mode so the
+  // metallic "Sub-agent" cell shows "Sub-agent — <display_name>" in the
+  // summary without a lookup to sessions list.
+  display_name?: string;
+  sub_agent_mode?: string;
+  // v2.0.23: task_wakeup event carries the resolved task prompt (after
+  // {task} template expansion) so the sky-blue "Wakeup" card renders the
+  // actual prompt in its body instead of a placeholder.
+  prompt?: string;
+  // v2.0.23 round-7: iteration_usage event — per-LLM-call live footer signal.
+  // ``tool_use_ids`` lists the tool cells (by tool_use_id) that should
+  // receive the ↑/⛀/↓ footer; ``has_text`` gates whether the streaming
+  // agent cell also gets one. ``usage`` shape matches the thinking/tool/agent
+  // event ``usage`` field above.
+  tool_use_ids?: string[];
+  has_text?: boolean;
 }
 
 export type SessionTone = 'running' | 'napping' | 'persistent' | 'stopped' | 'idle' | 'meta';

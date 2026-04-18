@@ -173,6 +173,26 @@ class Session:
         # WITHIN the turn — position-based pairing across the whole
         # events.jsonl was fragile when old turns lacked the instrumentation.
         self._current_turn_agent_durations: list[int] = []
+        # v2.0.23: per-turn list of usage snapshots (one entry per LLM call
+        # that produced text). Sibling of ``_current_turn_agent_durations``
+        # and populated on the same hook — each entry is this call's usage
+        # dict. Turn writer drains onto ``turn["agent_output_usages"]`` so
+        # the frontend can stamp EACH agent cell with the tokens its own LLM
+        # call burnt, instead of the cumulative turn total. Without this a
+        # tool-heavy turn (e.g. 5 iterations, 1 final text block) inflated
+        # the cached-token pill to 5x the real value because cache_read is
+        # the same prefix re-counted per iteration.
+        self._current_turn_agent_usages: list[dict] = []
+        # v2.0.23 round-6: per-turn list of usage snapshots indexed by
+        # iteration — one entry per on_llm_call_end fire (unconditional,
+        # NOT filtered by "produced text"). Drains onto
+        # ``turn["per_iteration_usages"]`` so the frontend can render a
+        # dim token footer inside every cell body (thinking, tool, agent)
+        # — each footer shows the usage of the LLM call whose iteration
+        # produced the block. Distinct from agent_output_usages which only
+        # has entries for text-producing calls; this one is aligned 1:1
+        # with turn.messages[assistant].
+        self._current_turn_iteration_usages: list[dict] = []
 
         # Idempotent directory creation — safe for both new and resumed sessions
         self.session_dir.mkdir(parents=True, exist_ok=True)
@@ -662,6 +682,8 @@ class Session:
         old_len = len(self._agent._history)
         self._set_model_status("running", "user")
         self._current_turn_agent_durations = []
+        self._current_turn_agent_usages = []
+        self._current_turn_iteration_usages = []
         tool_call_cb, get_tool_call_count = self._make_tool_call_callback()
         on_chunk = self._make_text_chunk_callback()
         on_thinking_start, on_thinking_end, had_thinking, get_thinking_blocks = self._make_thinking_callbacks()
@@ -732,11 +754,28 @@ class Session:
                 prompt += f"\n\n{task_prompt}"
 
         trigger_ts = datetime.now().isoformat()
-        self._append_event({"type": "task_wakeup", "card": card.name, "ts": trigger_ts})
+        # v2.0.23: write the wakeup marker to context.jsonl (not events.jsonl).
+        # events.jsonl isn't replayed on history fetch, so the previous
+        # placement meant the "Wakeup" card vanished whenever the user
+        # reloaded a session. context.jsonl survives reload; the dispatcher's
+        # ``poll_inputs`` filters by ``type == "user_input"`` so this marker
+        # does NOT re-enqueue the task into the run queue (the TaskItem
+        # that owns this tick is already in flight). ``_context_event_to_display``
+        # picks up the marker and emits a ``user`` display event with
+        # ``caller=task`` so the frontend renders the sky-blue Wakeup card
+        # uniformly on live AND history paths.
+        self._append_context({
+            "type": "task_wakeup",
+            "card": card.name,
+            "prompt": prompt,
+            "ts": trigger_ts,
+        })
         card.mark_working()
         save_card(self.tasks_dir, card)
         self._set_model_status("running", triggered_by)
         self._current_turn_agent_durations = []
+        self._current_turn_agent_usages = []
+        self._current_turn_iteration_usages = []
         tool_call_cb, get_tool_call_count = self._make_tool_call_callback()
         on_chunk = self._make_text_chunk_callback()
         on_thinking_start, on_thinking_end, had_thinking, get_thinking_blocks = self._make_thinking_callbacks()
@@ -810,6 +849,10 @@ class Session:
                     turn["thinking_blocks"] = thinking_blocks
                 if self._current_turn_agent_durations:
                     turn["agent_output_durations"] = list(self._current_turn_agent_durations)
+                if self._current_turn_agent_usages:
+                    turn["agent_output_usages"] = list(self._current_turn_agent_usages)
+                if self._current_turn_iteration_usages:
+                    turn["per_iteration_usages"] = list(self._current_turn_iteration_usages)
                 if result.usage and result.usage.total_tokens > 0:
                     turn["usage"] = result.usage.as_dict()
                 self._append_context(turn)
@@ -846,6 +889,10 @@ class Session:
             turn["thinking_blocks"] = thinking_blocks
         if self._current_turn_agent_durations:
             turn["agent_output_durations"] = list(self._current_turn_agent_durations)
+        if self._current_turn_agent_usages:
+            turn["agent_output_usages"] = list(self._current_turn_agent_usages)
+        if self._current_turn_iteration_usages:
+            turn["per_iteration_usages"] = list(self._current_turn_iteration_usages)
         if result.usage and result.usage.total_tokens > 0:
             turn["usage"] = result.usage.as_dict()
         self._append_context(turn)
@@ -888,6 +935,10 @@ class Session:
             turn["thinking_blocks"] = thinking_blocks
         if self._current_turn_agent_durations:
             turn["agent_output_durations"] = list(self._current_turn_agent_durations)
+        if self._current_turn_agent_usages:
+            turn["agent_output_usages"] = list(self._current_turn_agent_usages)
+        if self._current_turn_iteration_usages:
+            turn["per_iteration_usages"] = list(self._current_turn_iteration_usages)
         self._append_context(turn)
 
     # ── Stop / Start ───────────────────────────────────────────────
@@ -1191,9 +1242,20 @@ class Session:
                 if is_sub_agent:
                     # Sub-agent contract: parent only ever sees the child's
                     # final reply. The runner stuffs that into entry.meta.result.
+                    # v2.0.23: header reformatted to lead with mode +
+                    # display_name instead of the opaque tid — both fields
+                    # are populated on entry.meta at spawn time by
+                    # SubAgentRunner.run. The previous `[sub_agent · child=…
+                    # · mode=…]` wrapper inside sub_agent.py::_format_result
+                    # was also dropped in this release, so the reply body is
+                    # now clean LLM text.
                     sub_result = (entry.meta or {}).get("result") or "(empty reply)"
+                    _sub_meta = entry.meta or {}
+                    _sub_display = _sub_meta.get("display_name") or entry.tid
+                    _sub_mode = _sub_meta.get("mode") or ""
+                    _sub_mode_str = f" {_sub_mode}" if _sub_mode else ""
                     msg = (
-                        f"sub_agent task {entry.tid} completed{duration}.\n\n"
+                        f"sub_agent{_sub_mode_str} {_sub_display} completed{duration}.\n\n"
                         f"{sub_result}"
                     )
                 else:
@@ -1245,7 +1307,27 @@ class Session:
                     "mode": "interrupt",
                     "tid": entry.tid,
                     "kind": evt.kind,
+                    # v2.0.23: carry the originating tool name so the web UI's
+                    # background-tool-output card can render the dim sub-label
+                    # ("tool output — bash") without reconstructing it from
+                    # the free-form message text.
+                    "tool_name": entry.tool_name,
                 }
+                # v2.0.23: sub_agent completions get a dedicated "Sub-agent"
+                # notification cell (orange, metallic). The frontend branches
+                # on ``tool_name == "sub_agent"`` and keys the dim sub-label
+                # on ``display_name``; the ``sub_agent_mode`` field is
+                # reserved for a future sub-label extension. We don't overload
+                # the pre-existing ``mode`` key — that one carries dispatcher
+                # semantics (interrupt/wait) and mustn't be repurposed.
+                if is_sub_agent:
+                    _meta = entry.meta or {}
+                    _dn = _meta.get("display_name")
+                    _md = _meta.get("mode")
+                    if _dn:
+                        event["display_name"] = _dn
+                    if _md:
+                        event["sub_agent_mode"] = _md
                 self._append_context(event)
             self._append_event({
                 "type": "panel_update",
@@ -1321,7 +1403,17 @@ class Session:
         def on_tool_call(name: str, input: dict, tool_use_id: str) -> None:
             count[0] += 1
             self._tool_started[tool_use_id] = _time.monotonic()
-            self._append_event({"type": "tool_call", "name": name, "input": input})
+            # v2.0.23 round-7: carry ``tool_use_id`` so the frontend can key
+            # the live tool cell DOM by id (not just by name). Required for
+            # the ``iteration_usage`` live-footer signal to target the right
+            # cell when two calls of the same tool run concurrently via
+            # ``asyncio.gather`` in one iteration.
+            self._append_event({
+                "type": "tool_call",
+                "name": name,
+                "input": input,
+                "tool_use_id": tool_use_id,
+            })
             if ext:
                 # External hooks are 2-arg (pre-v2.0.19). Call with 2 positional
                 # args to preserve that contract; integrators that want the id
@@ -1354,7 +1446,13 @@ class Session:
         ext = self.on_tool_done
         import time as _time
 
-        def on_tool_done(name: str, input: dict, result: str, tool_use_id: str) -> None:
+        def on_tool_done(
+            name: str,
+            input: dict,
+            result: str,
+            tool_use_id: str,
+            is_error: bool = False,
+        ) -> None:
             # Cap the result text we ship through events.jsonl so huge tool
             # outputs (bash screenfuls, file reads) don't bloat the SSE
             # stream. Full output is still available via the Panel tab.
@@ -1372,6 +1470,12 @@ class Session:
             }
             if truncated:
                 payload["result_truncated"] = True
+            # v2.0.23: classify-or-exception-derived error flag. Matches the
+            # ``is_error`` already stored on the paired ``tool_result`` block in
+            # context.jsonl (see core/agent.py::_execute_tools), so live UI and
+            # history replay both key on the same bit to flip the cell red.
+            if is_error:
+                payload["is_error"] = True
             # v2.0.19 (parallel): per-call wall-clock for the HUD phase timer.
             # Paired with ``_tool_started[tool_use_id]`` from the on_tool_call
             # side so concurrent gather()'d calls don't mix up durations.
@@ -1503,7 +1607,12 @@ class Session:
         The event is written to events.jsonl (not context.jsonl) because it's
         HUD metadata, not a replayable turn component.
         """
-        def on_llm_call_end(usage: "TokenUsage", duration_ms: int, iteration: int) -> None:
+        def on_llm_call_end(
+            usage: "TokenUsage",
+            duration_ms: int,
+            iteration: int,
+            tool_use_ids: list[str],
+        ) -> None:
             ctx = (
                 usage.input_tokens
                 + usage.cache_read_tokens
@@ -1522,6 +1631,29 @@ class Session:
                 "toks_per_s": toks_per_s,
             }
             self._append_event(payload)
+            # v2.0.23 round-7: emit ``iteration_usage`` so the LIVE frontend
+            # can stamp the token footer on this iteration's tool cells + the
+            # streaming agent cell. History replay already gets the footer via
+            # ``per_iteration_usages`` positional pairing in ipc.py — this
+            # event is strictly for mid-run updates (nothing to persist to
+            # context.jsonl). ``has_text`` tells the frontend whether to also
+            # stamp the streaming agent cell; ``tool_use_ids`` targets tool
+            # cells by id.
+            self._append_event({
+                "type": "iteration_usage",
+                "iteration": iteration,
+                "usage": usage.as_dict(),
+                "tool_use_ids": list(tool_use_ids),
+                "has_text": self._text_output_started_at is not None,
+            })
+            # v2.0.23 round-6: record this call's usage for positional pairing
+            # with the turn's assistant messages (one per iteration, always).
+            # ``turn.per_iteration_usages[i]`` pairs with the i-th assistant
+            # message in turn.messages — the frontend uses it to render the
+            # dim token footer at the bottom of every cell body (thinking,
+            # tool, agent). Append BEFORE the text-output branch below so
+            # we capture tool-only / thinking-only iterations too.
+            self._current_turn_iteration_usages.append(usage.as_dict())
             # v2.0.20: if this LLM call produced any text output (the chunk
             # callback stamped a start timestamp), emit agent_output_done so
             # the UI can show "Output Xs" on both the live cell and history
@@ -1540,6 +1672,14 @@ class Session:
                 # LLM call that produced text — same ordering as the text
                 # content blocks that end up in the turn's messages.
                 self._current_turn_agent_durations.append(output_duration_ms)
+                # v2.0.23: same positional queue for per-call usage — one
+                # entry per text-producing call, same ordering. Turn writer
+                # drains onto ``turn["agent_output_usages"]`` so history +
+                # live render each agent cell with its own call's tokens
+                # instead of the cumulative turn total. Storing the dict
+                # form (not TokenUsage) so it round-trips through JSON
+                # without a custom decoder.
+                self._current_turn_agent_usages.append(usage.as_dict())
             # Attribution for Part E — stamp the last thinking block of this
             # call with the provider-reported reasoning_tokens so the frontend
             # can render "Thought Xs for N tokens". The thinking-callback

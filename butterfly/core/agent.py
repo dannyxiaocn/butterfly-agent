@@ -273,16 +273,14 @@ class Agent:
                     thinking_effort=self.thinking_effort,
                 )
             total_usage = total_usage + turn_usage
-            if on_llm_call_end is not None:
-                # Only the measurable-wall-clock of a finished call is surfaced
-                # to the hook — a cancelled call never reaches here, so the
-                # HUD can trust any llm_call_usage event it sees.
-                _call_duration_ms = int((_time.monotonic() - _call_started) * 1000)
-                try:
-                    on_llm_call_end(turn_usage, _call_duration_ms, iterations)
-                except Exception:
-                    # HUD plumbing must never break the agent loop.
-                    _log.warning("on_llm_call_end hook raised", exc_info=True)
+            # v2.0.23 round-7: duration_ms is measured from _call_started (set
+            # before provider.complete) to NOW, so the hook sees true wall-clock
+            # of the HTTP call. The hook invocation itself is deferred to just
+            # after ``self._history = list(messages)`` below so Session can emit
+            # ``iteration_usage`` events that carry this call's tool_use_ids —
+            # live tool cells need them to receive the token footer without
+            # waiting for a page reload.
+            _call_duration_ms = int((_time.monotonic() - _call_started) * 1000)
 
             extra_blocks = active_provider.consume_extra_blocks()
 
@@ -322,12 +320,33 @@ class Agent:
             # as a fresh user turn).
             self._history = list(messages)
 
-            if not tool_calls:
-                break
-
+            # v2.0.23 round-7: on_tool_call MUST fire before on_llm_call_end so
+            # the frontend has live tool cells in the DOM by the time the
+            # ``iteration_usage`` event arrives (handler matches cells by
+            # ``data-tool-use-id``). Before round-7 the order was: on_llm_call_end
+            # at line ~282 → on_tool_call here. Restructured to:
+            #   1. commit history
+            #   2. on_tool_call (emits tool_call events → cells created)
+            #   3. on_llm_call_end (emits iteration_usage → footers applied)
+            #   4. _execute_tools
             if on_tool_call:
                 for tc in tool_calls:
                     on_tool_call(tc.name, tc.input, tc.id)
+
+            if on_llm_call_end is not None:
+                try:
+                    on_llm_call_end(
+                        turn_usage,
+                        _call_duration_ms,
+                        iterations,
+                        [tc.id for tc in tool_calls],
+                    )
+                except Exception:
+                    # HUD plumbing must never break the agent loop.
+                    _log.warning("on_llm_call_end hook raised", exc_info=True)
+
+            if not tool_calls:
+                break
 
             try:
                 tool_results = await _execute_tools(
@@ -466,8 +485,19 @@ async def _execute_tools(
             except Exception as exc:
                 content = f"Error executing '{tc.name}': {exc}"
                 is_error = True
+            else:
+                # v2.0.23: classify successful-return results through the
+                # tool_engine's central rule table. Exception-path errors above
+                # are already flagged; the classifier catches the complementary
+                # case where the executor completes normally but the string
+                # output encodes failure (e.g. bash returning with `[exit 1,
+                # …]`, `Traceback (most recent call last):` in a write tool's
+                # output). Import lazily to avoid a core→tool_engine import
+                # dependency at module load time.
+                from butterfly.tool_engine import classify_tool_result
+                is_error = classify_tool_result(tc.name, content)
         if on_tool_done:
-            on_tool_done(tc.name, tc.input, content, tc.id)
+            on_tool_done(tc.name, tc.input, content, tc.id, is_error)
         return {
             "type": "tool_result",
             "tool_use_id": tc.id,

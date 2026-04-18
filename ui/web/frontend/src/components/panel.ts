@@ -135,26 +135,56 @@ export function createPanel(): HTMLElement {
     const lastRun = formatRelative(card.last_finished_at);
     const statusClass = `task-status-${card.status}`;
 
-    // Content preview: first 3 non-empty lines
-    const preview = card.description.split('\n').filter(l => l.trim()).slice(0, 3).join('\n');
+    // v2.0.23: collapsible <details> chrome. Summary shows just identity
+    // (name + duty + status + interval pill). The heavier fields —
+    // full description, progress, comments, window + last-run meta,
+    // and the Edit button — live in the body so the panel stays scannable
+    // when there are many task cards.
+    const descriptionBlock = card.description.trim()
+      ? `<div class="task-card-section">
+           <div class="task-card-section-label">description</div>
+           <div class="task-card-section-body">${escHtml(card.description)}</div>
+         </div>`
+      : '';
+    const progressBlock = card.progress && card.progress.trim()
+      ? `<div class="task-card-section">
+           <div class="task-card-section-label">progress</div>
+           <div class="task-card-section-body">${escHtml(card.progress)}</div>
+         </div>`
+      : '';
+    const commentsBlock = card.comments && card.comments.trim()
+      ? `<div class="task-card-section">
+           <div class="task-card-section-label">comments</div>
+           <div class="task-card-section-body">${escHtml(card.comments)}</div>
+         </div>`
+      : '';
+    const windowMeta = (card.start_at || card.end_at)
+      ? `<span class="task-window">window: ${escHtml(card.start_at ?? '∞')} → ${escHtml(card.end_at ?? '∞')}</span>`
+      : '';
 
     return `
-      <div class="task-card" data-name="${escHtml(card.name)}">
-        <div class="task-card-header">
-          <span class="task-name">${escHtml(card.name)}</span>
-          ${dutyPill}
-          <span class="task-status-badge ${statusClass}">${card.status}</span>
+      <details class="task-card" data-name="${escHtml(card.name)}">
+        <summary class="task-card-summary">
+          <span class="task-card-summary-main">
+            <span class="task-name">${escHtml(card.name)}</span>
+            ${dutyPill}
+            <span class="task-status-badge ${statusClass}">${card.status}</span>
+            <span class="task-interval-pill">${escHtml(intervalStr)}</span>
+          </span>
+        </summary>
+        <div class="task-card-body">
+          <div class="task-card-meta">
+            ${windowMeta}
+            <span class="task-last-run">last run: ${escHtml(lastRun)}</span>
+          </div>
+          ${descriptionBlock}
+          ${progressBlock}
+          ${commentsBlock}
+          <div class="task-card-actions">
+            <button class="btn-sm btn-edit" data-name="${escHtml(card.name)}">Edit</button>
+          </div>
         </div>
-        <div class="task-card-meta">
-          <span class="task-interval">${escHtml(intervalStr)}</span>
-          ${card.start_at || card.end_at ? `<span class="task-window">window: ${escHtml(card.start_at ?? '∞')} → ${escHtml(card.end_at ?? '∞')}</span>` : ''}
-          <span class="task-last-run">last run: ${escHtml(lastRun)}</span>
-        </div>
-        ${preview ? `<div class="task-preview">${escHtml(preview)}</div>` : ''}
-        <div class="task-card-actions">
-          <button class="btn-sm btn-edit" data-name="${escHtml(card.name)}">Edit</button>
-        </div>
-      </div>
+      </details>
     `;
   }
 

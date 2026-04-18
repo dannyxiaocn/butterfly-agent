@@ -21,6 +21,11 @@ context.jsonl event types:
                                "messages": [...], "ts": "...",
                                "merged_user_input_ids": [...] (optional; set when more
                                than one user_input event was merged into the turn)}
+  task_wakeup  — daemon → UI: {"type": "task_wakeup", "card": "...", "prompt": "...",
+                               "ts": "..."} — v2.0.23: moved to context.jsonl so
+                               history replay can render the Wakeup card. Daemon's
+                               ``poll_inputs`` filters on ``type=="user_input"`` so
+                               this marker does NOT re-enqueue the task.
 
 events.jsonl event types:
   model_status       — {"type": "model_status", "state": "running|idle", "source": "...", "ts": "..."}
@@ -31,18 +36,20 @@ events.jsonl event types:
   thinking_done      — {"type": "thinking_done", "block_id": "th:...", "text": "...", "duration_ms": 1234, "ts": "..."}
   loop_start         — {"type": "loop_start", "ts": "..."}
   loop_end           — {"type": "loop_end", "iterations": 2, "usage": {...}, "ts": "..."}
-  task_wakeup        — {"type": "task_wakeup", "card": "...", "ts": "..."}
   task_finished       — {"type": "task_finished", "card": "...", "ts": "..."}
   status             — {"type": "status", "value": "...", "ts": "..."}
   error              — {"type": "error", "content": "...", "ts": "..."}
   system_notice      — {"type": "system_notice", "message": "...", "meta_version": "...", "session_version": "...", "ts": "..."}
 
 Display events derived for the UI:
-  user             — from user_input (context)
+  user             — from user_input (context); ALSO from task_wakeup (context,
+                     v2.0.23) with ``caller=task`` + ``source=task`` so the
+                     frontend renders a sky-blue Wakeup card identically live
+                     and on reload.
   agent            — from turn last assistant message (context)
   tool             — from turn tool_use blocks (context) OR streaming tool_call (events)
   model_status, partial_text, tool_done, loop_start, loop_end,
-  task_wakeup, task_finished, status, error — pass-through (events)
+  task_finished, status, error — pass-through (events)
 """
 from __future__ import annotations
 import json
@@ -84,10 +91,52 @@ def _context_event_to_display(
     etype = event.get("type")
     ts = event.get("ts", "")
 
+    if etype == "task_wakeup":
+        # v2.0.23: moved from events.jsonl to context.jsonl so history replay
+        # renders the sky-blue "Wakeup" card for completed task runs. Emitted
+        # as a ``user`` display event with ``caller=task`` + ``source=task``
+        # so the frontend's existing three-variant switch (userCellVariant)
+        # picks it up without a dedicated case. ``prompt`` goes into
+        # ``content`` so the collapsed-card body renders the task body directly.
+        display = {
+            "type": "user",
+            "content": event.get("prompt", "") or "",
+            "ts": ts,
+            "caller": "task",
+            "source": "task",
+        }
+        if event.get("card"):
+            display["card"] = event["card"]
+        return [display]
+
     if etype == "user_input":
         display = {"type": "user", "content": event.get("content", ""), "ts": ts}
         if not for_history and event.get("id"):
             display["id"] = event["id"]
+        # v2.0.23: forward origin fields so the frontend can render three
+        # visual variants of the user-input cell (human chat, background-tool
+        # notification, task wakeup). ``caller`` ("human"|"system"|"task") and
+        # ``source`` ("user"|"panel"|"task") both help disambiguate — the
+        # frontend keys on caller first, source as tiebreaker. ``tid`` /
+        # ``kind`` / ``tool_name`` are only populated on bg-tool notifications
+        # (see Session._drain_background_events); frontend uses tool_name as
+        # the dim sub-label next to the "tool output" title.
+        for field in (
+            "caller",
+            "source",
+            "tid",
+            "kind",
+            "tool_name",
+            "card",
+            # v2.0.23: sub_agent notifications carry the child's display_name
+            # (dim sub-label of the "Sub-agent" card) and its permission mode
+            # (explorer / executor) — populated only when tool_name == sub_agent.
+            "display_name",
+            "sub_agent_mode",
+        ):
+            val = event.get(field)
+            if val is not None:
+                display[field] = val
         return [display]
 
     if etype == "turn":
@@ -118,7 +167,33 @@ def _context_event_to_display(
             if isinstance(agent_output_durations_raw, list)
             else []
         )
+        # v2.0.23: same-positional-order per-call usage snapshots. Overrides
+        # the turn-aggregated ``usage`` on whichever text cell it pairs with.
+        # Absent on pre-v2.0.23 turns — those fall back to the old behaviour
+        # where ``agent_events[-1]["usage"] = turn.usage`` attaches the
+        # cumulative total to the last cell.
+        agent_output_usages_raw = event.get("agent_output_usages") or []
+        agent_output_usages = (
+            agent_output_usages_raw
+            if isinstance(agent_output_usages_raw, list)
+            else []
+        )
+        # v2.0.23 round-6: per-ITERATION usages (one entry per LLM call,
+        # including tool-only / thinking-only calls — agent_output_usages
+        # above only had entries for text-producing calls). Paired 1:1 with
+        # assistant messages in turn.messages via ``assistant_msg_idx``; the
+        # entry is stamped on every event emitted from that message's
+        # content blocks (thinking + tool + agent) so the frontend can
+        # render a dim token footer inside every cell body. When both
+        # lists are present, per_iteration_usages wins.
+        per_iteration_usages_raw = event.get("per_iteration_usages") or []
+        per_iteration_usages = (
+            per_iteration_usages_raw
+            if isinstance(per_iteration_usages_raw, list)
+            else []
+        )
         agent_cursor_turn = 0
+        assistant_msg_idx = 0
         messages = event.get("messages", []) or []
 
         # ── tool_use → tool_result pairing for history replay ─────────
@@ -195,7 +270,7 @@ def _context_event_to_display(
                     thinking_ev["interrupted"] = True
                 pending_thinking.append(thinking_ev)
 
-        def _emit_next_thinking() -> None:
+        def _emit_next_thinking(iter_usage: dict | None = None) -> None:
             """Emit the next pending thinking block (position-based pairing).
 
             Persisted thinking_blocks are ordered chronologically by the
@@ -207,9 +282,16 @@ def _context_event_to_display(
             ts (they fall back to the turn's commit ts, which sorts
             AFTER every reasoning ts), so a ts-compare approach would
             flush every thought before the first tool on reload.
+
+            v2.0.23 round-6: stamps ``iter_usage`` on the emitted event if
+            provided so the frontend can render the dim token footer at
+            the bottom of the thinking cell body.
             """
             if pending_thinking:
-                result.append(pending_thinking.pop(0))
+                ev = pending_thinking.pop(0)
+                if iter_usage:
+                    ev["usage"] = iter_usage
+                result.append(ev)
 
         # ── Tool + text + legacy thinking: iterate in message order ──
         # This preserves interleaved-mode sequencing (think → tool → text →
@@ -227,6 +309,22 @@ def _context_event_to_display(
             msg_ts = msg.get("ts", ts)
             content = msg.get("content", [])
 
+            # v2.0.23 round-6: this assistant message corresponds to a single
+            # ``provider.complete()`` iteration in Agent.run. The usage for
+            # that call is ``per_iteration_usages[assistant_msg_idx]`` when
+            # present. Every display event emitted from this message's
+            # blocks (thinking / tool / agent) gets the same usage stamp
+            # so the frontend can render the dim token footer at the
+            # bottom of each cell's expanded body.
+            iter_usage: dict | None = None
+            if assistant_msg_idx < len(per_iteration_usages):
+                raw = per_iteration_usages[assistant_msg_idx]
+                if isinstance(raw, dict):
+                    iter_usage = raw
+            # Consumed at function-scope cursor; bump before we might
+            # ``continue`` so skipped messages still advance the index.
+            assistant_msg_idx += 1
+
             # Some providers round-trip the assistant message as a bare string
             # (no block structure). Treat it as a single text block.
             if isinstance(content, str):
@@ -234,6 +332,32 @@ def _context_event_to_display(
                     ev: dict = {"type": "agent", "content": content, "ts": msg_ts}
                     if not for_history:
                         ev["id"] = f"turn:{ts}:{agent_idx}"
+                    # v2.0.23: bare-string assistant bodies also consume the
+                    # per-turn agent_output_durations queue, matching the
+                    # structured ``btype == "text"`` path below. Codex /
+                    # gpt-5.4 tool-driven turns typically serialise the
+                    # post-tool text message as a plain string (see
+                    # 2026-04-18_17-26-41-e1f9 for repro); without this the
+                    # "Agent Xs" pill only appeared on history replay when
+                    # the provider happened to emit a full content-list
+                    # shape, which was the pre-regression default for the
+                    # turns used to validate v2.0.20/21.
+                    if agent_cursor_turn < len(agent_output_durations):
+                        dur = agent_output_durations[agent_cursor_turn]
+                        if isinstance(dur, int):
+                            ev["duration_ms"] = dur
+                        if agent_cursor_turn < len(agent_output_usages):
+                            u = agent_output_usages[agent_cursor_turn]
+                            if isinstance(u, dict):
+                                ev["usage"] = u
+                        agent_cursor_turn += 1
+                    # per_iteration_usages wins over agent_output_usages
+                    # (both paths exist for back-compat; this one covers
+                    # iterations that produced text but whose entry was
+                    # somehow absent from agent_output_usages, and also
+                    # matches the tool/thinking footer semantics).
+                    if iter_usage is not None:
+                        ev["usage"] = iter_usage
                     agent_idx += 1
                     agent_events.append(ev)
                     result.append(ev)
@@ -255,7 +379,7 @@ def _context_event_to_display(
                     # right spot in the transcript.
                     if has_persisted:
                         if for_history:
-                            _emit_next_thinking()
+                            _emit_next_thinking(iter_usage)
                         continue
                     if not for_history and has_streaming_thinking:
                         continue
@@ -267,6 +391,8 @@ def _context_event_to_display(
                             "ts": ts,
                             "id": f"thinking:{ts}:{thinking_idx}",
                         }
+                        if iter_usage is not None:
+                            ev["usage"] = iter_usage
                         thinking_idx += 1
                         result.append(ev)
 
@@ -278,7 +404,7 @@ def _context_event_to_display(
                     # reasoning → tool → reasoning → tool instead of
                     # all reasoning bunched up before any tool.
                     if for_history and has_persisted:
-                        _emit_next_thinking()
+                        _emit_next_thinking(iter_usage)
 
                 elif btype == "tool_use":
                     if for_history or not has_streaming_tools:
@@ -292,6 +418,8 @@ def _context_event_to_display(
                         }
                         if use_id:
                             tool_ev["id"] = use_id
+                        if iter_usage is not None:
+                            tool_ev["usage"] = iter_usage
                         # Pair with tool_result from a later message so the
                         # reloaded cell shows the returned output instead of
                         # "(pending)". Live sessions still overlay the live
@@ -326,11 +454,21 @@ def _context_event_to_display(
                         # render without a duration pill. Applied to both
                         # live SSE and history so reloaded cells show the
                         # exact same "Agent Xs" label the live cell did.
+                        # v2.0.23: same-index consumption of agent_output_usages
+                        # so this specific text block's cell shows its own
+                        # LLM call's tokens, not the turn-cumulative sum.
                         if agent_cursor_turn < len(agent_output_durations):
                             dur = agent_output_durations[agent_cursor_turn]
                             if isinstance(dur, int):
                                 ev["duration_ms"] = dur
+                            if agent_cursor_turn < len(agent_output_usages):
+                                u = agent_output_usages[agent_cursor_turn]
+                                if isinstance(u, dict):
+                                    ev["usage"] = u
                             agent_cursor_turn += 1
+                        # per_iteration_usages (round-6) wins over agent_output_usages.
+                        if iter_usage is not None:
+                            ev["usage"] = iter_usage
                         agent_idx += 1
                         agent_events.append(ev)
                         result.append(ev)
@@ -341,11 +479,16 @@ def _context_event_to_display(
             result.extend(pending_thinking)
             pending_thinking.clear()
 
-        # ── Usage attaches to LAST agent event ────────────────────────
-        # Turn usage is cumulative for the whole run; we surface it on the
-        # final assistant text cell (tokens shown inline in that cell's
-        # header). Intermediate cells stay clean.
-        if usage and agent_events:
+        # ── Usage attaches to LAST agent event (fallback only) ─────────
+        # v2.0.23: per-call pairing via ``agent_output_usages`` above is
+        # authoritative — each text cell already carries the tokens burnt
+        # by the LLM call that produced it. Only attach the turn-cumulative
+        # ``usage`` on the final cell when the per-call list was absent
+        # (pre-v2.0.23 turns on disk) and no cell already got a usage via
+        # pairing. This kills the 5-iter cache_read inflation: a tool-heavy
+        # turn with 1 text cell no longer shows 5× the actual cached
+        # prefix on its pill.
+        if usage and agent_events and not any("usage" in a for a in agent_events):
             agent_events[-1]["usage"] = usage
 
         # ── Live SSE: emit only the LAST agent event ─────────────────
@@ -384,7 +527,16 @@ def _runtime_event_to_display(event: dict) -> list[dict]:
         return [{"type": "partial_text", "content": event.get("content", ""), "ts": ts}]
 
     if etype == "tool_call":
-        return [{"type": "tool", "name": event.get("name"), "input": event.get("input", {}), "ts": ts}]
+        out: dict = {"type": "tool", "name": event.get("name"), "input": event.get("input", {}), "ts": ts}
+        # v2.0.23 round-7: forward ``tool_use_id`` as ``id`` (matching the
+        # history-replay shape at _context_event_to_display) so the frontend
+        # can key the DOM by it. Required for the iteration_usage live-footer
+        # signal to target the right cell when two calls of the same tool run
+        # concurrently via ``asyncio.gather`` in one iteration.
+        tuid = event.get("tool_use_id")
+        if tuid:
+            out["id"] = tuid
+        return [out]
 
     if etype in (
         "model_status",
@@ -425,6 +577,12 @@ def _runtime_event_to_display(event: dict) -> list[dict]:
         # cell with ``duration_ms`` so the finalized "Agent Xs" matches what
         # history replay reads from events.jsonl.
         "agent_output_done",
+        # v2.0.23 round-7: per-LLM-call usage for LIVE footer stamping. Carries
+        # ``usage`` + ``tool_use_ids`` + ``has_text`` so the frontend can append
+        # the dim ↑/⛀/↓ footer to each running tool cell (matched by id) and
+        # the streaming agent cell — without it, the footer only appears on
+        # reload via ``per_iteration_usages`` positional pairing.
+        "iteration_usage",
     ):
         return [event]
 

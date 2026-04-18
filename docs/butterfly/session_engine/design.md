@@ -281,3 +281,22 @@ upgrade the wrong placeholder. None of the currently supported providers
 (Anthropic / Codex / Kimi) emit this pattern, so the constraint is
 adequate in practice; revisit if a future provider requires ordered
 pairing by `block_id`.
+
+## Tool lifecycle — `is_error` on `tool_done` (v2.0.23)
+
+`_make_tool_done_callback` grew a 5th positional arg: `on_tool_done(name, input, result, tool_use_id, is_error)`. The flag is computed at the agent layer (`core/agent.py::_execute_tools`) by combining:
+
+1. The existing exception branches (tool-not-found, background-spawn-fail, `tool.execute()` raised) that already stamped `is_error=True`.
+2. `butterfly.tool_engine.classify_tool_result(name, content)` on the success-return path (see `docs/butterfly/tool_engine/design.md` §6.1).
+
+When true, the value is written into the `tool_done` event on `events.jsonl` as `is_error: true`. The paired `tool_result` block in `context.jsonl` already carried the same bit since v2.0.5, so history replay doesn't regress — it simply means the frontend can colour the live cell red from the first SSE frame instead of waiting for a reload.
+
+External `Session(on_tool_done=...)` hooks are still invoked with the pre-v2.0.19 3-arg shape (`name, input, result`). The 5-arg signature is internal to the Agent → Session contract.
+
+## Interrupt sweep — tool + thinking cell terminal state (v2.0.23)
+
+Bare interrupt (`bridge.send_interrupt()` → control event on `events.jsonl` → `Session._handle_explicit_interrupt` cancels `self._run_task`) always works end-to-end on the backend: `cancelled_run=true` + `model_status=idle` are emitted. What the web UI used to miss: a tool call cancelled mid-flight never produces a `tool_done`, so the yellow `▶ bash running…` cell span for the lifetime of the next run, and the user saw "nothing happened".
+
+The frontend fix lives entirely in `chat.ts::markRunningToolsInterrupted` — called from the `model_status: idle` branch next to the pre-existing `markRunningThinkingInterrupted`. It sweeps every `.msg-tool:not(.done)` into a terminal `done interrupted` state (dim yellow chrome + `✗ interrupted Xs`) and clears the `runningTools` / `backgroundCells` maps + HUD. Safe to call on every idle transition: a clean run has already transitioned every tool to `.done` via its `tool_done`, so both maps are empty and the DOM scan is a no-op.
+
+The backend `"interrupt" / "interrupted"` control events remain intentionally filtered out of `_runtime_event_to_display` — the UI needs no direct event handler, only the `model_status=idle` sweep.
