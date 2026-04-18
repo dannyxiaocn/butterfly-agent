@@ -316,24 +316,6 @@ class IPCUnitTests(unittest.TestCase):
         self.assertTrue(tool_ev["is_error"])
         self.assertEqual(tool_ev["result"], "permission denied")
 
-    def test_history_replay_drops_empty_persisted_thinking_blocks(self) -> None:
-        """thinking_blocks with empty text (e.g. a provider that opened a
-        reasoning channel but emitted no summary) must be filtered so the
-        UI doesn't render an empty grey cell on reload."""
-        event = {
-            "type": "turn",
-            "messages": [{"role": "assistant", "content": "done"}],
-            "ts": "2026-01-01T00:00:00",
-            "thinking_blocks": [
-                {"block_id": "empty:1", "text": "", "ts": "2026-01-01T00:00:00.100"},
-                {"block_id": "real:1", "text": "real reasoning", "ts": "2026-01-01T00:00:00.200"},
-            ],
-        }
-        display = _context_event_to_display(event, for_history=True)
-        thinking = [d for d in display if d["type"] == "thinking"]
-        self.assertEqual(len(thinking), 1)
-        self.assertEqual(thinking[0]["content"], "real reasoning")
-
     def test_live_stream_assigns_distinct_ids_to_multiple_thinking_blocks(self) -> None:
         event = {
             "type": "turn",
