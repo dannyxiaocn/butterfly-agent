@@ -779,12 +779,14 @@ function renderEvent(event: DisplayEvent): HTMLElement | null {
 
   switch (event.type) {
     case 'thinking': {
-      if (!event.content) return null;
+      // v2.0.19 (parallel): render the cell even when the provider returned
+      // an empty summary — the persisted block still carries duration_ms
+      // (and reasoning_tokens from the attributor), which is what the
+      // "Thought Xs for N tokens" pill shows. Returning null here used to
+      // drop the cell AND shift reload-order for every following block,
+      // because ipc.py pulls one persisted entry per reasoning marker.
       div.className = 'msg msg-thinking';
       if (event.block_id) div.dataset.blockId = event.block_id;
-      // History-replay label: "Thought X.Xs for N tokens" when both pieces
-      // are known, "Thought X.Xs" when only the duration is, and plain
-      // "Thought" as a last resort (pre-v2.0.19 persisted blocks).
       const durSec = event.duration_ms != null
         ? (event.duration_ms / 1000).toFixed(1) + 's'
         : '';
@@ -797,13 +799,17 @@ function renderEvent(event: DisplayEvent): HTMLElement | null {
       } else {
         label = 'Thought';
       }
+      const body = event.content ?? '';
+      const bodyHtml = body
+        ? `<div class="thinking-body markdown-body">${renderMarkdown(body)}</div>`
+        : `<div class="thinking-body thinking-empty"><em>No thinking body exposed by the provider.</em></div>`;
       div.innerHTML = `
         <details class="thinking-details">
           <summary class="thinking-summary">
             <span class="thinking-label" data-duration-label="${escapeHtml(durSec)}">${escapeHtml(label)}</span>
             <span class="thinking-toggle-hint"></span>
           </summary>
-          <div class="thinking-body markdown-body">${renderMarkdown(event.content)}</div>
+          ${bodyHtml}
         </details>
       `;
       break;

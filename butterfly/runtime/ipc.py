@@ -76,7 +76,15 @@ def _context_event_to_display(event: dict, *, for_history: bool = False) -> list
     if etype == "turn":
         result: list[dict] = []
         persisted_raw = event.get("thinking_blocks") or []
-        persisted = [b for b in persisted_raw if isinstance(b, dict) and b.get("text")] \
+        # v2.0.19 (parallel): do NOT filter out empty-text blocks — they still
+        # carry duration_ms and (post-attributor) reasoning_tokens that the
+        # UI renders as "Thought Xs for N tokens". Dropping them here also
+        # desynced the position-based pairing below: each ``reasoning`` /
+        # ``thinking`` content block pops one queue entry, so a filtered
+        # queue leaves the last N reasoning markers with nothing to pop and
+        # makes the preceding pops pull the wrong blocks (classic symptom:
+        # "first N turns show Thought + tool, rest show tool only").
+        persisted = [b for b in persisted_raw if isinstance(b, dict)] \
             if isinstance(persisted_raw, list) else []
         has_persisted = bool(persisted)
         has_streaming_tools = event.get("has_streaming_tools", False)
