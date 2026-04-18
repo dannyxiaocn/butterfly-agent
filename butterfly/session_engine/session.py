@@ -1358,14 +1358,43 @@ class Session:
                 duration_ms = 0
                 if entry.finished_at and entry.started_at:
                     duration_ms = int((entry.finished_at - entry.started_at) * 1000)
-                self._append_event({
+                # v2.0.24: carry the real final output so the live tool cell
+                # flips from the "Task started. task_id=…" placeholder to
+                # actual bash stdout / sub-agent reply. Without this the
+                # cell stayed on the placeholder until a history reload
+                # paired the tool_use with its final tool_result.
+                #   * sub_agent → entry.meta["result_text"] (child's reply)
+                #   * bash bg  → tail of entry.output_file
+                # Cap the payload so a huge bash dump doesn't bloat SSE; the
+                # full output is still fetchable via tool_output(task_id=...).
+                final_result: str | None = None
+                _RESULT_MAX = 8000
+                if is_sub_agent:
+                    rt = (entry.meta or {}).get("result_text")
+                    if isinstance(rt, str) and rt:
+                        final_result = rt
+                elif entry.output_file:
+                    try:
+                        opath = Path(entry.output_file)
+                        if opath.exists():
+                            with opath.open("r", encoding="utf-8", errors="replace") as _f:
+                                final_result = _f.read()
+                    except OSError:
+                        final_result = None
+                payload: dict = {
                     "type": "tool_finalize",
                     "tid": entry.tid,
                     "name": entry.tool_name,
                     "kind": evt.kind,
                     "duration_ms": duration_ms,
                     "exit_code": entry.exit_code,
-                })
+                }
+                if final_result is not None:
+                    truncated = len(final_result) > _RESULT_MAX
+                    payload["result"] = final_result[:_RESULT_MAX]
+                    if truncated:
+                        payload["result_truncated"] = True
+                self._append_event(payload)
 
             # HUD sub-agent counter: any sub_agent state change re-broadcasts
             # the running tally (panel is the source of truth).

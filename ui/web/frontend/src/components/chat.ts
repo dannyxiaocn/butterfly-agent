@@ -250,13 +250,21 @@ export function createChat(): HTMLElement {
     // for the in-flight call. Without this, the yellow running cell spins
     // forever and the user thinks nothing happened. Mirror the thinking
     // interrupt: scan ``.msg-tool`` cells that haven't flipped to ``.done``
-    // yet and mark them interrupted. Also sweeps ``backgroundCells`` so
-    // bg tools (sub_agent, bash bg) that never saw a ``tool_finalize``
-    // land in the same terminal state. Safe to call on every idle — when
-    // the run ended cleanly every tool already transitioned, so both
-    // maps are empty and the DOM scan is a no-op.
+    // yet and mark them interrupted. Safe to call on every idle — when
+    // the run ended cleanly every tool already transitioned, so the DOM
+    // scan is a no-op.
+    //
+    // v2.0.24: SKIP cells tagged as background (``data-bg-tid``). A bg
+    // task (bash run_in_background=true, or sub_agent bg) outlives the
+    // parent's turn by design — the parent goes idle but the child keeps
+    // working, and ``tool_finalize`` will arrive on its own schedule to
+    // flip the cell done. Clearing ``backgroundCells`` or marking the
+    // cell interrupted here orphans it: the later finalize event finds
+    // nothing to upgrade and the cell stays frozen until a history
+    // reload pairs the tool_use with its tool_result.
     const liveCells = Array.from(messages.querySelectorAll('.msg-tool:not(.done)')) as HTMLElement[];
     for (const cell of liveCells) {
+      if (cell.dataset.bgTid) continue;
       const summary = cell.querySelector('.tool-status-summary') as HTMLElement | null;
       const name = cell.dataset.toolName ?? '';
       const entry = runningTools.get(name);
@@ -265,8 +273,14 @@ export function createChat(): HTMLElement {
       cell.classList.add('done', 'interrupted');
       if (summary) setToolStatus(summary, '✗', `interrupted ${durSec}`);
     }
+    // runningTools: drop entries whose cell was swept; preserve entries
+    // whose cell carries bg-tid (still legitimately running). Rebuild by
+    // scanning DOM rather than tracking the delta inline.
     runningTools.clear();
-    backgroundCells.clear();
+    // Preserve backgroundCells — those entries still correspond to cells
+    // waiting for tool_finalize. latestToolKey and the HUD pill point at
+    // the most recent ACTIVE tool, which is gone now that the turn idled,
+    // so those still get cleared.
     latestToolKey = null;
     updateHudTool(null);
   }
@@ -585,6 +599,16 @@ export function createChat(): HTMLElement {
           backgroundCells.set(event.tid, { el: target, name, startTs: started });
           const summary = target.querySelector('.tool-status-summary') as HTMLElement | null;
           if (summary) setToolStatus(summary, '▶', 'running…');
+          // Populate the body with the placeholder result ("Task started.
+          // task_id=…") so it reads the same as history replay, where the
+          // paired tool_result block carries the same text. Without this,
+          // the cell body stays "(pending)" until the user reloads. Keep
+          // the cell non-done so the yellow running state persists until
+          // tool_finalize arrives with the real output.
+          const resultEl = target.querySelector('.tool-body-result .tool-body-content') as HTMLElement | null;
+          if (resultEl && typeof event.result === 'string') {
+            resultEl.innerHTML = renderToolResultBlock(event.result, event.result_truncated);
+          }
           // Don't drop runningTools entry — the HUD ▶ name pill should stay.
           break;
         }

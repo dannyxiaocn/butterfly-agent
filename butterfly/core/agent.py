@@ -460,7 +460,7 @@ async def _execute_tools(
                 content = (
                     f"Task started. task_id={tid}. Output will arrive in a later "
                     f'turn as a notification; fetch anytime with '
-                    f'tool_output(task_id="{tid}"). Task is visible in the session panel.'
+                    f'tool_output(task_id="{tid}").'
                 )
             except Exception as exc:
                 content = f"Error starting background task '{tc.name}': {exc}"
