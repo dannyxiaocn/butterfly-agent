@@ -316,64 +316,6 @@ class IPCUnitTests(unittest.TestCase):
         self.assertTrue(tool_ev["is_error"])
         self.assertEqual(tool_ev["result"], "permission denied")
 
-    def test_history_replay_interleaves_persisted_thinking_with_tools_by_ts(self) -> None:
-        """v2.0.19: persisted ``thinking_blocks`` must be interleaved with
-        the tool / text content blocks by timestamp, not dumped in a
-        leading run. Matches the live SSE order of thinking_done → tool_call
-        → thinking_done → tool_call → text."""
-        event = {
-            "type": "turn",
-            "messages": [{
-                "role": "assistant",
-                "content": [
-                    {"type": "tool_use", "id": "1", "name": "bash", "input": {}, "ts": "2026-01-01T00:00:00.200"},
-                    {"type": "tool_use", "id": "2", "name": "read", "input": {}, "ts": "2026-01-01T00:00:00.400"},
-                    {"type": "text", "text": "done", "ts": "2026-01-01T00:00:00.500"},
-                ],
-            }],
-            "ts": "2026-01-01T00:00:00",
-            "thinking_blocks": [
-                {"block_id": "th:1", "text": "first", "ts": "2026-01-01T00:00:00.100"},
-                {"block_id": "th:2", "text": "second", "ts": "2026-01-01T00:00:00.300"},
-            ],
-        }
-        display = _context_event_to_display(event, for_history=True)
-        # Two-assistant-message layout isn't required — the key invariant is
-        # that thinking lands *before* the tool it preceded, not after.
-        shape = [(d["type"], d.get("block_id") or d.get("name") or d.get("content")) for d in display]
-        self.assertEqual(shape, [
-            ("thinking", "th:1"),
-            ("tool", "bash"),
-            ("thinking", "th:2"),
-            ("tool", "read"),
-            ("agent", "done"),
-        ])
-
-    def test_history_replay_emits_trailing_persisted_thinking_after_last_block(self) -> None:
-        """A persisted thinking block whose ts is later than every content
-        block (or whose ts is blank so the less-than comparison never
-        fires) must still be emitted — at the tail. Otherwise the "Thought"
-        would be silently dropped on reload."""
-        event = {
-            "type": "turn",
-            "messages": [{
-                "role": "assistant",
-                "content": [
-                    {"type": "tool_use", "id": "1", "name": "bash", "input": {}, "ts": "2026-01-01T00:00:00.100"},
-                ],
-            }],
-            "ts": "2026-01-01T00:00:00",
-            "thinking_blocks": [
-                {"block_id": "late", "text": "post-hoc reflection", "ts": "2026-01-01T00:00:00.900"},
-            ],
-        }
-        display = _context_event_to_display(event, for_history=True)
-        types_and_names = [(d["type"], d.get("name") or d.get("content")) for d in display]
-        self.assertEqual(types_and_names, [
-            ("tool", "bash"),
-            ("thinking", "post-hoc reflection"),
-        ])
-
     def test_history_replay_drops_empty_persisted_thinking_blocks(self) -> None:
         """thinking_blocks with empty text (e.g. a provider that opened a
         reasoning channel but emitted no summary) must be filtered so the
@@ -507,21 +449,27 @@ class IPCUnitTests(unittest.TestCase):
         self.assertTrue(tool_ev["is_error"])
         self.assertEqual(len(tool_ev["result"]), 8000)
 
-    def test_history_replay_interleaves_persisted_thinking_by_ts(self) -> None:
-        """think → tool → think → tool ordering is preserved on reload."""
+    def test_history_replay_interleaves_persisted_thinking_by_position(self) -> None:
+        """think → tool → think → tool ordering preserved on reload via
+        position markers (codex/gpt-5 reasoning content blocks) rather
+        than ts compare — tool_use blocks have no per-block ts, so a
+        ts-based approach would flush every thought before any tool."""
         event = {
             "type": "turn",
             "ts": "2026-04-17T00:00:10",
+            # Order of thinking_blocks matches stream order; all share
+            # ts < turn ts so a naive ts-sort would dump them up front.
             "thinking_blocks": [
-                {"block_id": "th_2", "text": "plan B", "ts": "2026-04-17T00:00:04"},
                 {"block_id": "th_1", "text": "plan A", "ts": "2026-04-17T00:00:01"},
+                {"block_id": "th_2", "text": "plan B", "ts": "2026-04-17T00:00:04"},
             ],
             "messages": [
                 {
                     "role": "assistant",
                     "content": [
+                        {"type": "reasoning", "id": "r1", "summary": []},
                         {"type": "tool_use", "id": "call_1", "name": "bash",
-                         "input": {"command": "ls"}, "ts": "2026-04-17T00:00:02"},
+                         "input": {"command": "ls"}},
                     ],
                 },
                 {
@@ -533,8 +481,9 @@ class IPCUnitTests(unittest.TestCase):
                 {
                     "role": "assistant",
                     "content": [
+                        {"type": "reasoning", "id": "r2", "summary": []},
                         {"type": "tool_use", "id": "call_2", "name": "bash",
-                         "input": {"command": "pwd"}, "ts": "2026-04-17T00:00:05"},
+                         "input": {"command": "pwd"}},
                     ],
                 },
                 {
@@ -554,6 +503,72 @@ class IPCUnitTests(unittest.TestCase):
             ("thinking", "plan B"),
             ("tool", "pwd"),
         ])
+
+    def test_history_replay_tail_sweeps_unpaired_thinking(self) -> None:
+        """Persisted thinking blocks beyond the number of reasoning /
+        thinking position markers land at the tail instead of being dropped."""
+        event = {
+            "type": "turn",
+            "ts": "2026-04-17T00:00:10",
+            "thinking_blocks": [
+                {"block_id": "th_1", "text": "plan A", "ts": "2026-04-17T00:00:01"},
+                {"block_id": "th_2", "text": "trailing", "ts": "2026-04-17T00:00:09"},
+            ],
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "reasoning", "id": "r1", "summary": []},
+                        {"type": "tool_use", "id": "call_1", "name": "bash",
+                         "input": {"command": "ls"}},
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": "call_1", "content": "ok"},
+                    ],
+                },
+            ],
+        }
+        display = _context_event_to_display(event, for_history=True)
+        types = [e["type"] for e in display]
+        # reasoning → tool → (tail-sweep) thinking
+        self.assertEqual(types, ["thinking", "tool", "thinking"])
+        self.assertEqual(display[-1]["content"], "trailing")
+
+    def test_history_replay_anthropic_inline_thinking_uses_position(self) -> None:
+        """Anthropic round-trips thinking as inline content blocks AND
+        persists the text — the inline block acts as the position marker."""
+        event = {
+            "type": "turn",
+            "ts": "2026-04-17T00:00:10",
+            "thinking_blocks": [
+                {"block_id": "th_1", "text": "persisted text", "ts": "2026-04-17T00:00:01"},
+            ],
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "thinking", "thinking": "ignored-in-favor-of-persisted"},
+                        {"type": "tool_use", "id": "call_1", "name": "bash",
+                         "input": {"command": "ls"}},
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": "call_1", "content": "ok"},
+                    ],
+                },
+            ],
+        }
+        display = _context_event_to_display(event, for_history=True)
+        thinking_events = [e for e in display if e["type"] == "thinking"]
+        self.assertEqual(len(thinking_events), 1)
+        self.assertEqual(thinking_events[0]["content"], "persisted text")
+        # Ordering: thinking → tool
+        self.assertEqual([e["type"] for e in display], ["thinking", "tool"])
 
     def test_runtime_hook_events_pass_through(self) -> None:
         self.assertEqual(

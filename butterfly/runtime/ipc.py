@@ -151,27 +151,21 @@ def _context_event_to_display(event: dict, *, for_history: bool = False) -> list
             # thinking fires before later ones.
             pending_thinking.sort(key=lambda ev: ev.get("ts") or "")
 
-        def _flush_thinking_before(block_ts: str) -> None:
-            """Emit any persisted thinking whose ts precedes (or equals) block_ts.
+        def _emit_next_thinking() -> None:
+            """Emit the next pending thinking block (position-based pairing).
 
-            Blank-ts thinking blocks are held back so they can't monopolise the
-            head of the stream when the first real content block also lacks a
-            ts — any leftovers are swept at the tail.
+            Persisted thinking_blocks are ordered chronologically by the
+            `on_thinking_end` stream, which is 1:1 with provider reasoning
+            items. Codex / gpt-5 stream each reasoning item as a
+            ``{"type": "reasoning"}`` content block — we surface one
+            persisted thinking per reasoning-block position instead of
+            comparing timestamps. Tool_use blocks don't carry a per-block
+            ts (they fall back to the turn's commit ts, which sorts
+            AFTER every reasoning ts), so a ts-compare approach would
+            flush every thought before the first tool on reload.
             """
-            target = block_ts or ""
-            if not target:
-                return
-            while pending_thinking:
-                pts = pending_thinking[0].get("ts") or ""
-                if not pts or pts <= target:
-                    # Blank-ts thinking could be anywhere; keep it for the
-                    # tail sweep unless the target ts is also present
-                    # (then ordering is undefined either way, prefer head).
-                    if not pts:
-                        break
-                    result.append(pending_thinking.pop(0))
-                else:
-                    break
+            if pending_thinking:
+                result.append(pending_thinking.pop(0))
 
         # ── Tool + text + legacy thinking: iterate in message order ──
         # This preserves interleaved-mode sequencing (think → tool → text →
@@ -193,7 +187,6 @@ def _context_event_to_display(event: dict, *, for_history: bool = False) -> list
             # (no block structure). Treat it as a single text block.
             if isinstance(content, str):
                 if content:
-                    _flush_thinking_before(msg_ts)
                     ev: dict = {"type": "agent", "content": content, "ts": msg_ts}
                     if not for_history:
                         ev["id"] = f"turn:{ts}:{agent_idx}"
@@ -211,11 +204,14 @@ def _context_event_to_display(event: dict, *, for_history: bool = False) -> list
                 btype = block.get("type")
 
                 if btype == "thinking":
-                    # Legacy fallback: only emit from content when the turn
-                    # didn't persist thinking_blocks (would double-render).
-                    # For live SSE, also skip when the thinking_start/
-                    # thinking_done stream already painted the cell.
+                    # Persisted thinking_blocks take precedence when present
+                    # (providers like Anthropic store both an inline block
+                    # AND the persisted entry). Use the inline block as a
+                    # position marker so the persisted text lands at the
+                    # right spot in the transcript.
                     if has_persisted:
+                        if for_history:
+                            _emit_next_thinking()
                         continue
                     if not for_history and has_streaming_thinking:
                         continue
@@ -230,10 +226,19 @@ def _context_event_to_display(event: dict, *, for_history: bool = False) -> list
                         thinking_idx += 1
                         result.append(ev)
 
+                elif btype == "reasoning":
+                    # Codex / gpt-5 position marker for a reasoning item.
+                    # Its human-readable text lives in the persisted
+                    # thinking_blocks list; surface one per marker at
+                    # the correct position so the transcript reads as
+                    # reasoning → tool → reasoning → tool instead of
+                    # all reasoning bunched up before any tool.
+                    if for_history and has_persisted:
+                        _emit_next_thinking()
+
                 elif btype == "tool_use":
                     if for_history or not has_streaming_tools:
                         block_ts = block.get("ts", msg_ts)
-                        _flush_thinking_before(block_ts)
                         use_id = block.get("id")
                         tool_ev: dict = {
                             "type": "tool",
@@ -260,7 +265,6 @@ def _context_event_to_display(event: dict, *, for_history: bool = False) -> list
                 elif btype == "text":
                     text = block.get("text", "")
                     if text:
-                        _flush_thinking_before(msg_ts)
                         ev = {"type": "agent", "content": text, "ts": msg_ts}
                         if not for_history:
                             ev["id"] = f"turn:{ts}:{agent_idx}"
