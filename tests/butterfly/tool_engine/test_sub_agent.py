@@ -57,7 +57,7 @@ def test_compose_initial_message_includes_mode_marker() -> None:
 @pytest.mark.asyncio
 async def test_sub_agent_tool_rejects_call_without_parent_context() -> None:
     tool = SubAgentTool()  # no parent_session_id
-    out = await tool.execute(task="x", mode="explorer")
+    out = await tool.execute(task="x", mode="explorer", name="probe")
     assert out.startswith("Error:")
     assert "parent" in out.lower()
 
@@ -65,7 +65,7 @@ async def test_sub_agent_tool_rejects_call_without_parent_context() -> None:
 @pytest.mark.asyncio
 async def test_sub_agent_tool_rejects_invalid_mode() -> None:
     tool = SubAgentTool(parent_session_id="parent")
-    out = await tool.execute(task="x", mode="overlord")
+    out = await tool.execute(task="x", mode="overlord", name="probe")
     assert out.startswith("Error:")
     assert "mode" in out
 
@@ -78,7 +78,9 @@ def test_runner_validate_requires_task_and_mode() -> None:
         agent_base=Path("/tmp"),
     )
     with pytest.raises(ValueError, match="task is required"):
-        runner.validate({"mode": "explorer"})
+        runner.validate({"mode": "explorer", "name": "probe"})
     with pytest.raises(ValueError, match="mode"):
-        runner.validate({"task": "x"})
-    runner.validate({"task": "x", "mode": "explorer"})  # ok
+        runner.validate({"task": "x", "name": "probe"})
+    with pytest.raises(ValueError, match="name"):
+        runner.validate({"task": "x", "mode": "explorer"})
+    runner.validate({"task": "x", "mode": "explorer", "name": "probe"})  # ok
