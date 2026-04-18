@@ -22,6 +22,16 @@ def is_meta_session(session_id: str) -> bool:
     return session_id.endswith("_meta")
 
 
+def list_agents(agenthub_dir: Path) -> list[str]:
+    """Return names of agents in agenthub/ that ship a config.yaml."""
+    if not agenthub_dir.is_dir():
+        return []
+    return sorted(
+        d.name for d in agenthub_dir.iterdir()
+        if d.is_dir() and not d.name.startswith(".") and (d / "config.yaml").is_file()
+    )
+
+
 def _is_stale_stopped(info: dict) -> bool:
     if info.get("status") != "stopped":
         return False

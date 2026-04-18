@@ -10,7 +10,7 @@ Your session: `sessions/{session_id}/`
 | `core/apps/` | App notifications (`<app>.md` files, injected into system prompt each activation) |
 | `core/skills/` | Session skills (`<name>/SKILL.md`, reload on activation) |
 | `core/tools/` | Session tools (`.json` + `.sh` pairs, reload on activation) |
-| `core/config.yaml` | Runtime config: `model`, `provider`, `tool_providers` |
+| `core/config.yaml` | Runtime config: `model`, `provider`, thinking |
 | `core/system.md` | Your system prompt (editable, effective next activation) |
 | `core/task.md` | Your task prompt (editable, effective next activation) |
 | `docs/` | User files — read-only |

@@ -5,7 +5,7 @@ write
 edit
 glob
 grep
-web_search
+web_search_brave
 web_fetch
 skill
 memory_recall

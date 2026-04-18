@@ -58,10 +58,12 @@ def test_context_event_to_display_expands_turn():
         ],
     }
 
-    # for_history=True: always emit tools and agent text
+    # for_history=True: always emit tools and agent text. v2.0.19 added an
+    # `id` field propagated from the tool_use block (needed so history replay
+    # can pair tool_use with its matching tool_result).
     events = _context_event_to_display(turn, for_history=True)
     assert events == [
-        {"type": "tool", "name": "bash", "input": {"cmd": "ls"}, "ts": "2026-03-11T12:00:00"},
+        {"type": "tool", "name": "bash", "input": {"cmd": "ls"}, "ts": "2026-03-11T12:00:00", "id": "1"},
         {
             "type": "agent",
             "content": "# Title\n\nbody",
@@ -375,6 +377,68 @@ async def test_session_chat_marks_turn_with_has_streaming_thinking(tmp_path):
     context_events = read_jsonl(session.system_dir / "context.jsonl")
     turn = next(e for e in context_events if e["type"] == "turn")
     assert turn.get("has_streaming_thinking") is True
+
+
+# ── v2.0.19 tool_done carries truncated result ───────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_tool_done_event_carries_small_result_without_truncation_flag(tmp_path):
+    """v2.0.19: tool_done ships the tool's result text (capped at 8 KB) so
+    the UI's inline <details> body can render it live. Results under the
+    cap must NOT carry a result_truncated flag."""
+    provider = MockProvider([
+        ("planning", [ToolCall(id="tc-1", name="echo_tool", input={"text": "ping"})], TokenUsage()),
+        ("done", [], TokenUsage()),
+    ])
+
+    @tool(description="Echo a value")
+    async def echo_tool(text: str) -> str:
+        return f"echo:{text}"
+
+    agent = Agent(provider=provider, tools=[echo_tool])
+    session = make_session(tmp_path, agent)
+    session._load_session_capabilities = lambda: None
+    session._ipc = FileIPC(session.system_dir)
+
+    await session.chat("hi")
+
+    runtime_events = read_jsonl(session.system_dir / "events.jsonl")
+    tool_done = next(e for e in runtime_events if e["type"] == "tool_done")
+    assert tool_done["result"] == "echo:ping"
+    assert tool_done["result_len"] == len("echo:ping")
+    # Flag is omitted entirely for under-cap results.
+    assert "result_truncated" not in tool_done
+
+
+@pytest.mark.asyncio
+async def test_tool_done_event_caps_huge_result_and_sets_truncation_flag(tmp_path):
+    """Results over the 8 KB cap are trimmed; result_len stays full so the
+    UI can surface the original size, and result_truncated=true tells the
+    frontend to append a "…[truncated]" hint."""
+    huge = "A" * 20_000
+    provider = MockProvider([
+        ("planning", [ToolCall(id="tc-1", name="loud_tool", input={})], TokenUsage()),
+        ("done", [], TokenUsage()),
+    ])
+
+    @tool(description="Emit a huge blob")
+    async def loud_tool() -> str:
+        return huge
+
+    agent = Agent(provider=provider, tools=[loud_tool])
+    session = make_session(tmp_path, agent)
+    session._load_session_capabilities = lambda: None
+    session._ipc = FileIPC(session.system_dir)
+
+    await session.chat("hi")
+
+    runtime_events = read_jsonl(session.system_dir / "events.jsonl")
+    tool_done = next(e for e in runtime_events if e["type"] == "tool_done")
+    assert tool_done["result_len"] == 20_000
+    assert tool_done["result_truncated"] is True
+    assert len(tool_done["result"]) == 8000
+    assert tool_done["result"] == "A" * 8000
 
 
 def test_context_event_to_display_suppresses_inline_thinking_for_live_when_streamed(tmp_path):

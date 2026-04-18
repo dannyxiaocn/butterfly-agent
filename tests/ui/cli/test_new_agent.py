@@ -12,6 +12,9 @@ def test_create_agent_with_missing_source_fails_fast(tmp_path):
 def test_create_agent_with_init_from_copies_and_updates_name(tmp_path):
     src_dir = tmp_path / "agent"
     src_dir.mkdir(parents=True)
+    # Source may still have legacy `name:` (pre-v2.0.19 agenthub entries
+    # written before the rename); create_agent must drop it and emit the
+    # v2.0.19 `agent:` key so the resulting scaffold is single-schema.
     (src_dir / "config.yaml").write_text("name: agent\nmodel: gpt-4\n", encoding="utf-8")
     (src_dir / "prompts").mkdir()
     (src_dir / "prompts" / "system.md").write_text("sys prompt", encoding="utf-8")
@@ -20,7 +23,8 @@ def test_create_agent_with_init_from_copies_and_updates_name(tmp_path):
 
     assert created == tmp_path / "child"
     manifest = yaml.safe_load((created / "config.yaml").read_text())
-    assert manifest["name"] == "child"
+    assert manifest["agent"] == "child"
+    assert "name" not in manifest
     assert manifest["init_from"] == "agent"
     assert "extends" not in manifest
     # Prompt file should be copied

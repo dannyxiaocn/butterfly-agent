@@ -1,7 +1,4 @@
-"""Web search using the Tavily Search API.
-
-Requires TAVILY_API_KEY environment variable.
-"""
+"""Web search executor backed by the Tavily Search API."""
 from __future__ import annotations
 
 import asyncio
@@ -9,56 +6,13 @@ import json
 import os
 import urllib.error
 import urllib.request
-from typing import Optional
+from typing import Any
 
 
-def _unsupported_filters(
-    *,
-    country: Optional[str],
-    language: Optional[str],
-    freshness: Optional[str],
-    date_after: Optional[str],
-    date_before: Optional[str],
-) -> list[str]:
-    unsupported: list[str] = []
-    if country:
-        unsupported.append("country")
-    if language:
-        unsupported.append("language")
-    if freshness:
-        unsupported.append("freshness")
-    if date_after:
-        unsupported.append("date_after")
-    if date_before:
-        unsupported.append("date_before")
-    return unsupported
-
-
-def _tavily_search_sync(
-    query: str,
-    count: int,
-    country: Optional[str],
-    language: Optional[str],
-    freshness: Optional[str],
-    date_after: Optional[str],
-    date_before: Optional[str],
-) -> str:
+def _tavily_search_sync(query: str, count: int) -> str:
     api_key = os.environ.get("TAVILY_API_KEY", "").strip()
     if not api_key:
         return "Error: TAVILY_API_KEY environment variable is not set."
-    unsupported = _unsupported_filters(
-        country=country,
-        language=language,
-        freshness=freshness,
-        date_after=date_after,
-        date_before=date_before,
-    )
-    if unsupported:
-        joined = ", ".join(unsupported)
-        return (
-            "Error: Tavily web_search currently supports only 'query' and 'count'. "
-            f"Unsupported filters: {joined}."
-        )
 
     payload: dict = {
         "api_key": api_key,
@@ -110,20 +64,25 @@ def _tavily_search_sync(
     return "\n".join(lines).rstrip()
 
 
-async def _tavily_search(
-    query: str,
-    count: int | float = 5,
-    country: Optional[str] = None,
-    language: Optional[str] = None,
-    freshness: Optional[str] = None,
-    date_after: Optional[str] = None,
-    date_before: Optional[str] = None,
-) -> str:
-    count = int(count)
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(
-        None,
-        _tavily_search_sync,
-        query, count, country, language, freshness, date_after, date_before,
-    )
+_SUPPORTED_KEYS = frozenset({"query", "count"})
 
+
+class WebSearchTavilyExecutor:
+    async def execute(
+        self,
+        query: str,
+        count: int | float = 5,
+        **extra: Any,
+    ) -> str:
+        # Tavily only accepts query + count. Reject unknown kwargs loudly so
+        # callers that forgot we don't support country/language/freshness get
+        # an explicit error instead of silent filter-drop.
+        unknown = sorted(k for k in extra if k not in _SUPPORTED_KEYS)
+        if unknown:
+            return (
+                "Error: web_search_tavily only supports 'query' and 'count'. "
+                f"Unsupported arguments: {', '.join(unknown)}."
+            )
+        count_int = int(count)
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, _tavily_search_sync, query, count_int)

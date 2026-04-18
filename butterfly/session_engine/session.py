@@ -347,23 +347,6 @@ class Session:
             print(f"[session] Warning: failed to load tools: {e}")
             tools = []
 
-        # Apply tool_providers overrides (e.g. web_search → brave/tavily)
-        tool_providers = cfg.get("tool_providers") or {}
-        if tool_providers:
-            from butterfly.tool_engine.registry import resolve_tool_impl
-            for i, t in enumerate(tools):
-                if t.name in tool_providers:
-                    tool_provider_key = tool_providers[t.name]
-                    impl = resolve_tool_impl(t.name, tool_provider_key)
-                    if impl:
-                        tools[i] = Tool(
-                            name=t.name,
-                            description=t.description,
-                            func=impl,
-                            schema=t.schema,
-                            backgroundable=t.backgroundable,
-                        )
-
         self._agent.tools = tools
 
     # ── History persistence ────────────────────────────────────────
@@ -1339,11 +1322,26 @@ class Session:
         import time as _time
 
         def on_tool_done(name: str, input: dict, result: str, tool_use_id: str) -> None:
+            # Cap the result text we ship through events.jsonl so huge tool
+            # outputs (bash screenfuls, file reads) don't bloat the SSE
+            # stream. Full output is still available via the Panel tab.
+            _MAX = 8000
+            result_str = result if isinstance(result, str) else str(result)
+            truncated = len(result_str) > _MAX
+            payload = {
+                "type": "tool_done",
+                "name": name,
+                "result_len": len(result_str),
+                "result": result_str[:_MAX],
+            }
+            if truncated:
+                payload["result_truncated"] = True
+            # v2.0.19 (parallel): per-call wall-clock for the HUD phase timer.
+            # Paired with ``_tool_started[tool_use_id]`` from the on_tool_call
+            # side so concurrent gather()'d calls don't mix up durations.
             started = self._tool_started.pop(tool_use_id, None)
-            duration_ms = int((_time.monotonic() - started) * 1000) if started is not None else None
-            payload = {"type": "tool_done", "name": name, "result_len": len(result)}
-            if duration_ms is not None:
-                payload["duration_ms"] = duration_ms
+            if started is not None:
+                payload["duration_ms"] = int((_time.monotonic() - started) * 1000)
             tid = _parse_background_tid(result)
             if tid is not None:
                 payload["is_background"] = True

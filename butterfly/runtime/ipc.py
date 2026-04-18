@@ -75,42 +75,99 @@ def _context_event_to_display(event: dict, *, for_history: bool = False) -> list
 
     if etype == "turn":
         result: list[dict] = []
-        persisted = event.get("thinking_blocks") or []
-        has_persisted = isinstance(persisted, list) and bool(persisted)
+        persisted_raw = event.get("thinking_blocks") or []
+        persisted = [b for b in persisted_raw if isinstance(b, dict) and b.get("text")] \
+            if isinstance(persisted_raw, list) else []
+        has_persisted = bool(persisted)
         has_streaming_tools = event.get("has_streaming_tools", False)
         has_streaming_thinking = event.get("has_streaming_thinking", False)
         usage = event.get("usage")
+        messages = event.get("messages", []) or []
+
+        # ── tool_use → tool_result pairing for history replay ─────────
+        # events.jsonl isn't replayed by get_history, so tool_done (which
+        # carries the live result payload) is unavailable on reload. Scan
+        # all non-assistant messages for tool_result blocks and build a
+        # map keyed by tool_use_id so each tool cell can render its
+        # returned output.
+        _MAX_RESULT = 8000
+        tool_results: dict[str, dict] = {}
+        if for_history:
+            for msg in messages:
+                content = msg.get("content")
+                if not isinstance(content, list):
+                    continue
+                for block in content:
+                    if not isinstance(block, dict):
+                        continue
+                    if block.get("type") != "tool_result":
+                        continue
+                    use_id = block.get("tool_use_id")
+                    if not use_id:
+                        continue
+                    raw = block.get("content")
+                    if isinstance(raw, list):
+                        parts = [
+                            b.get("text", "") if isinstance(b, dict) else ""
+                            for b in raw
+                        ]
+                        text = "".join(parts)
+                    elif isinstance(raw, str):
+                        text = raw
+                    else:
+                        text = ""
+                    truncated = len(text) > _MAX_RESULT
+                    tool_results[use_id] = {
+                        "result": text[:_MAX_RESULT],
+                        "result_truncated": truncated,
+                        "is_error": bool(block.get("is_error")),
+                    }
 
         # ── Persisted thinking_blocks (v2.0.17+) ──────────────────────
         # Server-captured list of ``{block_id, text, duration_ms, ts}`` dicts
-        # from the session's on_thinking_end callback. Emitted first because
-        # we don't know their position within message.content (providers like
-        # codex don't round-trip thinking through content at all). Skipped on
-        # live SSE — the thinking_start/thinking_done events on events.jsonl
-        # already painted the cell.
+        # from the session's on_thinking_end callback. Interleaved with the
+        # tool/text blocks below by timestamp so the history-replay order
+        # matches live playback (think → tool → think → tool → text). Pre-
+        # v2.0.19 we dumped them all up front, which grouped every "Thought"
+        # before every tool cell on reload. Skipped on live SSE — the
+        # thinking_start/thinking_done events on events.jsonl already
+        # painted those cells.
+        pending_thinking: list[dict] = []
         if has_persisted and for_history:
             for i, block in enumerate(persisted):
-                if not isinstance(block, dict):
-                    continue
-                text = block.get("text", "")
-                if not text:
-                    continue
+                block_ts = block.get("ts") or ts
                 thinking_ev: dict = {
                     "type": "thinking",
-                    "content": text,
-                    "ts": block.get("ts") or ts,
+                    "content": block.get("text", ""),
+                    "ts": block_ts,
                     "id": f"thinking:{ts}:persisted:{i}",
                 }
                 if block.get("duration_ms") is not None:
                     thinking_ev["duration_ms"] = block["duration_ms"]
                 if block.get("block_id"):
                     thinking_ev["block_id"] = block["block_id"]
-                # v2.0.19: reasoning_tokens persisted by the attributor so
-                # history replay can restore the "Thought Xs for N tokens"
+                # v2.0.19 (parallel): reasoning_tokens stamped by the attributor
+                # so history replay can restore the "Thought Xs for N tokens"
                 # label (codex/kimi only; Anthropic never sets this).
                 if block.get("reasoning_tokens"):
                     thinking_ev["reasoning_tokens"] = block["reasoning_tokens"]
-                result.append(thinking_ev)
+                pending_thinking.append(thinking_ev)
+
+        def _emit_next_thinking() -> None:
+            """Emit the next pending thinking block (position-based pairing).
+
+            Persisted thinking_blocks are ordered chronologically by the
+            `on_thinking_end` stream, which is 1:1 with provider reasoning
+            items. Codex / gpt-5 stream each reasoning item as a
+            ``{"type": "reasoning"}`` content block — we surface one
+            persisted thinking per reasoning-block position instead of
+            comparing timestamps. Tool_use blocks don't carry a per-block
+            ts (they fall back to the turn's commit ts, which sorts
+            AFTER every reasoning ts), so a ts-compare approach would
+            flush every thought before the first tool on reload.
+            """
+            if pending_thinking:
+                result.append(pending_thinking.pop(0))
 
         # ── Tool + text + legacy thinking: iterate in message order ──
         # This preserves interleaved-mode sequencing (think → tool → text →
@@ -122,7 +179,7 @@ def _context_event_to_display(event: dict, *, for_history: bool = False) -> list
         thinking_idx = 0
         agent_idx = 0
 
-        for msg in event.get("messages", []):
+        for msg in messages:
             if msg.get("role") != "assistant":
                 continue
             msg_ts = msg.get("ts", ts)
@@ -149,11 +206,14 @@ def _context_event_to_display(event: dict, *, for_history: bool = False) -> list
                 btype = block.get("type")
 
                 if btype == "thinking":
-                    # Legacy fallback: only emit from content when the turn
-                    # didn't persist thinking_blocks (would double-render).
-                    # For live SSE, also skip when the thinking_start/
-                    # thinking_done stream already painted the cell.
+                    # Persisted thinking_blocks take precedence when present
+                    # (providers like Anthropic store both an inline block
+                    # AND the persisted entry). Use the inline block as a
+                    # position marker so the persisted text lands at the
+                    # right spot in the transcript.
                     if has_persisted:
+                        if for_history:
+                            _emit_next_thinking()
                         continue
                     if not for_history and has_streaming_thinking:
                         continue
@@ -168,14 +228,41 @@ def _context_event_to_display(event: dict, *, for_history: bool = False) -> list
                         thinking_idx += 1
                         result.append(ev)
 
+                elif btype == "reasoning":
+                    # Codex / gpt-5 position marker for a reasoning item.
+                    # Its human-readable text lives in the persisted
+                    # thinking_blocks list; surface one per marker at
+                    # the correct position so the transcript reads as
+                    # reasoning → tool → reasoning → tool instead of
+                    # all reasoning bunched up before any tool.
+                    if for_history and has_persisted:
+                        _emit_next_thinking()
+
                 elif btype == "tool_use":
                     if for_history or not has_streaming_tools:
-                        result.append({
+                        block_ts = block.get("ts", msg_ts)
+                        use_id = block.get("id")
+                        tool_ev: dict = {
                             "type": "tool",
                             "name": block["name"],
                             "input": block.get("input", {}),
-                            "ts": block.get("ts", msg_ts),
-                        })
+                            "ts": block_ts,
+                        }
+                        if use_id:
+                            tool_ev["id"] = use_id
+                        # Pair with tool_result from a later message so the
+                        # reloaded cell shows the returned output instead of
+                        # "(pending)". Live sessions still overlay the live
+                        # tool_done result on top of this baseline.
+                        if for_history and use_id and use_id in tool_results:
+                            tr = tool_results[use_id]
+                            tool_ev["result"] = tr["result"]
+                            tool_ev["result_len"] = len(tr["result"])
+                            if tr["result_truncated"]:
+                                tool_ev["result_truncated"] = True
+                            if tr["is_error"]:
+                                tool_ev["is_error"] = True
+                        result.append(tool_ev)
 
                 elif btype == "text":
                     text = block.get("text", "")
@@ -186,6 +273,12 @@ def _context_event_to_display(event: dict, *, for_history: bool = False) -> list
                         agent_idx += 1
                         agent_events.append(ev)
                         result.append(ev)
+
+        # Any persisted thinking whose ts is later than every content block
+        # (or whose ts is blank and thus never flushed) lands at the tail.
+        if pending_thinking:
+            result.extend(pending_thinking)
+            pending_thinking.clear()
 
         # ── Usage attaches to LAST agent event ────────────────────────
         # Turn usage is cumulative for the whole run; we surface it on the

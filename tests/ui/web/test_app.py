@@ -276,103 +276,78 @@ class WebUnitTests(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         payload = resp.json()
         self.assertIn("providers", payload)
-        self.assertIn("thinking_efforts", payload)
         names = {p["provider"] for p in payload["providers"]}
-        # The 4 CLI-supported providers (plus openai-responses) must all be listed.
         self.assertIn("anthropic", names)
         self.assertIn("openai", names)
         self.assertIn("kimi-coding-plan", names)
         self.assertIn("codex-oauth", names)
         for p in payload["providers"]:
-            self.assertIn("models", p)
-            self.assertIsInstance(p["models"], list)
-            self.assertTrue(p["models"], f"{p['provider']} has no models")
-            self.assertIn(p["default_model"], p["models"])
+            self.assertIn("default_model", p)
+            self.assertTrue(p["default_model"], f"{p['provider']} has no default_model")
 
-    def test_get_config_yaml_returns_raw_yaml_text(self) -> None:
+    def test_get_agents_lists_agenthub_entries(self) -> None:
         with TemporaryDirectory() as td:
-            root = _make_session(Path(td))
-            # Seed a config.yaml with a recognisable marker.
-            cfg_path = root / "sessions" / "test-session" / "core" / "config.yaml"
-            cfg_path.write_text("name: demo\nmodel: gpt-5.4\nprovider: codex-oauth\n", encoding="utf-8")
-            app = create_app(root / "sessions", root / "_sessions")
+            root = Path(td)
+            (root / "sessions").mkdir()
+            (root / "_sessions").mkdir()
+            agenthub = root / "agenthub"
+            for name in ("agent", "custom"):
+                (agenthub / name).mkdir(parents=True)
+                (agenthub / name / "config.yaml").write_text("agent: " + name, encoding="utf-8")
+            # A dir without config.yaml must be ignored.
+            (agenthub / "incomplete").mkdir()
+            app = create_app(root / "sessions", root / "_sessions", agenthub_dir=agenthub)
             with TestClient(app) as client:
-                resp = client.get("/api/sessions/test-session/config/yaml")
-
+                resp = client.get("/api/agents")
         self.assertEqual(resp.status_code, 200)
-        text = resp.json()["yaml"]
-        self.assertIn("name: demo", text)
-        self.assertIn("model: gpt-5.4", text)
+        self.assertEqual(resp.json()["agents"], ["agent", "custom"])
 
-    def test_put_config_yaml_round_trips(self) -> None:
+    def test_asset_md_round_trip(self) -> None:
         with TemporaryDirectory() as td:
             root = _make_session(Path(td))
             app = create_app(root / "sessions", root / "_sessions")
             with TestClient(app) as client:
                 put_resp = client.put(
-                    "/api/sessions/test-session/config/yaml",
-                    json={"yaml": "name: x\nmodel: claude-sonnet-4-6\nprovider: anthropic\n"},
+                    "/api/sessions/test-session/assets/tools",
+                    json={"text": "bash\nweb_search_brave\n"},
                 )
                 self.assertEqual(put_resp.status_code, 200)
-                saved = put_resp.json()["params"]
-                self.assertEqual(saved["model"], "claude-sonnet-4-6")
-                self.assertEqual(saved["provider"], "anthropic")
-                # YAML round-trip: subsequent GET surfaces the written fields.
-                get_resp = client.get("/api/sessions/test-session/config/yaml")
-                self.assertEqual(get_resp.status_code, 200)
-                self.assertIn("claude-sonnet-4-6", get_resp.json()["yaml"])
+                get_resp = client.get("/api/sessions/test-session/assets/tools")
+                self.assertEqual(get_resp.json()["text"], "bash\nweb_search_brave\n")
+                # Unknown asset name is rejected.
+                bad = client.get("/api/sessions/test-session/assets/passwords")
+                self.assertEqual(bad.status_code, 400)
 
-    def test_put_config_yaml_rejects_malformed_yaml(self) -> None:
-        with TemporaryDirectory() as td:
-            root = _make_session(Path(td))
-            app = create_app(root / "sessions", root / "_sessions")
-            with TestClient(app) as client:
-                resp = client.put(
-                    "/api/sessions/test-session/config/yaml",
-                    json={"yaml": "name: [unterminated"},
-                )
-            self.assertEqual(resp.status_code, 400)
-
-    def test_put_config_yaml_rejects_non_mapping(self) -> None:
-        with TemporaryDirectory() as td:
-            root = _make_session(Path(td))
-            app = create_app(root / "sessions", root / "_sessions")
-            with TestClient(app) as client:
-                resp = client.put(
-                    "/api/sessions/test-session/config/yaml",
-                    json={"yaml": "- just\n- a\n- list\n"},
-                )
-            self.assertEqual(resp.status_code, 400)
-
-    def test_put_config_yaml_drops_unknown_keys(self) -> None:
-        """v2.0.9 review fix: YAML PUT must whitelist-filter against DEFAULT_CONFIG.
-
-        Previously the body was forwarded verbatim into write_config, so a
-        client could persist arbitrary keys that then round-tripped via
-        read_config's merge-over-defaults path.
-        """
+    def test_prompt_md_round_trip(self) -> None:
         with TemporaryDirectory() as td:
             root = _make_session(Path(td))
             app = create_app(root / "sessions", root / "_sessions")
             with TestClient(app) as client:
                 put_resp = client.put(
-                    "/api/sessions/test-session/config/yaml",
-                    json={
-                        "yaml": (
-                            "model: claude-sonnet-4-6\n"
-                            "provider: anthropic\n"
-                            "malicious_key: injected\n"
-                            "__proto__: nope\n"
-                        )
-                    },
+                    "/api/sessions/test-session/prompts/system",
+                    json={"text": "You are Butterfly."},
                 )
                 self.assertEqual(put_resp.status_code, 200)
-                saved = put_resp.json()["params"]
-                self.assertNotIn("malicious_key", saved)
-                self.assertNotIn("__proto__", saved)
-                # Subsequent GET surfaces the same filtered view.
-                get_resp = client.get("/api/sessions/test-session/config/yaml")
-                self.assertNotIn("malicious_key", get_resp.json()["yaml"])
+                get_resp = client.get("/api/sessions/test-session/prompts/system")
+                self.assertEqual(get_resp.json()["text"], "You are Butterfly.")
+                # Only system/task/env are allowed.
+                bad = client.get("/api/sessions/test-session/prompts/hidden")
+                self.assertEqual(bad.status_code, 400)
+
+    def test_legacy_name_field_migrates_to_agent(self) -> None:
+        """Sessions saved before v2.0.19 carry `name: foo`; read_config must
+        surface it as `agent` so the whitelist doesn't silently drop it."""
+        with TemporaryDirectory() as td:
+            root = _make_session(Path(td))
+            cfg = root / "sessions" / "test-session" / "core" / "config.yaml"
+            cfg.write_text("name: legacy_agent\nmodel: claude-sonnet-4-6\n", encoding="utf-8")
+            app = create_app(root / "sessions", root / "_sessions")
+            with TestClient(app) as client:
+                resp = client.get("/api/sessions/test-session/config")
+                self.assertEqual(resp.status_code, 200)
+                params = resp.json()["params"]
+                self.assertEqual(params["agent"], "legacy_agent")
+                self.assertNotIn("name", params)
 
     def test_put_config_json_drops_unknown_keys(self) -> None:
         """Same whitelist applies to the legacy JSON /config endpoint."""
@@ -387,53 +362,131 @@ class WebUnitTests(unittest.TestCase):
                 self.assertEqual(resp.status_code, 200)
                 self.assertNotIn("bogus_field", resp.json()["params"])
 
-    def test_json_and_yaml_put_coexist_without_stepping_on_each_other(self) -> None:
-        """Alternating JSON and YAML PUTs must each preserve the other's writes."""
-        with TemporaryDirectory() as td:
-            root = _make_session(Path(td))
-            app = create_app(root / "sessions", root / "_sessions")
-            with TestClient(app) as client:
-                r1 = client.put(
-                    "/api/sessions/test-session/config",
-                    json={"params": {"provider": "anthropic", "model": "claude-sonnet-4-6"}},
-                )
-                self.assertEqual(r1.status_code, 200)
-                r2 = client.put(
-                    "/api/sessions/test-session/config/yaml",
-                    json={"yaml": "name: renamed\n"},
-                )
-                self.assertEqual(r2.status_code, 200)
-                saved = r2.json()["params"]
-                # Write 2 (yaml) updated 'name' but must not wipe Write 1's model.
-                self.assertEqual(saved["name"], "renamed")
-                self.assertEqual(saved["model"], "claude-sonnet-4-6")
-                self.assertEqual(saved["provider"], "anthropic")
+    # ── v2.0.19 per-file editor endpoints ────────────────────────────────────
 
-    def test_models_catalog_default_model_is_in_supported_list(self) -> None:
-        """Catalog invariant: every provider's default_model must appear in its
-        models list AND its supported_efforts must be consistent with the
-        thinking_style (effort-style providers have a non-empty list;
-        budget/none-style providers have an empty list).
-        """
+    def test_list_agents_endpoint_surfaces_agenthub_entries(self) -> None:
         with TemporaryDirectory() as td:
             root = Path(td)
             app = create_app(root / "sessions", root / "_sessions")
             with TestClient(app) as client:
-                resp = client.get("/api/models")
-            payload = resp.json()
-            for p in payload["providers"]:
-                self.assertIn(p["default_model"], p["models"], p["provider"])
-                style = p.get("thinking_style")
-                supported = p.get("supported_efforts", [])
-                if style == "effort":
-                    self.assertTrue(supported, f"{p['provider']} effort-style but empty supported_efforts")
-                else:
-                    self.assertEqual(supported, [], f"{p['provider']} non-effort style must have empty supported_efforts")
-            # xhigh is codex-only.
-            codex = next(p for p in payload["providers"] if p["provider"] == "codex-oauth")
-            responses = next(p for p in payload["providers"] if p["provider"] == "openai-responses")
-            self.assertIn("xhigh", codex["supported_efforts"])
-            self.assertNotIn("xhigh", responses["supported_efforts"])
+                resp = client.get("/api/agents")
+        self.assertEqual(resp.status_code, 200)
+        payload = resp.json()
+        self.assertIn("agents", payload)
+        self.assertIn("agent", payload["agents"])
+        self.assertIn("butterfly_dev", payload["agents"])
+
+    def test_get_and_put_asset_md_round_trip(self) -> None:
+        with TemporaryDirectory() as td:
+            root = _make_session(Path(td))
+            core = root / "sessions" / "test-session" / "core"
+            (core / "tools.md").write_text("bash\nread\n", encoding="utf-8")
+            app = create_app(root / "sessions", root / "_sessions")
+            with TestClient(app) as client:
+                get_resp = client.get("/api/sessions/test-session/assets/tools")
+                self.assertEqual(get_resp.status_code, 200)
+                self.assertEqual(get_resp.json()["text"], "bash\nread\n")
+
+                put_resp = client.put(
+                    "/api/sessions/test-session/assets/tools",
+                    json={"text": "bash\nread\nglob\n"},
+                )
+                self.assertEqual(put_resp.status_code, 200)
+                self.assertEqual(put_resp.json()["text"], "bash\nread\nglob\n")
+
+                # Round-trip on disk
+                self.assertEqual((core / "tools.md").read_text(encoding="utf-8"), "bash\nread\nglob\n")
+
+    def test_put_asset_md_creates_file_if_missing(self) -> None:
+        """Session directories are pre-created but tools.md / skills.md may not
+        exist until the user clicks Save. The endpoint should create the
+        file rather than 404'ing the write path."""
+        with TemporaryDirectory() as td:
+            root = _make_session(Path(td))
+            app = create_app(root / "sessions", root / "_sessions")
+            with TestClient(app) as client:
+                # Empty GET on missing file returns empty string, not 404.
+                get_resp = client.get("/api/sessions/test-session/assets/skills")
+                self.assertEqual(get_resp.status_code, 200)
+                self.assertEqual(get_resp.json()["text"], "")
+
+                put_resp = client.put(
+                    "/api/sessions/test-session/assets/skills",
+                    json={"text": "brave\n"},
+                )
+                self.assertEqual(put_resp.status_code, 200)
+                skills_path = root / "sessions" / "test-session" / "core" / "skills.md"
+                self.assertTrue(skills_path.exists())
+                self.assertEqual(skills_path.read_text(encoding="utf-8"), "brave\n")
+
+    def test_asset_md_rejects_unknown_asset_name(self) -> None:
+        with TemporaryDirectory() as td:
+            root = _make_session(Path(td))
+            app = create_app(root / "sessions", root / "_sessions")
+            with TestClient(app) as client:
+                get_resp = client.get("/api/sessions/test-session/assets/evil")
+                self.assertEqual(get_resp.status_code, 400)
+                put_resp = client.put(
+                    "/api/sessions/test-session/assets/evil",
+                    json={"text": "x"},
+                )
+                self.assertEqual(put_resp.status_code, 400)
+
+    def test_asset_md_put_requires_text_string(self) -> None:
+        with TemporaryDirectory() as td:
+            root = _make_session(Path(td))
+            app = create_app(root / "sessions", root / "_sessions")
+            with TestClient(app) as client:
+                # Missing body field
+                resp1 = client.put("/api/sessions/test-session/assets/tools", json={})
+                # Non-string text
+                resp2 = client.put("/api/sessions/test-session/assets/tools", json={"text": 42})
+            self.assertEqual(resp1.status_code, 400)
+            self.assertEqual(resp2.status_code, 400)
+
+    def test_asset_md_on_missing_session_returns_404(self) -> None:
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "sessions").mkdir()
+            (root / "_sessions").mkdir()
+            app = create_app(root / "sessions", root / "_sessions")
+            with TestClient(app) as client:
+                resp = client.get("/api/sessions/nonexistent/assets/tools")
+            self.assertEqual(resp.status_code, 404)
+
+    def test_get_and_put_prompt_md_round_trip(self) -> None:
+        """prompts/{system,task,env} read/write against core/<name>.md (flat)."""
+        with TemporaryDirectory() as td:
+            root = _make_session(Path(td))
+            core = root / "sessions" / "test-session" / "core"
+            (core / "system.md").write_text("You are a helpful agent.\n", encoding="utf-8")
+            app = create_app(root / "sessions", root / "_sessions")
+            with TestClient(app) as client:
+                get_resp = client.get("/api/sessions/test-session/prompts/system")
+                self.assertEqual(get_resp.status_code, 200)
+                self.assertEqual(get_resp.json()["text"], "You are a helpful agent.\n")
+
+                put_resp = client.put(
+                    "/api/sessions/test-session/prompts/task",
+                    json={"text": "Your task is to test.\n"},
+                )
+                self.assertEqual(put_resp.status_code, 200)
+                # v2.0.19: sessions store prompts flat under core/<name>.md,
+                # not core/prompts/<name>.md as agenthub/ does.
+                self.assertEqual((core / "task.md").read_text(encoding="utf-8"), "Your task is to test.\n")
+
+    def test_prompt_md_rejects_unknown_prompt_name(self) -> None:
+        with TemporaryDirectory() as td:
+            root = _make_session(Path(td))
+            app = create_app(root / "sessions", root / "_sessions")
+            with TestClient(app) as client:
+                get_resp = client.get("/api/sessions/test-session/prompts/evil")
+                self.assertEqual(get_resp.status_code, 400)
+                put_resp = client.put(
+                    "/api/sessions/test-session/prompts/evil",
+                    json={"text": "x"},
+                )
+                self.assertEqual(put_resp.status_code, 400)
 
     def test_create_session_same_second_does_not_silently_reuse_existing_id(self) -> None:
         fixed = datetime(2026, 4, 10, 23, 30, 0)

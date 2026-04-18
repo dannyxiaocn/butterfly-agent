@@ -22,7 +22,7 @@ from pathlib import Path
 # ── YAML template ─────────────────────────────────────────────────────────────
 
 _CONFIG_YAML_EMPTY = """\
-name: {name}
+agent: {name}
 description: ""
 model: claude-sonnet-4-6
 provider: anthropic
@@ -30,8 +30,6 @@ max_iterations: 1000
 thinking: false
 thinking_budget: 8000
 thinking_effort: high
-tool_providers:
-  web_search: brave
 prompts:
   system: prompts/system.md
   task: prompts/task.md
@@ -125,7 +123,11 @@ def create_agent(name: str, base_dir: Path, init_from: str | None) -> Path:
 
         import yaml as _yaml
         manifest = _yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
-        manifest["name"] = name
+        # Drop the pre-v2.0.19 `name` key too — the schema uses `agent` now
+        # and read_config migrates on load, but emitting the legacy key here
+        # would leave mixed-schema files in agenthub/.
+        manifest.pop("name", None)
+        manifest["agent"] = name
         manifest["init_from"] = init_from
         for field in ("extends", "link", "own", "append", "version", "meta_session"):
             manifest.pop(field, None)
@@ -147,6 +149,6 @@ def create_agent(name: str, base_dir: Path, init_from: str | None) -> Path:
         (agent_dir / "prompts" / "system.md").write_text("", encoding="utf-8")
         (agent_dir / "prompts" / "task.md").write_text("", encoding="utf-8")
         (agent_dir / "prompts" / "env.md").write_text("", encoding="utf-8")
-        (agent_dir / "tools.md").write_text("bash\nweb_search\nskill\nmemory_recall\nmemory_update\n", encoding="utf-8")
+        (agent_dir / "tools.md").write_text("bash\nweb_search_brave\nskill\nmemory_recall\nmemory_update\n", encoding="utf-8")
 
     return agent_dir

@@ -1,30 +1,53 @@
 # Butterfly model catalog — authoritative source of per-model parameters.
 #
-# This file is hand-edited. butterfly/llm_engine/model_catalog.py loads it at
-# import time and exposes ModelSpec lookups. butterfly/service/models_service.py
-# re-exports the per-model max_context_tokens to the web UI via /api/models so
-# the frontend context-% bar can scale by each model's real window.
+# Hand-edited. ``butterfly/llm_engine/model_catalog.py`` reads this at import
+# time and exposes ModelSpec lookups. ``butterfly/service/models_service.py``
+# re-exports each provider's model list to the web UI via /api/models so the
+# frontend config editor can render a per-provider dropdown and the HUD can
+# size the context-% bar by the selected model's real window.
 #
-# Fields per model:
-#   provider               : registry key in butterfly/llm_engine/registry.py
-#   max_context_tokens     : total context window, used as denominator for HUD ctx %
-#   exposes_reasoning_tokens:
-#       true  — provider populates usage.reasoning_tokens (codex Responses API,
-#               Kimi OpenAI surface via completion_tokens_details)
-#       false — no per-call reasoning token accounting (Anthropic rolls thinking
-#               tokens into output_tokens; plain OpenAI Chat Completions)
+# Structure:
+#   providers.<provider_key>.models:
+#     - name: "<model id>"                # string the provider accepts
+#       max_context_tokens: int           # total context window, denominator for HUD ctx %
+#       exposes_reasoning_tokens: bool    # true when usage.reasoning_tokens is populated
+#       default: true                     # exactly one entry per provider is the default
 #
-# Only the two production models are enumerated — other providers' models were
-# removed from the supported set per v2.0.19 decision. Add entries here when
-# reinstating models.
+# Every provider currently ships with one model. The list shape is preserved
+# so adding a second model later is a single YAML edit — no code change.
 
-models:
-  gpt-5.4:
-    provider: codex-oauth
-    max_context_tokens: 250000
-    exposes_reasoning_tokens: true
+providers:
+  anthropic:
+    models:
+      - name: claude-sonnet-4-6
+        max_context_tokens: 200000
+        exposes_reasoning_tokens: false
+        default: true
 
-  kimi-for-coding:
-    provider: kimi-coding-plan
-    max_context_tokens: 250000
-    exposes_reasoning_tokens: true
+  openai:
+    models:
+      - name: gpt-4o
+        max_context_tokens: 200000
+        exposes_reasoning_tokens: false
+        default: true
+
+  openai-responses:
+    models:
+      - name: gpt-5
+        max_context_tokens: 200000
+        exposes_reasoning_tokens: true
+        default: true
+
+  kimi-coding-plan:
+    models:
+      - name: kimi-for-coding
+        max_context_tokens: 250000
+        exposes_reasoning_tokens: true
+        default: true
+
+  codex-oauth:
+    models:
+      - name: gpt-5.4
+        max_context_tokens: 250000
+        exposes_reasoning_tokens: true
+        default: true

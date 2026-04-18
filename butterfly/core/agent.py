@@ -1,6 +1,7 @@
 from __future__ import annotations
 import asyncio
 import logging
+from datetime import datetime
 from typing import Any, Awaitable, Callable
 
 from butterfly.core.hook import (
@@ -285,15 +286,29 @@ class Agent:
 
             extra_blocks = active_provider.consume_extra_blocks()
 
+            # Stamp each emitted block with the moment it was committed so
+            # history-replay can order thinking / tool_use / text cells
+            # correctly without relying on turn-level ts (tool_use blocks
+            # previously had no ts, which broke reload ordering for codex /
+            # gpt-5 style interleaved turns).
             assistant_content: Any = content
+            now_ts = datetime.now().isoformat()
             if tool_calls or extra_blocks:
                 blocks: list[Any] = []
                 for eb in extra_blocks:
+                    if isinstance(eb, dict) and "ts" not in eb:
+                        eb = {**eb, "ts": now_ts}
                     blocks.append(eb)
                 if content:
-                    blocks.append({"type": "text", "text": content})
+                    blocks.append({"type": "text", "text": content, "ts": now_ts})
                 for tc in tool_calls:
-                    blocks.append({"type": "tool_use", "id": tc.id, "name": tc.name, "input": tc.input})
+                    blocks.append({
+                        "type": "tool_use",
+                        "id": tc.id,
+                        "name": tc.name,
+                        "input": tc.input,
+                        "ts": now_ts,
+                    })
                 assistant_content = blocks
 
             messages.append(Message(role="assistant", content=assistant_content))

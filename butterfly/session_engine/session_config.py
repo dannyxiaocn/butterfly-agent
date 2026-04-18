@@ -56,7 +56,7 @@ def _atomic_write_text(path: Path, text: str) -> None:
 # User-configurable defaults. Agent config.yaml and session core/config.yaml
 # share the same schema — agent defines defaults, session inherits and can override.
 DEFAULT_CONFIG: dict[str, Any] = {
-    "name": "",
+    "agent": "",
     "description": "",
     "model": None,
     "provider": None,
@@ -66,7 +66,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "thinking": False,
     "thinking_budget": 8000,
     "thinking_effort": "high",
-    "tool_providers": {"web_search": "brave"},
     "prompts": {
         "system": "system.md",
         "task": "task.md",
@@ -99,6 +98,15 @@ def read_config(base_dir: Path) -> dict:
             raw = y.safe_load(path.read_text(encoding="utf-8")) or {}
         except Exception:
             raw = {}
+        if not isinstance(raw, dict):
+            raw = {}
+        # Legacy `name:` → `agent:` migration (v2.0.19 rename). Sessions
+        # saved before the rename carry `name: <agent-name>`; surface it
+        # under the new key so update_config_yaml's whitelist doesn't
+        # silently drop the identifier on the next write.
+        if "name" in raw and not raw.get("agent"):
+            raw["agent"] = raw["name"]
+        raw.pop("name", None)
         return {**DEFAULT_CONFIG, **raw}
 
     return dict(DEFAULT_CONFIG)

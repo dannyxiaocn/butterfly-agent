@@ -13,6 +13,7 @@ export function createChat(): HTMLElement {
   el.id = 'chat';
   el.innerHTML = `
     <div id="messages" class="messages"></div>
+    <div id="agent-status" class="agent-status hidden">Agent is working…</div>
     <div id="hud-bar" class="hud-bar hidden" title="model · context · running tool · tokens">
       <span class="hud-dot hud-dot-idle" id="hud-dot"></span>
       <span class="hud-item hud-model"><span class="hud-model-text">…</span></span>
@@ -24,8 +25,10 @@ export function createChat(): HTMLElement {
       <span class="hud-item hud-subagent hidden" title="Sub-agents currently running"><span class="hud-subagent-text"></span></span>
       <span class="hud-sep hud-speed-sep hidden">·</span>
       <span class="hud-item hud-speed hidden" title="Output tokens/sec from the latest LLM call (not cumulative)"><span class="hud-speed-text"></span></span>
-      <span class="hud-sep hud-tokens-sep">·</span>
-      <span class="hud-item hud-tokens"><span class="hud-tokens-text">…</span></span>
+      <!-- Tokens pill kept in the DOM but hidden by default — PR #36 -->
+      <!-- dropped the noisy in/out counter from the HUD. -->
+      <span class="hud-sep hud-tokens-sep hidden">·</span>
+      <span class="hud-item hud-tokens hidden"><span class="hud-tokens-text">…</span></span>
     </div>
     <div id="chat-input-area" class="chat-input-area">
       <textarea id="chat-input" placeholder="Type a message… (Enter = send, Shift+Enter = newline, Alt/⌥+Enter = wait-mode)" rows="3"></textarea>
@@ -91,16 +94,22 @@ export function createChat(): HTMLElement {
   // every ``model_status:running``.
   let streamingFinalized = false;
 
+  function setAgentStatus(running: boolean) {
+    const bar = el.querySelector('#agent-status') as HTMLElement | null;
+    if (!bar) return;
+    bar.classList.toggle('hidden', !running);
+  }
+
   function getOrCreateStreamingBubble(): HTMLDivElement {
     if (!streamingEl) {
       streamingEl = document.createElement('div');
       streamingEl.className = 'msg msg-agent msg-streaming';
       streamingEl.innerHTML = `
-        <div class="msg-body msg-streaming-body markdown-body">
-          <em class="msg-streaming-placeholder">Agent is working…</em>
-        </div>
+        <div class="msg-body msg-streaming-body markdown-body"></div>
       `;
       messages.appendChild(streamingEl);
+      // Output has begun — the standalone status line is redundant.
+      setAgentStatus(false);
     }
     return streamingEl;
   }
@@ -175,6 +184,7 @@ export function createChat(): HTMLElement {
   }
 
   function clearMessages() {
+    setAgentStatus(false);
     removeStreamingBubble();
     messages.innerHTML = '';
     isStreaming = false;
@@ -213,31 +223,27 @@ export function createChat(): HTMLElement {
           // Defensive: any orphan bubble from a previous run that somehow
           // didn't get a terminal agent/idle event (rare — cancelled
           // without partial-turn commit) must be finalized before we
-          // create a fresh one; otherwise getOrCreateStreamingBubble
-          // returns the stale instance and streamingText keeps growing
-          // across runs.
+          // start a fresh one; otherwise a late partial_text returns the
+          // stale instance and streamingText keeps growing across runs.
           if (streamingEl && !streamingFinalized) {
             finalizeStreamingBubble();
           }
           isStreaming = true;
           streamingText = '';
           streamingFinalized = false;
-          getOrCreateStreamingBubble();
-          scrollToBottom();
+          // Running state now uses a single status line — no empty chat
+          // cell. The streaming bubble is created lazily when the first
+          // partial_text delta arrives.
+          setAgentStatus(true);
           store.modelState = { state: 'running', source: event.source ?? null };
           updateHudDot('running');
         } else {
           // Idle: flip any still-spinning thinking cell to interrupted.
           markRunningThinkingInterrupted();
-          // Bubble handling at idle:
-          //   * streamingFinalized=true  → agent event already promoted
-          //     it. Don't touch — a late partial_text is also gated off
-          //     so nothing new to clean.
-          //   * streamingFinalized=false → no agent event ever arrived
-          //     (cancelled run, or error before any assistant text was
-          //     committed). Finalize with whatever the accumulator has:
-          //     non-empty → freeze as a permanent cell so the user sees
-          //     where output stopped; empty → drop the placeholder.
+          setAgentStatus(false);
+          // Bubble handling at idle: finalize any in-flight streaming
+          // bubble with whatever text accumulated so the user sees where
+          // output stopped (or drop it if empty).
           if (!streamingFinalized) {
             finalizeStreamingBubble();
           }
@@ -456,6 +462,10 @@ export function createChat(): HTMLElement {
               : durSec;
             setToolStatus(summary, '✓', meta);
           }
+          const resultEl = target.querySelector('.tool-body-result .tool-body-content') as HTMLElement | null;
+          if (resultEl && typeof event.result === 'string') {
+            resultEl.innerHTML = renderToolResultBlock(event.result, event.result_truncated);
+          }
         }
         runningTools.delete(name);
         if (latestToolKey === name) latestToolKey = null;
@@ -490,6 +500,10 @@ export function createChat(): HTMLElement {
         if (kind !== 'completed') tracked.el.classList.add('warned');
         const summaryEl = tracked.el.querySelector('.tool-status-summary') as HTMLElement | null;
         if (summaryEl) setToolStatus(summaryEl, icon, `${kind} · ${durSec}`);
+        const resultEl = tracked.el.querySelector('.tool-body-result .tool-body-content') as HTMLElement | null;
+        if (resultEl && typeof event.result === 'string') {
+          resultEl.innerHTML = renderToolResultBlock(event.result, event.result_truncated);
+        }
         backgroundCells.delete(event.tid);
         // HUD "▶ name" cleanup: this name might still have other concurrent
         // calls; only clear if it was the latest tracked.
@@ -838,7 +852,7 @@ function renderEvent(event: DisplayEvent): HTMLElement | null {
       // Default to "done" styling because renderEvent is also used by history
       // replay (completed turns). handleEvent's live `tool` case explicitly
       // strips the .done class after appending to show the running state.
-      div.className = 'msg msg-tool msg-tool-compact done';
+      div.className = 'msg msg-tool done';
       div.dataset.toolName = event.name ?? 'tool';
       div.innerHTML = renderToolEvent(event);
       break;
@@ -887,15 +901,16 @@ function renderEvent(event: DisplayEvent): HTMLElement | null {
 }
 
 function renderToolEvent(event: DisplayEvent): string {
-  // Single-line compact layout (v2.0.18):
-  //   ▶ toolname  <one-line arg preview>  running…      (ts)
-  //   ✓ toolname  <one-line arg preview>  1.2s · N chars (ts)
-  //   [optional] <details> with full args / command
-  //
-  // The arg preview lives INSIDE .tool-status-summary, between name and
-  // meta, so it flows inline on the same row as the tool name. Live
-  // state transitions (tool_done / tool_progress / tool_finalize) use
-  // setToolStatus() which only rewrites icon + meta — the name and arg
+  // Inline-expand layout (v2.0.19): matches the thinking cell.
+  //   <details>
+  //     <summary>  icon  name  arg-preview  meta  ts  [caret ▸]  </summary>
+  //     <div class="tool-body">
+  //       input block (always populated)
+  //       result block (populated by tool_done; empty until then)
+  //     </div>
+  //   </details>
+  // Live transitions (tool / tool_done / tool_finalize) only rewrite the
+  // summary icon + meta and the result body — the name, arg, and input
   // spans survive.
   const name = event.name ?? 'unknown';
   const input = event.input ?? {};
@@ -906,28 +921,38 @@ function renderToolEvent(event: DisplayEvent): string {
     ? `<span class="tool-status-arg" title="${escapeHtml(preview)}">${escapeHtml(preview)}</span>`
     : '<span class="tool-status-arg"></span>';
 
-  // Default icon is the "done" checkmark; handleEvent's live `tool` case
-  // flips it to `▶` with `running…` via setToolStatus().
-  const summary = `
-    <div class="tool-status-summary">
-      <span class="tool-status-icon">✓</span>
-      <span class="tool-status-name">${escapeHtml(name)}</span>
-      ${argHtml}
-      <span class="tool-status-meta"></span>
-    </div>
-  `;
-
-  const detailsBlock = expanded
-    ? `<details class="tool-collapse"><summary>details</summary>${expanded}</details>`
-    : '';
+  const hasResult = typeof event.result === 'string';
+  const resultBlock = hasResult
+    ? renderToolResultBlock(event.result as string, event.result_truncated)
+    : '<em class="tool-body-empty">(pending)</em>';
 
   return `
-    <div class="tool-row-header">
-      ${summary}
-      <span class="msg-ts">${formatTs(event.ts)}</span>
-    </div>
-    ${detailsBlock}
+    <details class="tool-details">
+      <summary class="tool-status-summary">
+        <span class="tool-status-icon">✓</span>
+        <span class="tool-status-name">${escapeHtml(name)}</span>
+        ${argHtml}
+        <span class="tool-status-meta"></span>
+        <span class="msg-ts">${formatTs(event.ts)}</span>
+      </summary>
+      <div class="tool-body">
+        <div class="tool-body-section tool-body-input">
+          <div class="tool-body-label">input</div>
+          <div class="tool-body-content">${expanded || `<pre>${escapeHtml(JSON.stringify(input, null, 2))}</pre>`}</div>
+        </div>
+        <div class="tool-body-section tool-body-result">
+          <div class="tool-body-label">result</div>
+          <div class="tool-body-content">${resultBlock}</div>
+        </div>
+      </div>
+    </details>
   `;
+}
+
+function renderToolResultBlock(result: string, truncated?: boolean): string {
+  if (!result) return '<em class="tool-body-empty">(empty)</em>';
+  const suffix = truncated ? '\n\n…[truncated]' : '';
+  return `<pre>${escapeHtml(result + suffix)}</pre>`;
 }
 
 function setToolStatus(summaryEl: HTMLElement, icon: string, meta: string): void {

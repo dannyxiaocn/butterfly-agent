@@ -1,7 +1,4 @@
-"""Web search using the Brave Search API.
-
-Requires BRAVE_API_KEY environment variable.
-"""
+"""Web search executor backed by the Brave Search API."""
 from __future__ import annotations
 
 import asyncio
@@ -10,7 +7,7 @@ import os
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Optional
+from typing import Any, Optional
 
 
 def _brave_search_sync(
@@ -82,20 +79,22 @@ def _brave_search_sync(
     return "\n".join(lines).rstrip()
 
 
-async def _brave_search(
-    query: str,
-    count: int | float = 5,
-    country: Optional[str] = None,
-    language: Optional[str] = None,
-    freshness: Optional[str] = None,
-    date_after: Optional[str] = None,
-    date_before: Optional[str] = None,
-) -> str:
-    count = int(count)
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(
-        None,
-        _brave_search_sync,
-        query, count, country, language, freshness, date_after, date_before,
-    )
-
+class WebSearchBraveExecutor:
+    async def execute(
+        self,
+        query: str,
+        count: int | float = 5,
+        country: Optional[str] = None,
+        language: Optional[str] = None,
+        freshness: Optional[str] = None,
+        date_after: Optional[str] = None,
+        date_before: Optional[str] = None,
+        **_: Any,
+    ) -> str:
+        count_int = int(count)
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None,
+            _brave_search_sync,
+            query, count_int, country, language, freshness, date_after, date_before,
+        )

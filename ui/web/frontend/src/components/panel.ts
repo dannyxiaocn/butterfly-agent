@@ -25,8 +25,13 @@ export function createPanel(): HTMLElement {
 
   let activeTab: PanelTab = 'tasks';
   let editingTask: TaskCard | null | 'new' = null; // null = not editing, 'new' = new task
-  type ConfigMode = 'view' | 'form' | 'yaml';
+  type ConfigMode = 'view' | 'form';
   let configMode: ConfigMode = 'view';
+  // Cache of tools.md / skills.md / prompts/system.md content for the config
+  // view, keyed by the session it was fetched for. The view renders
+  // placeholder <pre> blocks and fills them from this cache (or fires a fresh
+  // fetch if the session changed).
+  const assetCache = new Map<string, { tools: string; skills: string; system: string }>();
   let modelsCatalog: ModelsCatalog | null = null;
   let modelsCatalogPromise: Promise<ModelsCatalog | null> | null = null;
   const expandedPanel = new Set<string>(); // tids currently expanded
@@ -202,28 +207,38 @@ export function createPanel(): HTMLElement {
     content.appendChild(editor);
   }
 
+  /** Collapse boolean `thinking` + `thinking_effort` into the three-tier UI:
+   *  No / Medium / High. Budget is assigned from the tier on save. */
+  function thinkingTier(params: Record<string, unknown> | null | undefined): 'No' | 'Medium' | 'High' {
+    if (!params) return 'No';
+    if (!params.thinking) return 'No';
+    const effort = String(params.thinking_effort ?? '').toLowerCase();
+    if (effort === 'medium') return 'Medium';
+    return 'High';
+  }
+
+  /** Map the three-tier selection back to the three underlying fields. */
+  function tierToThinkingFields(tier: 'No' | 'Medium' | 'High'): {
+    thinking: boolean; thinking_budget: number; thinking_effort: string;
+  } {
+    if (tier === 'No') return { thinking: false, thinking_budget: 0, thinking_effort: 'none' };
+    if (tier === 'Medium') return { thinking: true, thinking_budget: 4000, thinking_effort: 'medium' };
+    return { thinking: true, thinking_budget: 8000, thinking_effort: 'high' };
+  }
+
   function renderConfigTab(): string {
     if (configMode !== 'view') return ''; // editor rendered imperatively below
 
     const params = store.currentParams;
     if (!params) return '<div class="config-empty">No config loaded.</div>';
 
-    // Order the key config fields first, then everything else.
-    const ordered: string[] = [
-      'name', 'description',
-      'provider', 'model',
-      'fallback_provider', 'fallback_model',
-      'max_iterations',
-      'thinking', 'thinking_budget', 'thinking_effort',
-      'tool_providers', 'prompts', 'tools', 'skills', 'duty',
-    ];
-    const excluded = new Set(['is_meta_session']);
-    const seen = new Set<string>();
+    // Surface only the user-editable fields; internal bookkeeping
+    // (thinking, thinking_budget) is folded into the thinking_effort tier.
     const rows: string[] = [];
     const renderRow = (k: string, v: unknown): string => {
       let displayVal: string;
-      if (v === null || v === undefined) {
-        displayVal = '<span class="cfg-null">— (default)</span>';
+      if (v === null || v === undefined || v === '') {
+        displayVal = '<span class="cfg-null">—</span>';
       } else if (typeof v === 'object') {
         displayVal = `<code>${escHtml(JSON.stringify(v))}</code>`;
       } else if (typeof v === 'boolean') {
@@ -233,26 +248,63 @@ export function createPanel(): HTMLElement {
       }
       return `<tr><td class="cfg-key">${escHtml(k)}</td><td class="cfg-val">${displayVal}</td></tr>`;
     };
-    for (const k of ordered) {
-      if (excluded.has(k)) continue;
-      if (!(k in params)) continue;
-      seen.add(k);
-      rows.push(renderRow(k, (params as Record<string, unknown>)[k]));
-    }
-    for (const [k, v] of Object.entries(params)) {
-      if (excluded.has(k) || seen.has(k)) continue;
-      rows.push(renderRow(k, v));
-    }
+    const p = params as Record<string, unknown>;
+    rows.push(renderRow('agent', p.agent));
+    rows.push(renderRow('description', p.description));
+    rows.push(renderRow('provider', p.provider));
+    rows.push(renderRow('model', p.model));
+    rows.push(renderRow('fallback_provider', p.fallback_provider));
+    rows.push(renderRow('fallback_model', p.fallback_model));
+    rows.push(renderRow('max_iterations', p.max_iterations));
+    rows.push(renderRow('thinking_effort', thinkingTier(p)));
+    if (p.duty !== undefined) rows.push(renderRow('duty', p.duty));
 
     return `
       <table class="config-table">
         <tbody>${rows.join('')}</tbody>
       </table>
+      <div class="config-asset-group">
+        <div class="cfg-label cfg-asset-heading">tools.md</div>
+        <pre class="cfg-asset-block" id="cfg-asset-tools">Loading…</pre>
+      </div>
+      <div class="config-asset-group">
+        <div class="cfg-label cfg-asset-heading">skills.md</div>
+        <pre class="cfg-asset-block" id="cfg-asset-skills">Loading…</pre>
+      </div>
+      <div class="config-asset-group">
+        <div class="cfg-label cfg-asset-heading">prompts/system.md</div>
+        <pre class="cfg-asset-block" id="cfg-asset-system">Loading…</pre>
+      </div>
       <div class="config-footer">
         <button class="btn-sm btn-primary" id="btn-edit-config-form">Edit</button>
-        <button class="btn-sm" id="btn-edit-config-yaml">Edit raw YAML</button>
       </div>
     `;
+  }
+
+  function fillConfigAssetBlocks(sessionId: string) {
+    const cached = assetCache.get(sessionId);
+    const fill = (assets: { tools: string; skills: string; system: string }) => {
+      if (store.currentSessionId !== sessionId || activeTab !== 'config' || configMode !== 'view') return;
+      const toolsEl = el.querySelector('#cfg-asset-tools');
+      const skillsEl = el.querySelector('#cfg-asset-skills');
+      const systemEl = el.querySelector('#cfg-asset-system');
+      if (toolsEl) toolsEl.textContent = assets.tools || '(empty)';
+      if (skillsEl) skillsEl.textContent = assets.skills || '(empty)';
+      if (systemEl) systemEl.textContent = assets.system || '(empty)';
+    };
+    if (cached) {
+      fill(cached);
+      return;
+    }
+    Promise.all([
+      api.getAssetMd(sessionId, 'tools').then(r => r.text).catch(() => ''),
+      api.getAssetMd(sessionId, 'skills').then(r => r.text).catch(() => ''),
+      api.getPromptMd(sessionId, 'system').then(r => r.text).catch(() => ''),
+    ]).then(([tools, skills, system]) => {
+      const assets = { tools, skills, system };
+      assetCache.set(sessionId, assets);
+      fill(assets);
+    });
   }
 
   function bindConfigTab() {
@@ -260,29 +312,31 @@ export function createPanel(): HTMLElement {
       configMode = 'form';
       showConfigFormEditor();
     });
-    el.querySelector('#btn-edit-config-yaml')?.addEventListener('click', () => {
-      configMode = 'yaml';
-      showConfigYamlEditor();
-    });
+    const sid = store.currentSessionId;
+    if (sid) fillConfigAssetBlocks(sid);
   }
 
-  /** Structured form: dropdowns for provider/model, text/number inputs, booleans,
-   *  JSON textareas for complex fields (tool_providers, prompts, duty, tools, skills). */
+  /** Structured form. Single model per provider (auto-bound to provider
+   *  default); thinking collapsed to No/Medium/High; tools.md / skills.md /
+   *  prompts/system.md surfaced as plaintext cells. */
   async function showConfigFormEditor() {
     const content = el.querySelector('#panel-content');
     if (!content || !store.currentSessionId) return;
     const sessionId = store.currentSessionId;
     const params = { ...(store.currentParams ?? {}) } as Record<string, unknown>;
 
-    content.innerHTML = `<div class="config-empty">Loading model catalog…</div>`;
-    const catalog = await ensureModelsCatalog();
+    content.innerHTML = `<div class="config-empty">Loading config…</div>`;
+    const [catalog, toolsMd, skillsMd, systemMd] = await Promise.all([
+      ensureModelsCatalog(),
+      api.getAssetMd(sessionId, 'tools').then(r => r.text).catch(() => ''),
+      api.getAssetMd(sessionId, 'skills').then(r => r.text).catch(() => ''),
+      api.getPromptMd(sessionId, 'system').then(r => r.text).catch(() => ''),
+    ]);
     if (store.currentSessionId !== sessionId || configMode !== 'form') return;
 
     const providerOptions: ProviderCatalogEntry[] = catalog?.providers ?? [];
-    const efforts = catalog?.thinking_efforts ?? ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'];
+    const providerByKey = new Map(providerOptions.map(p => [p.provider, p]));
 
-    // Build the form as a real DOM tree so we can keep input handles and
-    // re-render the model dropdown when the provider changes.
     const form = document.createElement('div');
     form.className = 'config-form';
 
@@ -290,19 +344,30 @@ export function createPanel(): HTMLElement {
     err.className = 'form-error hidden';
 
     // ---- Text fields ----
-    const nameInput = textRow(form, 'name', String(params.name ?? ''));
+    const agentInput = textRow(form, 'agent', String(params.agent ?? ''));
     const descInput = textRow(form, 'description', String(params.description ?? ''));
 
-    // ---- Provider + model (paired) ----
-    const providerSelect = selectRow(form, 'provider', providerNames(providerOptions), String(params.provider ?? ''), '(default)');
+    // ---- Provider + read-only model (driven by provider) ----
+    const providerSelect = selectRow(
+      form, 'provider',
+      providerOptions.map(p => p.provider),
+      String(params.provider ?? ''),
+      '(default)',
+    );
     const modelWrap = document.createElement('div');
     modelWrap.className = 'cfg-row';
     form.appendChild(modelWrap);
 
+    // v2.0.19 (parallel): dropdown-with-Custom row restored — PR #36's
+    // read-only readout assumed "one model per provider forever", but the
+    // models.yaml catalog keeps the list shape so future multi-model
+    // support is just a yaml edit. ``providerOptions[*].models`` is always
+    // populated from /api/models; the list currently has exactly one entry
+    // per provider but the UI is list-shaped regardless.
     function renderModelRow() {
       modelWrap.innerHTML = '';
       const providerKey = providerSelect.value;
-      const entry = providerOptions.find(p => p.provider === providerKey) ?? null;
+      const entry = providerByKey.get(providerKey) ?? null;
       const models = entry?.models ?? [];
       const current = String(params.model ?? '');
       const label = document.createElement('label');
@@ -332,7 +397,6 @@ export function createPanel(): HTMLElement {
       customInput.className = 'cfg-input cfg-input-custom';
       customInput.placeholder = 'custom model id';
 
-      // Initial state
       if (current && models.some(m => m.name === current)) {
         select.value = current;
         customInput.classList.add('hidden');
@@ -348,6 +412,7 @@ export function createPanel(): HTMLElement {
         if (select.value === '__custom__') {
           customInput.classList.remove('hidden');
           customInput.focus();
+          params.model = customInput.value.trim() || null;
         } else {
           customInput.classList.add('hidden');
           params.model = select.value || null;
@@ -360,32 +425,37 @@ export function createPanel(): HTMLElement {
       modelWrap.appendChild(select);
       modelWrap.appendChild(customInput);
 
-      // Keep params.model up to date with initial dropdown state too
-      params.model = select.value === '__custom__' ? (customInput.value.trim() || null) : (select.value || null);
+      params.model = select.value === '__custom__'
+        ? (customInput.value.trim() || null)
+        : (select.value || null);
     }
     renderModelRow();
     providerSelect.addEventListener('change', () => {
       params.provider = providerSelect.value || null;
-      // When provider changes, clear model — user picks fresh from the new list
+      // Provider changed — old model string may not belong under the new
+      // provider, so clear and let renderModelRow re-seed from the catalog.
       params.model = null;
       renderModelRow();
     });
 
-    // ---- Fallback provider + model ----
-    // Model becomes a provider-keyed dropdown (mirrors the primary row) —
-    // prevents mis-paired fallback_provider vs. fallback_model strings
-    // that 500 at agent-start time (PR #24 review item 6).
-    const fbProviderSelect = selectRow(form, 'fallback_provider', providerNames(providerOptions), String(params.fallback_provider ?? ''), '(none)');
+    // ---- Fallback provider + read-only fallback model ----
+    const fbProviderSelect = selectRow(
+      form, 'fallback_provider',
+      providerOptions.map(p => p.provider),
+      String(params.fallback_provider ?? ''),
+      '(none)',
+    );
     const fbModelWrap = document.createElement('div');
     fbModelWrap.className = 'cfg-row';
     form.appendChild(fbModelWrap);
 
-    let fbSelect: HTMLSelectElement;
-    let fbCustomInput: HTMLInputElement;
+    // Parallel dropdown for fallback_model — same rationale as the primary
+    // model row. Kept separate from renderModelRow so the two rows can
+    // evolve independently (e.g. if one picks up a "none" sentinel).
     function renderFallbackModelRow() {
       fbModelWrap.innerHTML = '';
       const providerKey = fbProviderSelect.value;
-      const entry = providerOptions.find(p => p.provider === providerKey) ?? null;
+      const entry = providerByKey.get(providerKey) ?? null;
       const models = entry?.models ?? [];
       const current = String(params.fallback_model ?? '');
       const label = document.createElement('label');
@@ -393,7 +463,7 @@ export function createPanel(): HTMLElement {
       label.textContent = 'fallback_model';
       fbModelWrap.appendChild(label);
 
-      fbSelect = document.createElement('select');
+      const fbSelect = document.createElement('select');
       fbSelect.className = 'cfg-input';
       const blank = document.createElement('option');
       blank.value = '';
@@ -410,7 +480,7 @@ export function createPanel(): HTMLElement {
       customOpt.textContent = 'Custom…';
       fbSelect.appendChild(customOpt);
 
-      fbCustomInput = document.createElement('input');
+      const fbCustomInput = document.createElement('input');
       fbCustomInput.type = 'text';
       fbCustomInput.className = 'cfg-input cfg-input-custom';
       fbCustomInput.placeholder = 'custom model id';
@@ -454,48 +524,19 @@ export function createPanel(): HTMLElement {
     });
 
     // ---- Numbers ----
-    const maxIterInput = numberRow(form, 'max_iterations', Number(params.max_iterations ?? 20));
+    const maxIterInput = numberRow(form, 'max_iterations', Number(params.max_iterations ?? 1000));
 
-    // ---- Thinking ----
-    // thinking_effort list is provider-specific. `xhigh` is codex-only (model
-    // catalog flags it); without filtering we'd let the user persist an
-    // invalid effort for e.g. openai-responses and it'd 400 at agent start
-    // (PR #24 review items 7/13).
-    const thinkingCheckbox = boolRow(form, 'thinking', Boolean(params.thinking));
-    const thinkingBudgetInput = numberRow(form, 'thinking_budget', Number(params.thinking_budget ?? 8000));
-    function effortsForProvider(key: string): string[] {
-      const entry = providerOptions.find(p => p.provider === key);
-      // Providers with no effort vocabulary (Anthropic/Kimi = budget-style,
-      // plain OpenAI = no thinking) still accept the field on the YAML but
-      // the value is ignored. Surface the full union so the form doesn't
-      // look empty for those providers.
-      const supported = entry?.supported_efforts ?? [];
-      return supported.length ? supported : efforts.filter(e => e !== 'xhigh');
-    }
-    const initialProviderKey = String(params.provider ?? '');
-    const effortOptions = effortsForProvider(initialProviderKey);
-    const thinkingEffortSelect = selectRow(form, 'thinking_effort', effortOptions, String(params.thinking_effort ?? 'high'));
-    // Re-filter when the primary provider flips mid-edit so an invalid
-    // effort can't be persisted for a non-capable provider.
-    providerSelect.addEventListener('change', () => {
-      const newOptions = effortsForProvider(providerSelect.value);
-      const current = thinkingEffortSelect.value;
-      thinkingEffortSelect.innerHTML = '';
-      for (const opt of newOptions) {
-        const o = document.createElement('option');
-        o.value = opt;
-        o.textContent = opt;
-        thinkingEffortSelect.appendChild(o);
-      }
-      thinkingEffortSelect.value = newOptions.includes(current) ? current : 'high';
-    });
+    // ---- thinking_effort (collapsed: No / Medium / High) ----
+    const thinkingSelect = selectRow(
+      form, 'thinking_effort',
+      ['No', 'Medium', 'High'],
+      thinkingTier(params),
+    );
 
-    // ---- JSON/YAML-ish complex fields as compact textareas ----
-    const toolProvidersInput = jsonRow(form, 'tool_providers', params.tool_providers);
-    const promptsInput = jsonRow(form, 'prompts', params.prompts);
-    const toolsInput = jsonRow(form, 'tools', params.tools);
-    const skillsInput = jsonRow(form, 'skills', params.skills);
-    const dutyInput = jsonRow(form, 'duty', params.duty);
+    // ---- Plaintext asset / prompt cells ----
+    const toolsTextarea = textareaRow(form, 'tools.md', toolsMd, 10);
+    const skillsTextarea = textareaRow(form, 'skills.md', skillsMd, 4);
+    const systemTextarea = textareaRow(form, 'prompts/system.md', systemMd, 14);
 
     // ---- Actions ----
     const actions = document.createElement('div');
@@ -517,34 +558,39 @@ export function createPanel(): HTMLElement {
     saveBtn.addEventListener('click', async () => {
       err.classList.add('hidden');
       err.textContent = '';
-      // Collect values
+      const tier = thinkingSelect.value as 'No' | 'Medium' | 'High';
+      const thinkingFields = tierToThinkingFields(tier);
+      // model / fallback_model live on ``params`` — the dropdown-with-Custom
+      // rows write through to params.model / params.fallback_model on every
+      // change, so saveBtn just reads them out here.
       const next: Record<string, unknown> = {
-        name: nameInput.value,
+        agent: agentInput.value,
         description: descInput.value,
         provider: providerSelect.value || null,
-        model: params.model ?? null,
+        model: (params.model as string | null) ?? null,
         fallback_provider: fbProviderSelect.value || null,
         fallback_model: (params.fallback_model as string | null) ?? null,
-        max_iterations: Number(maxIterInput.value) || 20,
-        thinking: thinkingCheckbox.checked,
-        thinking_budget: Number(thinkingBudgetInput.value) || 8000,
-        thinking_effort: thinkingEffortSelect.value,
+        max_iterations: Number(maxIterInput.value) || 1000,
+        ...thinkingFields,
+        prompts: params.prompts,
+        tools: params.tools,
+        skills: params.skills,
+        duty: params.duty,
       };
       try {
-        next.tool_providers = parseJsonField(toolProvidersInput.value, 'tool_providers');
-        next.prompts = parseJsonField(promptsInput.value, 'prompts');
-        next.tools = parseJsonField(toolsInput.value, 'tools');
-        next.skills = parseJsonField(skillsInput.value, 'skills');
-        next.duty = parseJsonField(dutyInput.value, 'duty');
-      } catch (e) {
-        err.textContent = String(e);
-        err.classList.remove('hidden');
-        return;
-      }
-      try {
-        const res = await api.setConfig(sessionId, next as Params);
+        const [cfgRes] = await Promise.all([
+          api.setConfig(sessionId, next as Params),
+          api.setAssetMd(sessionId, 'tools', toolsTextarea.value),
+          api.setAssetMd(sessionId, 'skills', skillsTextarea.value),
+          api.setPromptMd(sessionId, 'system', systemTextarea.value),
+        ]);
         if (store.currentSessionId !== sessionId) return;
-        store.currentParams = res.params;
+        store.currentParams = cfgRes.params;
+        assetCache.set(sessionId, {
+          tools: toolsTextarea.value,
+          skills: skillsTextarea.value,
+          system: systemTextarea.value,
+        });
         store.emit('config');
         configMode = 'view';
         render();
@@ -559,79 +605,6 @@ export function createPanel(): HTMLElement {
     content.appendChild(form);
     content.appendChild(err);
     content.appendChild(actions);
-  }
-
-  /** Raw YAML editor — edits config.yaml text directly, round-trips via the
-   *  /config/yaml endpoint. */
-  async function showConfigYamlEditor() {
-    const content = el.querySelector('#panel-content');
-    if (!content || !store.currentSessionId) return;
-    const sessionId = store.currentSessionId;
-
-    content.innerHTML = `<div class="config-empty">Loading config.yaml…</div>`;
-    let yamlText = '';
-    try {
-      const resp = await api.getConfigYaml(sessionId);
-      if (store.currentSessionId !== sessionId || configMode !== 'yaml') return;
-      yamlText = resp.yaml;
-    } catch (e) {
-      console.error('getConfigYaml failed:', e);
-      content.innerHTML = `<div class="form-error">Failed to load config.yaml: ${escHtml(String(e))}</div>`;
-      return;
-    }
-
-    const textarea = document.createElement('textarea');
-    textarea.className = 'config-json-editor';
-    textarea.rows = 22;
-    textarea.value = yamlText;
-
-    const err = document.createElement('div');
-    err.className = 'form-error hidden';
-
-    const actions = document.createElement('div');
-    actions.className = 'form-row';
-    const saveBtn = document.createElement('button');
-    saveBtn.className = 'btn-primary';
-    saveBtn.textContent = 'Save YAML';
-    const cancelBtn = document.createElement('button');
-    cancelBtn.className = 'btn-sm';
-    cancelBtn.textContent = 'Cancel';
-    actions.appendChild(saveBtn);
-    actions.appendChild(cancelBtn);
-
-    cancelBtn.addEventListener('click', () => {
-      configMode = 'view';
-      render();
-    });
-    saveBtn.addEventListener('click', async () => {
-      err.classList.add('hidden');
-      try {
-        const res = await api.setConfigYaml(sessionId, textarea.value);
-        if (store.currentSessionId !== sessionId) return;
-        store.currentParams = res.params;
-        store.emit('config');
-        configMode = 'view';
-        render();
-      } catch (e) {
-        console.error('setConfigYaml failed:', e);
-        err.textContent = `Save failed: ${e}`;
-        err.classList.remove('hidden');
-      }
-    });
-
-    const hint = document.createElement('div');
-    hint.className = 'cfg-hint';
-    hint.textContent = 'YAML is parsed server-side; comments will be dropped on save.';
-
-    content.innerHTML = '';
-    content.appendChild(hint);
-    content.appendChild(textarea);
-    content.appendChild(err);
-    content.appendChild(actions);
-  }
-
-  function providerNames(options: ProviderCatalogEntry[]): string[] {
-    return options.map(p => p.provider);
   }
 
   function textRow(parent: HTMLElement, key: string, value: string, placeholder = ''): HTMLInputElement {
@@ -661,22 +634,6 @@ export function createPanel(): HTMLElement {
     input.type = 'number';
     input.className = 'cfg-input';
     input.value = String(value);
-    row.appendChild(label);
-    row.appendChild(input);
-    parent.appendChild(row);
-    return input;
-  }
-
-  function boolRow(parent: HTMLElement, key: string, value: boolean): HTMLInputElement {
-    const row = document.createElement('div');
-    row.className = 'cfg-row';
-    const label = document.createElement('label');
-    label.className = 'cfg-label';
-    label.textContent = key;
-    const input = document.createElement('input');
-    input.type = 'checkbox';
-    input.className = 'cfg-checkbox';
-    input.checked = value;
     row.appendChild(label);
     row.appendChild(input);
     parent.appendChild(row);
@@ -717,30 +674,20 @@ export function createPanel(): HTMLElement {
     return select;
   }
 
-  function jsonRow(parent: HTMLElement, key: string, value: unknown): HTMLTextAreaElement {
+  function textareaRow(parent: HTMLElement, key: string, value: string, rows: number): HTMLTextAreaElement {
     const row = document.createElement('div');
     row.className = 'cfg-row cfg-row-block';
     const label = document.createElement('label');
     label.className = 'cfg-label';
-    label.textContent = `${key} (JSON)`;
+    label.textContent = key;
     const textarea = document.createElement('textarea');
     textarea.className = 'cfg-input cfg-textarea';
-    textarea.rows = 3;
-    textarea.value = value === undefined || value === null ? 'null' : JSON.stringify(value, null, 2);
+    textarea.rows = rows;
+    textarea.value = value ?? '';
     row.appendChild(label);
     row.appendChild(textarea);
     parent.appendChild(row);
     return textarea;
-  }
-
-  function parseJsonField(raw: string, field: string): unknown {
-    const text = raw.trim();
-    if (!text || text === 'null') return null;
-    try {
-      return JSON.parse(text);
-    } catch (e) {
-      throw new Error(`${field}: invalid JSON — ${(e as Error).message}`);
-    }
   }
 
   // ================= PANEL TAB =================

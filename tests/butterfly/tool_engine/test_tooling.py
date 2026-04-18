@@ -51,12 +51,3 @@ class ToolEngineUnitTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(proc.killed)
         self.assertGreaterEqual(proc.communicate_calls, 1)
 
-    async def test_tavily_rejects_unimplemented_filters_explicitly(self) -> None:
-        from toolhub.web_search.tavily import _tavily_search
-
-        with patch.dict("os.environ", {"TAVILY_API_KEY": "demo"}, clear=False):
-            result = await _tavily_search("query", country="US", freshness="day")
-
-        self.assertIn("supports only 'query' and 'count'", result)
-        self.assertIn("country", result)
-        self.assertIn("freshness", result)

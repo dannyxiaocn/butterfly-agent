@@ -16,7 +16,7 @@ only business-intent parameters:
   - memory_update: memory_dir + main_memory_path
   - tool_output: panel_dir
   - skill: skills list
-  - web_search / web_fetch: no injection (provider config via registry)
+  - web_search_brave / web_search_tavily / web_fetch: no injection
 """
 from __future__ import annotations
 
@@ -212,8 +212,16 @@ class ToolLoader:
                     return await executor.execute(**kwargs)
                 return _impl
 
-        elif tool_name == "web_search":
-            executor_cls = getattr(mod, "WebSearchExecutor", None)
+        elif tool_name == "web_search_brave":
+            executor_cls = getattr(mod, "WebSearchBraveExecutor", None)
+            if executor_cls:
+                executor = executor_cls()
+                async def _impl(**kwargs: Any) -> str:
+                    return await executor.execute(**kwargs)
+                return _impl
+
+        elif tool_name == "web_search_tavily":
+            executor_cls = getattr(mod, "WebSearchTavilyExecutor", None)
             if executor_cls:
                 executor = executor_cls()
                 async def _impl(**kwargs: Any) -> str:
