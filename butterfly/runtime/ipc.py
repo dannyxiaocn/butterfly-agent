@@ -54,7 +54,12 @@ from typing import Iterator
 
 # ── Display event converters ──────────────────────────────────────────────────
 
-def _context_event_to_display(event: dict, *, for_history: bool = False) -> list[dict]:
+def _context_event_to_display(
+    event: dict,
+    *,
+    for_history: bool = False,
+    tool_durations: dict[str, int] | None = None,
+) -> list[dict]:
     """Convert a context.jsonl event (user_input or turn) to display events.
 
     Args:
@@ -63,6 +68,18 @@ def _context_event_to_display(event: dict, *, for_history: bool = False) -> list
                      in events.jsonl are not available for history replay.
                      When False (SSE live tail), respect has_streaming_tools /
                      pre_triggered flags to avoid duplicating live-streamed items.
+        tool_durations: Optional ``tool_use_id → duration_ms`` map built from
+                     events.jsonl (see ``tail_history``). Lets a reloaded
+                     tool cell show the "✓ bash 2.4s …" duration pill that
+                     the live ``tool_done`` event would have populated —
+                     events.jsonl isn't otherwise replayed on history fetch.
+
+    Note: agent text-block durations are read directly from
+    ``turn["agent_output_durations"]`` (a parallel list populated by the
+    session writer). Pairing is per-turn and position-based — pairing
+    across the whole events.jsonl was fragile when old turns lacked the
+    instrumentation, leading to first-block cells receiving later cells'
+    durations on reload.
     """
     etype = event.get("type")
     ts = event.get("ts", "")
@@ -90,6 +107,18 @@ def _context_event_to_display(event: dict, *, for_history: bool = False) -> list
         has_streaming_tools = event.get("has_streaming_tools", False)
         has_streaming_thinking = event.get("has_streaming_thinking", False)
         usage = event.get("usage")
+        # v2.0.20: per-turn agent output durations — one entry per LLM call
+        # that produced text. Paired positionally with text content blocks
+        # ENCOUNTERED INSIDE THIS TURN so a missing/extra text block in a
+        # neighbouring turn can't shift the mapping (the cross-turn events.jsonl
+        # scan we tried earlier had exactly that fragility).
+        agent_output_durations_raw = event.get("agent_output_durations") or []
+        agent_output_durations = (
+            agent_output_durations_raw
+            if isinstance(agent_output_durations_raw, list)
+            else []
+        )
+        agent_cursor_turn = 0
         messages = event.get("messages", []) or []
 
         # ── tool_use → tool_result pairing for history replay ─────────
@@ -159,6 +188,11 @@ def _context_event_to_display(event: dict, *, for_history: bool = False) -> list
                 # label (codex/kimi only; Anthropic never sets this).
                 if block.get("reasoning_tokens"):
                     thinking_ev["reasoning_tokens"] = block["reasoning_tokens"]
+                # v2.0.20: placeholder seeded by on_thinking_start survives a
+                # turn interrupt, so the frontend knows to render this cell
+                # as "Thinking interrupted" rather than a normal "Thought".
+                if block.get("interrupted"):
+                    thinking_ev["interrupted"] = True
                 pending_thinking.append(thinking_ev)
 
         def _emit_next_thinking() -> None:
@@ -270,6 +304,13 @@ def _context_event_to_display(event: dict, *, for_history: bool = False) -> list
                                 tool_ev["result_truncated"] = True
                             if tr["is_error"]:
                                 tool_ev["is_error"] = True
+                        if (
+                            for_history
+                            and use_id
+                            and tool_durations is not None
+                            and use_id in tool_durations
+                        ):
+                            tool_ev["duration_ms"] = tool_durations[use_id]
                         result.append(tool_ev)
 
                 elif btype == "text":
@@ -278,6 +319,18 @@ def _context_event_to_display(event: dict, *, for_history: bool = False) -> list
                         ev = {"type": "agent", "content": text, "ts": msg_ts}
                         if not for_history:
                             ev["id"] = f"turn:{ts}:{agent_idx}"
+                        # v2.0.20: per-turn pairing — pull the next unused
+                        # duration from this turn's agent_output_durations
+                        # list. Surplus text blocks (rare provider quirk
+                        # where one LLM call emits multiple text blocks)
+                        # render without a duration pill. Applied to both
+                        # live SSE and history so reloaded cells show the
+                        # exact same "Agent Xs" label the live cell did.
+                        if agent_cursor_turn < len(agent_output_durations):
+                            dur = agent_output_durations[agent_cursor_turn]
+                            if isinstance(dur, int):
+                                ev["duration_ms"] = dur
+                            agent_cursor_turn += 1
                         agent_idx += 1
                         agent_events.append(ev)
                         result.append(ev)
@@ -362,6 +415,16 @@ def _runtime_event_to_display(event: dict) -> list[dict]:
         # "Thought Xs" to "Thought Xs for N tokens" when it arrives.
         # Anthropic never emits this event (reasoning_tokens is 0 there).
         "thinking_tokens_update",
+        # v2.0.20: first-text-chunk signal. Emitted by Session.on_chunk the
+        # moment the LLM starts producing text so the frontend can open the
+        # "Typing…" cell immediately — without waiting for the 150-char
+        # partial_text flush to arrive.
+        "agent_output_start",
+        # v2.0.20: per-LLM-call text-output duration. Emitted by on_llm_call_end
+        # whenever a call produced text. The live client stamps the running
+        # cell with ``duration_ms`` so the finalized "Agent Xs" matches what
+        # history replay reads from events.jsonl.
+        "agent_output_done",
     ):
         return [event]
 
@@ -490,13 +553,50 @@ class FileIPC:
     def tail_history(self, offset: int = 0) -> Iterator[tuple[dict, int]]:
         """Yield display events from context.jsonl for the history endpoint.
 
-        Always emits tools from turn content (for_history=True),
-        since events.jsonl is not consulted for history replay.
+        Always emits tools from turn content (for_history=True). events.jsonl
+        is otherwise skipped on history replay, but we take a single pass over
+        it up front to recover the ``tool_use_id → duration_ms`` map so the
+        reloaded "✓ bash 2.4s …" pill matches what the live tool cell showed.
+        Agent output durations are persisted directly on the turn event (see
+        ``turn["agent_output_durations"]`` in Session), so no corresponding
+        scan is needed.
         """
+        tool_durations = self._scan_tool_durations()
         yield from self._readline_loop(
             self.context_path, offset,
-            lambda e: _context_event_to_display(e, for_history=True),
+            lambda e: _context_event_to_display(
+                e,
+                for_history=True,
+                tool_durations=tool_durations,
+            ),
         )
+
+    def _scan_tool_durations(self) -> dict[str, int]:
+        """Build ``tool_use_id → duration_ms`` from events.jsonl tool_done lines.
+
+        Cheap single-pass scan; events.jsonl is an append-only log and
+        tool events are small. Missing/malformed lines are skipped
+        silently so a corrupt tail doesn't break history replay.
+        """
+        durations: dict[str, int] = {}
+        if not self.events_path.exists():
+            return durations
+        with self.events_path.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    ev = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if ev.get("type") != "tool_done":
+                    continue
+                use_id = ev.get("tool_use_id")
+                dur = ev.get("duration_ms")
+                if isinstance(use_id, str) and isinstance(dur, int):
+                    durations[use_id] = dur
+        return durations
 
     def tail_context(self, offset: int = 0) -> Iterator[tuple[dict, int]]:
         """Yield display events from context.jsonl for the live SSE stream.

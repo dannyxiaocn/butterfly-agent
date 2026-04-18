@@ -160,6 +160,19 @@ class Session:
         # thinking block of the just-finished LLM call with the
         # provider-reported reasoning_tokens. ``None`` when not in a run.
         self._pending_thinking_attributor = None
+        # v2.0.20: monotonic timestamp of the first text chunk of the
+        # currently-streaming LLM call. Set by the text-chunk callback on
+        # the first chunk; consumed (and reset to None) by on_llm_call_end
+        # so it can emit ``agent_output_done`` with the measured output
+        # duration. Stays None for calls that don't produce text.
+        self._text_output_started_at: float | None = None
+        # v2.0.20: per-turn list of output durations (one entry per LLM
+        # call that produced text). Populated by on_llm_call_end; drained
+        # by the turn writer into ``turn["agent_output_durations"]`` so
+        # history replay can pair each text block with its call's duration
+        # WITHIN the turn — position-based pairing across the whole
+        # events.jsonl was fragile when old turns lacked the instrumentation.
+        self._current_turn_agent_durations: list[int] = []
 
         # Idempotent directory creation — safe for both new and resumed sessions
         self.session_dir.mkdir(parents=True, exist_ok=True)
@@ -648,6 +661,7 @@ class Session:
         message = self._reshape_history(message)
         old_len = len(self._agent._history)
         self._set_model_status("running", "user")
+        self._current_turn_agent_durations = []
         tool_call_cb, get_tool_call_count = self._make_tool_call_callback()
         on_chunk = self._make_text_chunk_callback()
         on_thinking_start, on_thinking_end, had_thinking, get_thinking_blocks = self._make_thinking_callbacks()
@@ -685,6 +699,13 @@ class Session:
             # reinstalls its own) never picks up a stale reference from the
             # prior run's closure.
             self._pending_thinking_attributor = None
+            # v2.0.20: clear any stranded text-output start timestamp (e.g.
+            # the run was cancelled before on_llm_call_end could drain it).
+            # The per-turn agent durations list is NOT cleared here — the
+            # chat/tick writers read it immediately after this finally to
+            # stamp ``turn["agent_output_durations"]``. It's reset at the
+            # START of the next _do_chat / _do_tick.
+            self._text_output_started_at = None
 
         self._save_chat_turn(
             item, old_len, result, get_tool_call_count(), had_thinking(),
@@ -715,6 +736,7 @@ class Session:
         card.mark_working()
         save_card(self.tasks_dir, card)
         self._set_model_status("running", triggered_by)
+        self._current_turn_agent_durations = []
         tool_call_cb, get_tool_call_count = self._make_tool_call_callback()
         on_chunk = self._make_text_chunk_callback()
         on_thinking_start, on_thinking_end, had_thinking, get_thinking_blocks = self._make_thinking_callbacks()
@@ -781,6 +803,8 @@ class Session:
                 thinking_blocks = get_thinking_blocks()
                 if thinking_blocks:
                     turn["thinking_blocks"] = thinking_blocks
+                if self._current_turn_agent_durations:
+                    turn["agent_output_durations"] = list(self._current_turn_agent_durations)
                 if result.usage and result.usage.total_tokens > 0:
                     turn["usage"] = result.usage.as_dict()
                 self._append_context(turn)
@@ -815,6 +839,8 @@ class Session:
             turn["has_streaming_thinking"] = True
         if thinking_blocks:
             turn["thinking_blocks"] = thinking_blocks
+        if self._current_turn_agent_durations:
+            turn["agent_output_durations"] = list(self._current_turn_agent_durations)
         if result.usage and result.usage.total_tokens > 0:
             turn["usage"] = result.usage.as_dict()
         self._append_context(turn)
@@ -855,6 +881,8 @@ class Session:
             turn["has_streaming_thinking"] = True
         if thinking_blocks:
             turn["thinking_blocks"] = thinking_blocks
+        if self._current_turn_agent_durations:
+            turn["agent_output_durations"] = list(self._current_turn_agent_durations)
         self._append_context(turn)
 
     # ── Stop / Start ───────────────────────────────────────────────
@@ -1333,6 +1361,9 @@ class Session:
                 "name": name,
                 "result_len": len(result_str),
                 "result": result_str[:_MAX],
+                # v2.0.20: persisted so history replay can pair a reloaded
+                # tool_use block back to its wall-clock duration_ms below.
+                "tool_use_id": tool_use_id,
             }
             if truncated:
                 payload["result_truncated"] = True
@@ -1486,6 +1517,24 @@ class Session:
                 "toks_per_s": toks_per_s,
             }
             self._append_event(payload)
+            # v2.0.20: if this LLM call produced any text output (the chunk
+            # callback stamped a start timestamp), emit agent_output_done so
+            # the UI can show "Output Xs" on both the live cell and history
+            # replay. Stays silent for tool-only / thinking-only iterations.
+            import time as _time_mod
+            started_out = self._text_output_started_at
+            if started_out is not None:
+                output_duration_ms = int((_time_mod.monotonic() - started_out) * 1000)
+                self._append_event({
+                    "type": "agent_output_done",
+                    "iteration": iteration,
+                    "duration_ms": output_duration_ms,
+                })
+                self._text_output_started_at = None
+                # Buffer the duration for the turn writer. One entry per
+                # LLM call that produced text — same ordering as the text
+                # content blocks that end up in the turn's messages.
+                self._current_turn_agent_durations.append(output_duration_ms)
             # Attribution for Part E — stamp the last thinking block of this
             # call with the provider-reported reasoning_tokens so the frontend
             # can render "Thought Xs for N tokens". The thinking-callback
@@ -1608,6 +1657,19 @@ class Session:
             counter[0] += 1
             block_id = f"th:{int(_time.time() * 1000)}:{counter[0]}"
             pending.append((block_id, _time.time()))
+            # v2.0.20: seed the collected list with a placeholder carrying
+            # ``interrupted=True``. A normal on_thinking_end below upgrades
+            # the entry in place (flag cleared, text + duration filled). If
+            # the turn gets interrupted before on_thinking_end fires, the
+            # placeholder survives in the persisted ``thinking_blocks``
+            # list so history replay can render a "Thinking interrupted"
+            # cell instead of silently dropping the block.
+            collected.append({
+                "block_id": block_id,
+                "text": "",
+                "ts": datetime.now().isoformat(),
+                "interrupted": True,
+            })
             self._append_event({"type": "thinking_start", "block_id": block_id})
 
         def on_thinking_end(text: str) -> None:
@@ -1618,8 +1680,10 @@ class Session:
                 counter[0] += 1
                 block_id = f"th:{int(_time.time() * 1000)}:{counter[0]}"
                 started_at = _time.time()
+                synthesized = True
             else:
                 block_id, started_at = pending.pop()
+                synthesized = False
             duration_ms = int((_time.time() - started_at) * 1000)
             self._append_event({
                 "type": "thinking_done",
@@ -1627,12 +1691,27 @@ class Session:
                 "text": text or "",
                 "duration_ms": duration_ms,
             })
-            collected.append({
-                "block_id": block_id,
-                "text": text or "",
-                "duration_ms": duration_ms,
-                "ts": datetime.now().isoformat(),
-            })
+            # Upgrade the placeholder seeded by on_thinking_start (clear the
+            # interrupted flag, fill body + duration). Falls back to append
+            # for the synthesized/defensive path so the persisted list still
+            # has an entry even when the start callback never fired.
+            upgraded = False
+            if not synthesized:
+                for entry in reversed(collected):
+                    if entry.get("block_id") == block_id:
+                        entry["text"] = text or ""
+                        entry["duration_ms"] = duration_ms
+                        entry["ts"] = datetime.now().isoformat()
+                        entry.pop("interrupted", None)
+                        upgraded = True
+                        break
+            if not upgraded:
+                collected.append({
+                    "block_id": block_id,
+                    "text": text or "",
+                    "duration_ms": duration_ms,
+                    "ts": datetime.now().isoformat(),
+                })
             closed_this_call.append(block_id)
             any_closed[0] = True
 
@@ -1684,12 +1763,24 @@ class Session:
         buffered text.  Without this, the last <150-char segment of
         every tool-call iteration would be silently dropped.
         """
+        import time as _time
+
         buf: list[str] = []
         buf_len: list[int] = [0]
         ext = self.on_text_chunk
         FLUSH_THRESHOLD = 150
 
         def on_chunk(chunk: str) -> None:
+            # v2.0.20: stamp the "first chunk of this LLM call" timestamp so
+            # on_llm_call_end can emit agent_output_done with the measured
+            # streaming duration. Only the first chunk of each call sets it;
+            # the callback resets back to None after emitting the event.
+            # Paired with a lightweight ``agent_output_start`` event so the
+            # frontend can open the "Typing…" cell immediately without
+            # waiting for the 150-char buffer below to flush.
+            if self._text_output_started_at is None and chunk:
+                self._text_output_started_at = _time.monotonic()
+                self._append_event({"type": "agent_output_start"})
             buf.append(chunk)
             buf_len[0] += len(chunk)
             if buf_len[0] >= FLUSH_THRESHOLD:
