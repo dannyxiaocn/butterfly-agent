@@ -621,11 +621,73 @@ button:disabled {
   animation: msg-appear 0.18s ease-out;
 }
 
+/* ── Agent output block ── */
+/* v2.0.20: agent cell uses a <details> wrapper just like thinking cells,
+   so the outer .msg strips its default chrome and lets the inner
+   .agent-details carry the border + accent. Streaming (yellow + pulse) →
+   done (accent) mirrors .msg-thinking-running → .msg-thinking-done. */
 .msg-agent {
-  background: var(--bg2);
+  background: transparent;
+  border: none;
+  padding: 0 0 2px 0;
+}
+.agent-details {
   border: 1px solid var(--border);
   border-left: 3px solid var(--accent);
+  border-radius: 6px;
+  background: var(--bg2);
+  overflow: hidden;
 }
+.agent-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  font-size: 12px;
+  font-family: var(--mono);
+}
+.agent-summary::-webkit-details-marker { display: none; }
+.agent-summary::after {
+  content: '▸';
+  margin-left: 0;
+  padding-left: 6px;
+  font-size: 10px;
+  opacity: 0.6;
+}
+.agent-details[open] .agent-summary::after {
+  content: '▾';
+}
+.agent-label {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.agent-word { color: var(--accent); font-weight: 600; }
+.agent-meta {
+  color: var(--dimmed);
+  font-weight: normal;
+  font-size: 11px;
+}
+.agent-meta:empty { display: none; }
+.agent-body {
+  padding: 10px 14px 10px 14px;
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+  color: var(--text);
+  line-height: 1.6;
+}
+.agent-empty {
+  color: var(--dimmed);
+  font-style: italic;
+}
+.msg-agent-streaming .agent-details {
+  border-left-color: var(--yellow);
+  animation: pulseThinking 1.6s ease-in-out infinite;
+}
+.msg-agent-streaming .agent-word { color: var(--dimmed); }
 
 /* ── Thinking block ── */
 .msg-thinking {
@@ -659,16 +721,30 @@ button:disabled {
 
 .thinking-summary::after {
   content: '▸';
-  margin-left: auto;
-  transition: transform 0.15s;
+  margin-left: 0;
+  padding-left: 6px;
   font-size: 10px;
 }
-
 .thinking-details[open] .thinking-summary::after {
-  transform: rotate(90deg);
+  content: '▾';
 }
 
-.thinking-label { color: #9d8fe0; font-weight: 600; }
+
+.thinking-label {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+}
+/* Only "Thought" carries the purple emphasis; the duration + token meta that
+   trails it reads as dim metadata so the cell's headline isn't dominated by
+   the ancillary numbers. */
+.thinking-word { color: #9d8fe0; font-weight: 600; }
+.thinking-meta {
+  color: var(--dimmed);
+  font-weight: normal;
+  font-size: 11px;
+}
+.thinking-meta:empty { display: none; }
 
 .thinking-body {
   padding: 10px 14px 10px 14px;
@@ -684,23 +760,20 @@ button:disabled {
   font-style: italic;
 }
 
-/* Running thinking cell: compact "Thinking…" pill with a pulsing border.
-   Mirrors .msg-tool's running state (yellow accent) but keeps the purple
-   hue so the transition to the completed "Thought for Xs" state is
-   visually continuous. */
+/* Running thinking cell: same <details> chrome as the done state so the
+   ▸ caret is visible from the first paint. The yellow accent + pulse
+   live on the inner .thinking-details while the cell is live; both are
+   dropped when thinking_done arrives and the cell transitions to purple. */
 .msg-thinking-running {
-  background: var(--bg2);
-  border: 1px solid var(--border);
-  border-left: 3px solid var(--yellow);
-  border-radius: 6px;
-  padding: 6px 12px;
-  font-size: 12px;
-  color: var(--dimmed);
-  font-family: var(--mono);
+  background: transparent;
+  border: none;
+  padding: 0 0 2px 0;
+}
+.msg-thinking-running .thinking-details {
+  border-left-color: var(--yellow);
   animation: pulseThinking 1.6s ease-in-out infinite;
 }
-
-.msg-thinking-running .tool-status-name { color: #9d8fe0; }
+.msg-thinking-running .thinking-word { color: var(--dimmed); }
 
 .msg-thinking-done {
   background: transparent;
@@ -708,27 +781,18 @@ button:disabled {
   padding: 0 0 2px 0;
 }
 
-/* Interrupted thinking cell: kept from the running state (no <details>
-   wrapper — the provider never delivered a thinking_done, so we have no
-   body to reveal). The ``msg-thinking-done`` class above strips the chrome,
-   and this rule re-paints it as a dimmed terminal pill so the user can tell
-   the cell is dead rather than still spinning. No pulse animation. */
+/* Interrupted thinking cell: the provider never delivered a thinking_done,
+   so the cell carries the running-state body (usually empty) and a dimmed
+   label. The .msg-thinking-done class strips the outer chrome; here we dim
+   the inner details and kill the pulse so it reads as a dead thought. */
 .msg-thinking-interrupted {
-  background: var(--bg2);
-  border: 1px solid var(--border);
-  border-left: 3px solid var(--dimmed);
-  border-radius: 6px;
-  padding: 6px 12px;
-  font-size: 12px;
-  color: var(--dimmed);
-  font-family: var(--mono);
   opacity: 0.6;
+}
+.msg-thinking-interrupted .thinking-details {
+  border-left-color: var(--dimmed);
   animation: none;
 }
-
-.msg-thinking-interrupted .tool-status-icon,
-.msg-thinking-interrupted .tool-status-name,
-.msg-thinking-interrupted .tool-status-meta {
+.msg-thinking-interrupted .thinking-word {
   color: var(--dimmed);
 }
 
@@ -746,9 +810,9 @@ button:disabled {
 }
 
 .msg-tool {
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-left: 3px solid var(--yellow);
+  background: transparent;
+  border: none;
+  padding: 0 0 2px 0;
   font-family: var(--mono);
   font-size: 12px;
 }
@@ -931,6 +995,7 @@ button:disabled {
 
 .tool-details {
   border: 1px solid var(--border);
+  border-left: 3px solid var(--yellow);
   border-radius: 6px;
   background: var(--bg2);
   overflow: hidden;
@@ -938,26 +1003,25 @@ button:disabled {
 .tool-details .tool-status-summary {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 10px;
+  gap: 6px;
+  padding: 6px 12px;
   cursor: pointer;
   user-select: none;
   list-style: none;
 }
 .tool-details .tool-status-summary .msg-ts {
-  margin-left: 0;
+  margin-left: auto;
 }
 .tool-details .tool-status-summary::-webkit-details-marker { display: none; }
 .tool-details .tool-status-summary::after {
   content: '▸';
-  margin-left: auto;
-  transition: transform 0.15s;
+  margin-left: 0;
   font-size: 10px;
   opacity: 0.6;
   padding-left: 6px;
 }
 .tool-details[open] .tool-status-summary::after {
-  transform: rotate(90deg);
+  content: '▾';
 }
 .tool-body {
   padding: 8px 12px 10px 12px;
@@ -1028,29 +1092,6 @@ button:disabled {
 
 .kv-val {
   color: var(--muted);
-}
-
-/* ====== STREAMING BUBBLE ====== */
-/* Streaming bubble: a placeholder msg-agent cell that appears the moment
-   the model starts running, showing a dim "Agent is working…" until the
-   first partial_text delta arrives, then grows incrementally as deltas
-   accumulate. On the turn's agent event it's promoted in-place into a
-   permanent msg-agent cell (no remove-then-append flash). See chat.ts
-   finalizeStreamingBubble(). */
-.msg-streaming {
-  border-left-color: var(--accent) !important;
-  opacity: 0.95;
-}
-
-.msg-streaming-body {
-  color: var(--text);
-  min-height: 1.5em;
-}
-
-.msg-streaming-placeholder {
-  color: var(--dimmed);
-  font-style: italic;
-  font-size: 12px;
 }
 
 /* ====== HUD BAR ====== */
@@ -1593,9 +1634,6 @@ button:disabled {
   background: transparent !important;
   border: none !important;
 }
-.msg-tool .tool-details {
-  border-left: 3px solid var(--yellow);
-}
 .msg-tool.done .tool-details {
   border-left-color: var(--green);
   opacity: 0.9;
@@ -1621,6 +1659,20 @@ button:disabled {
   color: var(--dimmed);
   font-size: 11px;
 }
+/* Status pill rendered right after the tool name. Shows "running…" while
+   live (dimmed) and the execution duration (e.g. "2.4s", green) once the
+   cell flips to ``.done``. Empty is hidden so stray state stays quiet. */
+.tool-status-duration {
+  color: var(--dimmed);
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 500;
+}
+.msg-tool.done .tool-status-duration {
+  color: var(--green);
+  opacity: 0.9;
+}
+.tool-status-duration:empty { display: none; }
 /* Inline arg preview — lives between tool-status-name and tool-status-meta
    so the tool cell reads as a single line: ✓ bash  ls -la  1.2s. Long args
    get ellipsised; hover reveals the full value via the title attribute. */

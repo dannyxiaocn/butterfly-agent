@@ -565,3 +565,194 @@ class IPCUnitTests(unittest.TestCase):
             _runtime_event_to_display({"type": "loop_end", "iterations": 2, "ts": "T"}),
             [{"type": "loop_end", "iterations": 2, "ts": "T"}],
         )
+
+    def test_agent_output_lifecycle_events_pass_through(self) -> None:
+        """v2.0.20: agent_output_start / agent_output_done are the SSE
+        contract for the live 'Typing…' placeholder and its server-measured
+        duration pill. They must pass through _runtime_event_to_display
+        unchanged so the frontend can consume them verbatim."""
+        self.assertEqual(
+            _runtime_event_to_display({"type": "agent_output_start", "ts": "T"}),
+            [{"type": "agent_output_start", "ts": "T"}],
+        )
+        self.assertEqual(
+            _runtime_event_to_display(
+                {"type": "agent_output_done", "iteration": 1, "duration_ms": 1234, "ts": "T"}
+            ),
+            [{"type": "agent_output_done", "iteration": 1, "duration_ms": 1234, "ts": "T"}],
+        )
+
+    def test_history_replay_pairs_agent_output_durations_positionally(self) -> None:
+        """v2.0.20: each text block in a replayed turn pulls one entry from
+        ``turn["agent_output_durations"]`` in order. The cursor is per-turn,
+        so surplus/missing durations in a neighbouring turn can never shift
+        the mapping within this one."""
+        event = {
+            "type": "turn",
+            "ts": "2026-04-18T00:00:10",
+            "agent_output_durations": [1200, 800],
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "text", "text": "first part"},
+                        {"type": "tool_use", "id": "t1", "name": "bash", "input": {"command": "pwd"}},
+                        {"type": "text", "text": "second part"},
+                    ],
+                }
+            ],
+        }
+        display = _context_event_to_display(event, for_history=True)
+        agent_events = [e for e in display if e["type"] == "agent"]
+        self.assertEqual(len(agent_events), 2)
+        self.assertEqual(agent_events[0]["content"], "first part")
+        self.assertEqual(agent_events[0]["duration_ms"], 1200)
+        self.assertEqual(agent_events[1]["content"], "second part")
+        self.assertEqual(agent_events[1]["duration_ms"], 800)
+
+    def test_history_replay_surplus_text_blocks_have_no_duration_pill(self) -> None:
+        """Rare provider quirk: one LLM call emits multiple text blocks,
+        so the turn's text-block count exceeds the durations list length.
+        Extra text blocks MUST render without a ``duration_ms`` field
+        instead of crashing or pulling a stale value from somewhere."""
+        event = {
+            "type": "turn",
+            "ts": "2026-04-18T00:00:10",
+            "agent_output_durations": [1000],  # only 1 duration for 2 text blocks
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "text", "text": "A"},
+                        {"type": "text", "text": "B"},
+                    ],
+                }
+            ],
+        }
+        display = _context_event_to_display(event, for_history=True)
+        agent_events = [e for e in display if e["type"] == "agent"]
+        self.assertEqual(len(agent_events), 2)
+        self.assertEqual(agent_events[0]["duration_ms"], 1000)
+        self.assertNotIn("duration_ms", agent_events[1])
+
+    def test_history_replay_missing_durations_field_leaves_agent_events_bare(self) -> None:
+        """Pre-v2.0.20 turns don't carry ``agent_output_durations``. Replay
+        must still emit the agent event(s), just without a duration pill —
+        the frontend falls back to rendering without the "Agent Xs" meta."""
+        event = {
+            "type": "turn",
+            "ts": "2026-04-18T00:00:10",
+            "messages": [
+                {"role": "assistant", "content": [{"type": "text", "text": "legacy"}]},
+            ],
+        }
+        display = _context_event_to_display(event, for_history=True)
+        agent_events = [e for e in display if e["type"] == "agent"]
+        self.assertEqual(len(agent_events), 1)
+        self.assertEqual(agent_events[0]["content"], "legacy")
+        self.assertNotIn("duration_ms", agent_events[0])
+
+    def test_history_replay_forwards_interrupted_flag_on_thinking(self) -> None:
+        """v2.0.20: a persisted thinking block carrying ``interrupted=True``
+        (survived from on_thinking_start when the turn was cancelled before
+        on_thinking_end fired) must surface on the replayed ``thinking``
+        display event so the frontend can render 'Thinking interrupted'."""
+        event = {
+            "type": "turn",
+            "messages": [{"role": "assistant", "content": "done"}],
+            "ts": "2026-04-18T00:00:00",
+            "thinking_blocks": [
+                {"block_id": "th:a", "text": "completed thought", "duration_ms": 500, "ts": "2026-04-18T00:00:00"},
+                {"block_id": "th:b", "text": "", "ts": "2026-04-18T00:00:01", "interrupted": True},
+            ],
+        }
+        display = _context_event_to_display(event, for_history=True)
+        thinking = [e for e in display if e["type"] == "thinking"]
+        self.assertEqual(len(thinking), 2)
+        self.assertNotIn("interrupted", thinking[0])
+        self.assertTrue(thinking[1].get("interrupted"))
+        self.assertEqual(thinking[1].get("content", ""), "")
+
+    def test_history_replay_pairs_tool_duration_from_events_jsonl(self) -> None:
+        """v2.0.20: FileIPC.tail_history scans events.jsonl for tool_done
+        lines, builds a ``tool_use_id → duration_ms`` map, and stamps
+        ``duration_ms`` onto the replayed ``tool`` event. The live
+        ``tool_done`` that would populate this span isn't replayed on
+        history fetch, so without the scan reloaded cells would show
+        a bare "bash" name with no duration pill."""
+        with TemporaryDirectory() as tmp:
+            system_dir = Path(tmp) / "_sessions" / "demo"
+            system_dir.mkdir(parents=True)
+            (system_dir / "context.jsonl").write_text(
+                json.dumps({
+                    "type": "turn",
+                    "ts": "2026-04-18T00:00:10",
+                    "messages": [
+                        {
+                            "role": "assistant",
+                            "content": [
+                                {"type": "tool_use", "id": "use_42", "name": "bash",
+                                 "input": {"command": "ls"}},
+                            ],
+                        },
+                        {
+                            "role": "tool",
+                            "content": [
+                                {"type": "tool_result", "tool_use_id": "use_42",
+                                 "content": "file.txt\n", "is_error": False},
+                            ],
+                        },
+                    ],
+                }) + "\n",
+                encoding="utf-8",
+            )
+            (system_dir / "events.jsonl").write_text(
+                json.dumps({
+                    "type": "tool_done",
+                    "tool_use_id": "use_42",
+                    "duration_ms": 2345,
+                    "name": "bash",
+                    "result_len": 9,
+                }) + "\n",
+                encoding="utf-8",
+            )
+            ipc = FileIPC(system_dir)
+            tool_events = [
+                ev for ev, _ in ipc.tail_history() if ev["type"] == "tool"
+            ]
+            self.assertEqual(len(tool_events), 1)
+            self.assertEqual(tool_events[0]["duration_ms"], 2345)
+
+    def test_scan_tool_durations_skips_malformed_lines(self) -> None:
+        """events.jsonl is append-only and written concurrently with reads.
+        A truncated tail line or JSON decode error must NOT abort the
+        scan — the map is built best-effort so a single bad line doesn't
+        strip duration pills off every tool cell on reload."""
+        with TemporaryDirectory() as tmp:
+            system_dir = Path(tmp) / "_sessions" / "demo"
+            system_dir.mkdir(parents=True)
+            (system_dir / "events.jsonl").write_text(
+                # Good line, then a malformed line, then another good line.
+                json.dumps({"type": "tool_done", "tool_use_id": "u1", "duration_ms": 100}) + "\n"
+                + "{not valid json\n"
+                + json.dumps({"type": "tool_done", "tool_use_id": "u2", "duration_ms": 200}) + "\n"
+                # A tool_done missing either field — should be skipped.
+                + json.dumps({"type": "tool_done", "duration_ms": 300}) + "\n"
+                + json.dumps({"type": "tool_done", "tool_use_id": "u3"}) + "\n"
+                # A non-tool_done event — should be skipped.
+                + json.dumps({"type": "loop_start", "ts": "T"}) + "\n",
+                encoding="utf-8",
+            )
+            ipc = FileIPC(system_dir)
+            durations = ipc._scan_tool_durations()
+            self.assertEqual(durations, {"u1": 100, "u2": 200})
+
+    def test_scan_tool_durations_returns_empty_when_events_file_missing(self) -> None:
+        """Fresh session: events.jsonl doesn't exist yet. The scan must
+        return an empty dict (not raise), so history replay still works
+        on a turn with zero tool calls persisted so far."""
+        with TemporaryDirectory() as tmp:
+            system_dir = Path(tmp) / "_sessions" / "demo"
+            system_dir.mkdir(parents=True)
+            ipc = FileIPC(system_dir)
+            self.assertEqual(ipc._scan_tool_durations(), {})

@@ -146,6 +146,10 @@ export interface DisplayEvent {
   // reasoning_tokens for one LLM call to a specific thinking block so the
   // cell label flips from "Thought Xs" to "Thought Xs for N tokens".
   reasoning_tokens?: number;
+  // v2.0.20: persisted thinking block whose turn ended via interrupt before
+  // on_thinking_end closed it — history replay renders these as
+  // "Thinking interrupted" instead of the normal "Thought" label.
+  interrupted?: boolean;
 }
 
 export type SessionTone = 'running' | 'napping' | 'persistent' | 'stopped' | 'idle' | 'meta';

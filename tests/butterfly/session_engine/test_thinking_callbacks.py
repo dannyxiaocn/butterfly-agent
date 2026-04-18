@@ -9,9 +9,11 @@ tests lock down the observable behaviour consumed by ``_do_chat`` /
 * ``get_collected()`` returns blocks in completion order with the
   block_id allocated by the matching start.
 * ``had_any()`` flips to True only after the first ``on_thinking_end``.
-* An interrupted block (start without end) is NOT collected — matches
-  the live ``thinking_start``/``thinking_done`` contract and prevents
-  history replay from inventing a block that the provider never closed.
+* v2.0.20+: an interrupted block (start without end) IS collected as a
+  placeholder carrying ``interrupted=True`` so history replay can render
+  "Thinking interrupted" instead of silently dropping the block. The
+  placeholder is upgraded in place (flag cleared, body + duration filled)
+  when the matching ``on_thinking_end`` fires.
 * A spurious ``on_thinking_end`` with no pending start is still
   captured (defensive path) so no user-visible text is lost.
 * Each ``on_thinking_end`` writes a matching ``thinking_done`` event to
@@ -87,12 +89,13 @@ class ThinkingCallbacksTest(unittest.TestCase):
                 self.assertIn("duration_ms", b)
                 self.assertIn("ts", b)
 
-    def test_interrupted_block_is_not_collected(self) -> None:
-        """A ``thinking_start`` with no matching ``thinking_end`` (mid-turn
-        cancel) must NOT surface in ``get_collected()`` — otherwise the
-        persisted turn would carry a block the frontend never saw finalize
-        and history replay would render a cell without the 'Thought for Xs'
-        body."""
+    def test_interrupted_block_survives_as_placeholder(self) -> None:
+        """v2.0.20: a ``thinking_start`` with no matching ``thinking_end``
+        (mid-turn cancel) MUST surface in ``get_collected()`` as a
+        placeholder with ``interrupted=True``, so history replay renders
+        "Thinking interrupted" instead of silently dropping the block.
+        The completed block preceding it keeps its normal shape (no
+        ``interrupted`` flag, text + duration populated)."""
         with TemporaryDirectory() as tmp:
             s = self._new_session(Path(tmp))
             on_start, on_end, had_any, get_collected = s._make_thinking_callbacks()
@@ -100,9 +103,31 @@ class ThinkingCallbacksTest(unittest.TestCase):
             on_end("completed body")
             on_start()  # never closed — simulates cancel mid-thinking
             blocks = get_collected()
-            self.assertEqual(len(blocks), 1)
+            self.assertEqual(len(blocks), 2)
             self.assertEqual(blocks[0]["text"], "completed body")
+            self.assertNotIn("interrupted", blocks[0])
+            self.assertEqual(blocks[1]["text"], "")
+            self.assertTrue(blocks[1].get("interrupted"))
+            self.assertTrue(blocks[1]["block_id"].startswith("th:"))
             self.assertTrue(had_any())
+
+    def test_placeholder_flag_cleared_on_normal_end(self) -> None:
+        """On ``on_thinking_start`` a placeholder entry is seeded with
+        ``interrupted=True``. A matching ``on_thinking_end`` MUST locate
+        that entry by ``block_id`` and upgrade it in place — text/duration
+        filled, ``interrupted`` popped — NOT append a duplicate entry.
+        Regression pin for the v2.0.21 upgrade-in-place loop."""
+        with TemporaryDirectory() as tmp:
+            s = self._new_session(Path(tmp))
+            on_start, on_end, _, get_collected = s._make_thinking_callbacks()
+            on_start()
+            on_end("finished body")
+            blocks = get_collected()
+            # Exactly one entry — the placeholder was upgraded, not duplicated.
+            self.assertEqual(len(blocks), 1)
+            self.assertEqual(blocks[0]["text"], "finished body")
+            self.assertNotIn("interrupted", blocks[0])
+            self.assertIn("duration_ms", blocks[0])
 
     def test_orphan_end_without_start_is_still_captured(self) -> None:
         """Defensive path: provider emits thinking_end with no matching

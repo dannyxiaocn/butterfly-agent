@@ -209,3 +209,66 @@ When `manifest.mode == "explorer"`, `Session.__init__` constructs
 Write / Edit / Bash executors. See `docs/butterfly/core/guardian.md` for
 the boundary contract and `docs/butterfly/tool_engine/design.md` §12 for
 the broader sub-agent flow.
+
+---
+
+## Agent output duration — per-turn positional pairing (v2.0.20)
+
+`Session` buffers each LLM call's **text-output** duration in a list
+(`self._current_turn_agent_durations`) that lives for the span of one chat
+or tick run. `_make_llm_call_end_callback` appends an entry whenever the
+call produced text (i.e. `_text_output_started_at` was stamped by the
+chunk callback during that call). The turn writer drops the list onto
+`turn["agent_output_durations"]` — parallel to `thinking_blocks`.
+
+### Invariants
+
+1. The list is **reset at the start** of each `_do_chat` / `_do_tick`,
+   before any callbacks are installed, so a prior run's leftovers can
+   never bleed into the next turn.
+2. Entries are **ordered chronologically** — the same order LLM calls
+   fire during `Agent.run()`, and therefore the same order text content
+   blocks appear in the turn's assistant messages.
+3. `FileIPC._context_event_to_display` pairs the list with text blocks
+   **positionally WITHIN the same turn**: a local cursor, initialized
+   per turn, advances once per non-empty text block. Surplus text blocks
+   (rare provider quirk: one LLM call emits two text blocks) render
+   without a duration pill; surplus durations are ignored.
+
+Cross-turn positional pairing (earlier prototype, now removed) was
+fragile: any turn without the instrumentation — e.g. turns written
+before this release — shifted the cursor and attributed call N+1's
+duration to call N on reload, so the same cell could show 0.3 s live
+and 0.7 s after a page reload.
+
+## Interrupted thinking — placeholder-on-start (v2.0.20)
+
+`_make_thinking_callbacks` seeds the collected list on **every**
+`on_thinking_start` with an entry carrying `interrupted=True`:
+
+```python
+collected.append({
+    "block_id": block_id,
+    "text": "",
+    "ts": datetime.now().isoformat(),
+    "interrupted": True,
+})
+```
+
+`on_thinking_end` locates the entry by `block_id` and upgrades it in
+place: fills `text` + `duration_ms`, clears the `interrupted` flag.
+Successful turns therefore persist an `interrupted`-free
+`thinking_blocks` list.
+
+A turn cancelled between the two callbacks leaves one or more
+placeholders un-upgraded. `_save_partial_chat_turn` persists them as-is,
+and `ipc.py._context_event_to_display` forwards the `interrupted` flag
+onto the replayed `thinking` display event so history replay renders
+"Thinking interrupted" for those blocks instead of a bland "Thought 0.0s".
+
+Known limitation: `pending` is a **LIFO stack**. Providers that emit
+non-nested thinking block pairs (`start1 → start2 → end1 → end2`) would
+upgrade the wrong placeholder. None of the currently supported providers
+(Anthropic / Codex / Kimi) emit this pattern, so the constraint is
+adequate in practice; revisit if a future provider requires ordered
+pairing by `block_id`.

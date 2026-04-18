@@ -41,6 +41,22 @@ Disable with `BUTTERFLY_AUTOUPDATE_INTERVAL_SEC=0`. Interval seconds default is 
 
 Why `os.execvp` instead of a respawn-with-parent pattern: `execvp` replaces the process image in place, so the PID is preserved, open sockets held by uvicorn in the co-located web wrapper (see `ui/cli/main.py::cmd_default`) get dropped cleanly when the wrapper itself notices the server child exited. `_clear_pid` is called immediately before `execvp` so the new image can claim the PID file unambiguously.
 
+## Agent-output lifecycle events (v2.0.20)
+
+Text output from an LLM call is surfaced to the frontend through three dedicated events on `events.jsonl`, all emitted from `Session` during `Agent.run()`:
+
+| Event | Emitted by | Payload | Frontend effect |
+| --- | --- | --- | --- |
+| `agent_output_start` | `_make_text_chunk_callback`'s `on_chunk` on the FIRST non-empty chunk of each LLM call | `{type, ts}` | Open the "Typing…" cell immediately, without waiting for the 150-char `partial_text` flush. |
+| `partial_text` | `on_chunk` when the buffer reaches 150 chars (plus one final flush after `agent.run()`) | `{type, content, ts}` | Accumulated silently into `streamingText`; used by the intermediate-finalize path when a mid-turn `tool_call` freezes the cell before an `agent` event arrives. |
+| `agent_output_done` | `_make_llm_call_end_callback` when the call ends AND a start timestamp was stamped during that call | `{type, iteration, duration_ms, ts}` | Stamp `streamingEl.dataset.serverDurationMs` so the finalized "Agent 2.4s" pill matches what history replay will read back. |
+
+`_text_output_started_at` is a Session-scoped monotonic timestamp set by the first chunk and cleared by `on_llm_call_end` (or the surrounding `finally` block in `_do_chat` / `_do_tick`) — a task cancelled between these two points MUST clear it so the next run's first LLM call doesn't inherit stale dead-time in its duration.
+
+## Tool lifecycle — `tool_use_id` on `tool_done` (v2.0.20)
+
+Every `tool_done` event on `events.jsonl` carries the originating `tool_use_id` (previously only `duration_ms`). `FileIPC.tail_history` makes a single pass over `events.jsonl` on each history fetch and builds a `tool_use_id → duration_ms` map; `_context_event_to_display` attaches `duration_ms` to each replayed `tool` event whose `id` matches, so reloaded tool cells render the "✓ bash 2.4s …" pill the live cell showed. The scan is keyed (not positional), so interleaved / missing entries from older sessions don't mis-associate.
+
 ## Unified CLI (v2.0.16)
 
 `butterfly-server` and `butterfly-web` entry points were removed from `pyproject.toml`. Everything flows through the single `butterfly` command:
