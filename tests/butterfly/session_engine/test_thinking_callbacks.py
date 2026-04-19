@@ -28,6 +28,7 @@ from tempfile import TemporaryDirectory
 
 from butterfly.core.agent import Agent
 from butterfly.runtime.ipc import FileIPC
+from butterfly.session_engine.pending_inputs import ChatItem
 from butterfly.session_engine.session import Session
 
 
@@ -143,6 +144,70 @@ class ThinkingCallbacksTest(unittest.TestCase):
             self.assertEqual(blocks[0]["text"], "orphan body")
             self.assertTrue(blocks[0]["block_id"].startswith("th:"))
             self.assertTrue(had_any())
+
+    def test_partial_turn_persists_thinking_only_interrupt(self) -> None:
+        """v2.0.27 regression pin: cancel-during-thinking must still write
+        a turn with ``thinking_blocks`` so reload renders "Thinking
+        interrupted". The v2.0.26 two-queue refactor left
+        ``_save_partial_chat_turn`` guarded by ``if not partial: return``,
+        which dropped the placeholder whenever the first ``Agent.run``
+        iteration never committed (exactly the mid-thought cancel case —
+        thinking happens inside ``provider.complete()`` so ``_history``
+        is still at baseline). Without this write, the persisted
+        ``thinking_blocks`` queue never reaches ``_context_event_to_display``
+        on history replay.
+        """
+        with TemporaryDirectory() as tmp:
+            s = self._new_session(Path(tmp))
+            on_start, _on_end, _had_any, get_collected = s._make_thinking_callbacks()
+            on_start()  # no matching end → interrupted placeholder
+            thinking_blocks = get_collected()
+            self.assertEqual(len(thinking_blocks), 1)
+            self.assertTrue(thinking_blocks[0].get("interrupted"))
+
+            item = ChatItem(content="anything", mode="interrupt", source="user")
+            # Baseline: no iterations committed.
+            s._save_partial_chat_turn(
+                item, old_len=0, tool_call_count=0, had_thinking=False,
+                thinking_blocks=thinking_blocks,
+            )
+
+            ipc = FileIPC(s.system_dir)
+            lines = [
+                json.loads(line)
+                for line in ipc.context_path.read_text().splitlines()
+                if line.strip()
+            ]
+            turns = [e for e in lines if e.get("type") == "turn"]
+            self.assertEqual(len(turns), 1)
+            t = turns[0]
+            self.assertTrue(t.get("interrupted"))
+            self.assertEqual(t.get("messages"), [])
+            self.assertEqual(len(t.get("thinking_blocks", [])), 1)
+            self.assertTrue(t["thinking_blocks"][0].get("interrupted"))
+
+    def test_partial_turn_still_skips_when_nothing_to_save(self) -> None:
+        """The empty-guard still applies when BOTH partial and
+        thinking_blocks are empty — we must not spam context.jsonl with
+        blank turns when a chat is cancelled before any callback fires."""
+        with TemporaryDirectory() as tmp:
+            s = self._new_session(Path(tmp))
+            item = ChatItem(content="anything", mode="interrupt", source="user")
+            s._save_partial_chat_turn(
+                item, old_len=0, tool_call_count=0, had_thinking=False,
+                thinking_blocks=None,
+            )
+            ipc = FileIPC(s.system_dir)
+            # context.jsonl may not exist at all when nothing was written.
+            if ipc.context_path.exists():
+                lines = [
+                    json.loads(line)
+                    for line in ipc.context_path.read_text().splitlines()
+                    if line.strip()
+                ]
+                self.assertEqual(
+                    [e for e in lines if e.get("type") == "turn"], []
+                )
 
     def test_get_collected_returns_snapshot_not_live_reference(self) -> None:
         """``get_collected()`` hands back a ``list(...)`` copy, so callers

@@ -986,9 +986,19 @@ class Session:
         the in-progress assistant text + tool calls would be invisible to
         future SSE clients (only ``agent._history`` would remember, and
         only until the next reload).
+
+        v2.0.27: also persist when ``partial`` is empty but ``thinking_blocks``
+        carries an interrupted placeholder. Thinking happens inside
+        ``provider.complete()`` — if cancel lands mid-thought the first
+        ``Agent.run`` iteration never commits, so ``_history`` is still at
+        baseline. The v2.0.21 ``{interrupted: True}`` placeholder seeded by
+        ``on_thinking_start`` would then be silently dropped here (bug:
+        "Thinking interrupted" cell stopped showing on reload). Writing a
+        messages=[] turn lets ``_context_event_to_display``'s tail-sweep
+        emit the persisted thinking block on history replay.
         """
         partial = self._agent._history[old_len:]
-        if not partial:
+        if not partial and not thinking_blocks:
             return
         turn: dict = {
             "type": "turn",
@@ -1372,11 +1382,44 @@ class Session:
                         f"{sub_result}"
                     )
                 else:
-                    msg = (
+                    # v2.0.27: inline the output file directly into the
+                    # notification so the agent doesn't have to round-trip
+                    # a ``tool_output`` call just to read the result. Cap
+                    # matches the ``tool_finalize`` payload below (8KB) so
+                    # a huge dump doesn't blow out the context window; the
+                    # full file is still fetchable via ``tool_output`` for
+                    # the overflow case.
+                    _BG_INLINE_MAX = 8000
+                    output_text = ""
+                    if entry.output_file:
+                        try:
+                            opath = Path(entry.output_file)
+                            if opath.exists():
+                                with opath.open(
+                                    "r", encoding="utf-8", errors="replace"
+                                ) as _f:
+                                    output_text = _f.read()
+                        except OSError:
+                            output_text = ""
+                    header = (
                         f"Background task {entry.tid} ({entry.tool_name}) completed "
-                        f"with exit {entry.exit_code}{duration}. {entry.output_bytes}B output.\n"
-                        f'Fetch full output: tool_output(task_id="{entry.tid}").'
+                        f"with exit {entry.exit_code}{duration}. "
+                        f"{entry.output_bytes}B output"
                     )
+                    if output_text:
+                        truncated = len(output_text) > _BG_INLINE_MAX
+                        body = output_text[:_BG_INLINE_MAX]
+                        msg = f"{header}:\n\n{body}"
+                        if truncated:
+                            msg += (
+                                f"\n\n[truncated at {_BG_INLINE_MAX}B; "
+                                f'full output: tool_output(task_id="{entry.tid}")]'
+                            )
+                    else:
+                        msg = (
+                            f"{header}.\n"
+                            f'Fetch full output: tool_output(task_id="{entry.tid}").'
+                        )
             elif evt.kind == "stalled":
                 msg = (
                     f"Background task {entry.tid} ({entry.tool_name}) has produced "

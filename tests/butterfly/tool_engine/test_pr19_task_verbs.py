@@ -91,6 +91,29 @@ async def test_task_finish_one_shot(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_task_finish_recurring_becomes_terminal(tmp_path: Path) -> None:
+    """task_finish on a recurring card must force status=finished so the
+    dispatcher stops re-scheduling it. Regression: ``TaskCard.mark_finished``
+    sets recurring cards back to ``pending`` (for the normal tick-complete
+    path), so calling it from the agent-invoked terminate verb left the
+    task looping forever.
+    """
+    from butterfly.session_engine.task_cards import load_card, load_due_cards
+
+    await TaskCreateExecutor(tasks_dir=tmp_path).execute(
+        name="loop", description="every minute", interval=60
+    )
+    await TaskFinishExecutor(tasks_dir=tmp_path).execute(name="loop")
+
+    card = load_card(tmp_path, "loop")
+    assert card is not None
+    assert card.status == "finished"
+    # is_due() now returns False, and load_due_cards excludes it entirely.
+    assert card.is_due() is False
+    assert all(c.name != "loop" for c in load_due_cards(tmp_path))
+
+
+@pytest.mark.asyncio
 async def test_task_missing_name(tmp_path: Path) -> None:
     out = await TaskFinishExecutor(tasks_dir=tmp_path).execute(name="ghost")
     assert out.startswith("Error:") and "not found" in out
