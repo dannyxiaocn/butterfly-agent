@@ -93,19 +93,25 @@ def get_session(session_id: str, sessions_dir: Path, system_sessions_dir: Path) 
     }
 
 
-def _session_priority(info: dict) -> int:
-    if info.get("model_state") == "running" and info.get("pid_alive") and info.get("status") != "stopped":
-        return 0
-    if info.get("has_tasks") and info.get("pid_alive") and info.get("status") != "stopped":
-        return 1
-    if info.get("status") != "stopped":
-        return 2
-    return 4 if _is_stale_stopped(info) else 3
+def _last_activity_key(info: dict) -> str:
+    """Timestamp used for sidebar sorting.
+
+    Prefer the last time the session actually ran a turn; fall back to the
+    mtime of the most recent task card update, then to creation time. This
+    keeps a freshly-woken idle session above a stale one that was last
+    running a week ago — sort is strictly by recency regardless of state.
+    """
+    return (
+        info.get("last_run_at")
+        or info.get("updated_at")
+        or info.get("tasks_updated_at")
+        or info.get("created_at")
+        or ""
+    )
 
 
 def sort_sessions(sessions: list[dict]) -> list[dict]:
-    sessions.sort(key=lambda s: s.get("last_run_at") or s.get("created_at") or "", reverse=True)
-    sessions.sort(key=_session_priority)
+    sessions.sort(key=_last_activity_key, reverse=True)
     return sessions
 
 

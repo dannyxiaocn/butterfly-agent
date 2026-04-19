@@ -30,21 +30,33 @@ class WebHelpersTest(unittest.TestCase):
         self.assertEqual(parsed["_evt"], 34)
         self.assertEqual(parsed["content"], "hello")
 
-    def test_sort_sessions_prioritizes_running_before_idle(self) -> None:
+    def test_sort_sessions_prefers_last_run_at_over_created_at(self) -> None:
+        # v2.0.24: pure recency sort. A session whose last run is newer wins
+        # regardless of state — the old _session_priority pin is gone.
         sessions = [
-            {"id": "idle", "pid_alive": False, "status": "active", "model_state": "idle", "created_at": "2026-01-01T00:00:00"},
-            {"id": "run", "pid_alive": True, "status": "active", "model_state": "running", "created_at": "2026-01-01T00:00:01"},
+            {"id": "recent_run", "pid_alive": False, "status": "active",
+             "model_state": "idle", "created_at": "2026-01-01T00:00:00",
+             "last_run_at": "2026-04-18T12:00:00"},
+            {"id": "fresh_created", "pid_alive": False, "status": "active",
+             "model_state": "idle", "created_at": "2026-04-18T09:00:00"},
         ]
         ordered = sort_sessions(sessions)
-        self.assertEqual(ordered[0]["id"], "run")
+        self.assertEqual(ordered[0]["id"], "recent_run")
 
-    def test_sort_sessions_prioritizes_idle_before_stopped(self) -> None:
+    def test_sort_sessions_does_not_pin_stopped_below_active(self) -> None:
+        # v2.0.24: a more recently active STOPPED session now sorts above an
+        # older active-but-idle one — the prior _session_priority pin that
+        # floated non-stopped sessions to the top was intentionally removed.
         sessions = [
-            {"id": "stopped", "pid_alive": False, "status": "stopped", "model_state": "idle", "created_at": "2026-01-01T00:00:01"},
-            {"id": "idle", "pid_alive": False, "status": "active", "model_state": "idle", "created_at": "2026-01-01T00:00:00"},
+            {"id": "stopped_recent", "pid_alive": False, "status": "stopped",
+             "model_state": "idle", "created_at": "2026-01-01T00:00:00",
+             "last_run_at": "2026-04-18T12:00:00"},
+            {"id": "active_stale", "pid_alive": False, "status": "active",
+             "model_state": "idle", "created_at": "2026-01-01T00:00:00",
+             "last_run_at": "2026-04-10T09:00:00"},
         ]
         ordered = sort_sessions(sessions)
-        self.assertEqual(ordered[0]["id"], "idle")
+        self.assertEqual(ordered[0]["id"], "stopped_recent")
 
     def test_create_session_resolves_agent_name_from_relative_path(self) -> None:
         with TemporaryDirectory() as tmp:

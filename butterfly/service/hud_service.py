@@ -85,24 +85,38 @@ def get_hud(session_id: str, sessions_dir: Path, system_sessions_dir: Path) -> d
             pass
     model_name = params.get('model') or None
     max_context_tokens = get_max_context_tokens(model_name)
-    # Running sub_agent count, derived from on-disk panel entries so the
-    # HUD can restore the badge after a page refresh — the SSE stream
-    # only re-emits ``sub_agent_count`` when a child changes state.
-    # (PR #28 review Gap #7.)
+    # Running bg work counts, derived from on-disk panel entries so the
+    # HUD can restore the second-row badges after a page refresh / tab
+    # switch — the SSE stream only re-emits ``sub_agent_count`` /
+    # ``tool_finalize`` when a child changes state, so without these a
+    # reload mid-run reads "0 running" for the entire lifetime of the
+    # outstanding task. (PR #28 review Gap #7 for sub_agent; PR #43
+    # review item #1 for bash.)
     sub_agents_running = 0
+    bash_running = 0
     if session_dir.exists():
         try:
             from butterfly.session_engine.panel import (
                 list_entries as _list_entries,
                 TYPE_SUB_AGENT as _TYPE_SUB_AGENT,
+                TYPE_PENDING_TOOL as _TYPE_PENDING_TOOL,
             )
             panel_dir = session_dir / 'core' / 'panel'
-            sub_agents_running = sum(
-                1 for e in _list_entries(panel_dir)
-                if e.type == _TYPE_SUB_AGENT and not e.is_terminal()
-            )
+            for e in _list_entries(panel_dir):
+                if e.is_terminal():
+                    continue
+                if e.type == _TYPE_SUB_AGENT:
+                    sub_agents_running += 1
+                elif e.type == _TYPE_PENDING_TOOL and e.tool_name == 'bash':
+                    bash_running += 1
         except Exception:
             sub_agents_running = 0
+            bash_running = 0
+    # thinking_effort: whitelist against valid provider values so a typo
+    # in config.yaml (e.g. ``hgih``) doesn't get painted next to the
+    # model name as-is. Null when thinking is off or value is unknown.
+    raw_effort = params.get('thinking_effort')
+    thinking_effort = raw_effort if raw_effort in ('high', 'medium', 'low') else None
     return {
         'cwd': git_root or str(project_root),
         'context_bytes': ipc.context_size(),  # kept for legacy fallback in frontend
@@ -110,7 +124,10 @@ def get_hud(session_id: str, sessions_dir: Path, system_sessions_dir: Path) -> d
         'max_context_tokens': max_context_tokens,
         'toks_per_s': toks_per_s,
         'model': model_name,
+        'thinking': bool(params.get('thinking')),
+        'thinking_effort': thinking_effort,
         'git': {'files': git_files, 'added': git_added, 'deleted': git_deleted},
         'usage': latest_usage,
         'sub_agents_running': sub_agents_running,
+        'bash_running': bash_running,
     }

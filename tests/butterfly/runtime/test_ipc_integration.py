@@ -153,16 +153,18 @@ async def test_session_chat_writes_turn_to_context_and_status_to_events(tmp_path
     assert [e["type"] for e in context_events] == ["turn"]
 
     # events.jsonl: model_status running + loop callbacks + idle.
-    # v2.0.20: ``llm_call_usage`` is emitted per ``provider.complete()`` —
-    # this single-iteration run produces one.
+    # v2.0.20: ``llm_call_usage`` is emitted per ``provider.complete()``.
+    # v2.0.23: ``iteration_usage`` is emitted immediately after each
+    # ``llm_call_usage`` to power the per-cell live token footer.
     assert [e["type"] for e in runtime_events] == [
-        "model_status", "loop_start", "llm_call_usage", "loop_end", "model_status",
+        "model_status", "loop_start", "llm_call_usage", "iteration_usage",
+        "loop_end", "model_status",
     ]
     assert runtime_events[0]["state"] == "running"
     assert runtime_events[0]["source"] == "user"
-    assert runtime_events[3]["iterations"] == 1
-    assert runtime_events[4]["state"] == "idle"
-    assert runtime_events[4]["source"] == "user"
+    assert runtime_events[4]["iterations"] == 1
+    assert runtime_events[5]["state"] == "idle"
+    assert runtime_events[5]["source"] == "user"
 
     status = read_session_status(session.system_dir)
     assert status["model_state"] == "idle"
@@ -240,20 +242,25 @@ async def test_session_chat_composes_hook_events_with_external_callbacks(tmp_pat
     assert result.iterations == 2
     # v2.0.20: one ``llm_call_usage`` per ``provider.complete()`` — two here
     # (tool-calling iteration + final-reply iteration).
+    # v2.0.23: ``Agent.run`` loop was reordered so ``on_tool_call`` fires
+    # BEFORE ``on_llm_call_end``, and a new ``iteration_usage`` event is
+    # emitted after each ``llm_call_usage`` for the per-cell live footer.
     assert [e["type"] for e in runtime_events] == [
         "model_status",
         "loop_start",
-        "llm_call_usage",
         "tool_call",
+        "llm_call_usage",
+        "iteration_usage",
         "tool_done",
         "llm_call_usage",
+        "iteration_usage",
         "loop_end",
         "model_status",
     ]
-    assert runtime_events[4]["name"] == "echo_tool"
-    assert runtime_events[4]["result_len"] == 9
-    assert runtime_events[6]["iterations"] == 2
-    assert runtime_events[6]["usage"] == {"input": 15, "output": 3, "cache_read": 3, "cache_write": 0, "reasoning": 0}
+    assert runtime_events[5]["name"] == "echo_tool"
+    assert runtime_events[5]["result_len"] == 9
+    assert runtime_events[8]["iterations"] == 2
+    assert runtime_events[8]["usage"] == {"input": 15, "output": 3, "cache_read": 3, "cache_write": 0, "reasoning": 0}
 
     assert starts == ["hello"]
     assert done_calls == [("echo_tool", {"text": "ping"}, "echo:ping")]
@@ -294,23 +301,33 @@ async def test_session_tick_emits_hook_events_and_preserves_turn_flags(tmp_path)
     assert result is not None
     assert result.iterations == 2
     # v2.0.20: one ``llm_call_usage`` per ``provider.complete()`` — two here.
+    # v2.0.23: ``task_wakeup`` moved from events.jsonl to context.jsonl so
+    # history replay can render the sky-blue Wakeup card; it no longer
+    # appears in runtime_events. ``Agent.run`` loop reorder puts
+    # ``tool_call`` before ``llm_call_usage``, and each ``llm_call_usage``
+    # is now paired with an ``iteration_usage`` for the live footer.
     assert [e["type"] for e in runtime_events] == [
-        "task_wakeup",
         "model_status",
         "loop_start",
-        "llm_call_usage",
         "tool_call",
+        "llm_call_usage",
+        "iteration_usage",
         "tool_done",
         "llm_call_usage",
+        "iteration_usage",
         "loop_end",
         "model_status",
     ]
-    assert runtime_events[7]["iterations"] == 2
+    assert runtime_events[8]["iterations"] == 2
 
-    assert context_events[0]["triggered_by"] == "task:duty"
-    assert context_events[0]["pre_triggered"] is True
-    assert context_events[0]["has_streaming_tools"] is True
-    assert context_events[0]["usage"] == {"input": 10, "output": 4, "cache_read": 0, "cache_write": 0, "reasoning": 0}
+    # v2.0.23: task_wakeup is now the first context.jsonl entry (pre-turn).
+    assert context_events[0]["type"] == "task_wakeup"
+    assert context_events[0]["card"] == "duty"
+    turn_event = context_events[1]
+    assert turn_event["triggered_by"] == "task:duty"
+    assert turn_event["pre_triggered"] is True
+    assert turn_event["has_streaming_tools"] is True
+    assert turn_event["usage"] == {"input": 10, "output": 4, "cache_read": 0, "cache_write": 0, "reasoning": 0}
 
 
 # ── v2.0.9 thinking cell — provider → IPC routing ────────────────────────────

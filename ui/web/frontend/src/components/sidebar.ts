@@ -85,8 +85,14 @@ export function createSidebar(): HTMLElement {
       const dotHtml = isWeixinLinked
         ? `<span class="session-dot weixin-dot" title="WeChat linked">⇄</span>`
         : `<span class="session-dot${dotPulse}" style="background:${color}"></span>`;
+      // Color-code the mode chip so explorer vs executor is immediately
+      // scannable in a tree of many sub-agents. Unknown values fall back to
+      // the neutral base chip.
+      const modeClass = s.mode === 'explorer' || s.mode === 'executor'
+        ? ` mode-${s.mode}`
+        : '';
       const modeChip = s.mode
-        ? `<span class="session-mode-chip" title="sub-agent mode">${escHtml(s.mode)}</span>`
+        ? `<span class="session-mode-chip${modeClass}" title="sub-agent mode">${escHtml(s.mode)}</span>`
         : '';
       const indent = depth > 0
         ? `<span class="session-indent" aria-hidden="true">↳</span>`
@@ -122,15 +128,7 @@ export function createSidebar(): HTMLElement {
         <span class="sidebar-title">Sessions</span>
         <button class="btn-icon" id="btn-new-session" title="New session">+</button>
       </div>
-      <div class="session-list" id="session-list">
-        ${listHtml || '<div style="padding:12px 8px;font-size:12px;color:var(--dimmed)">No sessions</div>'}
-      </div>
-      <div class="sidebar-footer">
-        <button class="btn-sm btn-start" id="btn-start" title="Resume session">▶ Start</button>
-        <button class="btn-sm btn-stop" id="btn-stop" title="Pause session">⏸ Stop</button>
-        <button class="btn-sm btn-danger" id="btn-delete" title="Delete session">🗑</button>
-      </div>
-      <div id="new-session-form" class="new-session-form${formVisible ? '' : ' hidden'}">
+      <div id="new-session-form" class="new-session-form new-session-form-top${formVisible ? '' : ' hidden'}">
         <div class="form-field">
           <label>Display name</label>
           <input id="ns-display-name" type="text" placeholder="e.g. audit auth flow (optional)" maxlength="40" />
@@ -143,6 +141,14 @@ export function createSidebar(): HTMLElement {
           <button class="btn-sm btn-primary" id="ns-create">Create</button>
           <button class="btn-sm" id="ns-cancel">Cancel</button>
         </div>
+      </div>
+      <div class="session-list" id="session-list">
+        ${listHtml || '<div style="padding:12px 8px;font-size:12px;color:var(--dimmed)">No sessions</div>'}
+      </div>
+      <div class="sidebar-footer">
+        <button class="btn-sm btn-start" id="btn-start" title="Resume session">▶ Start</button>
+        <button class="btn-sm btn-stop" id="btn-stop" title="Pause session">⏸ Stop</button>
+        <button class="btn-sm btn-danger" id="btn-delete" title="Delete session">🗑</button>
       </div>
     `;
 

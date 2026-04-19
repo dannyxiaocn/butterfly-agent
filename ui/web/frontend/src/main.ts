@@ -22,9 +22,89 @@ const sidebar = createSidebar();
 const chat = createChat();
 const panel = createPanel();
 
+const leftResizer = createLayoutResizer('sidebar');
+const rightResizer = createLayoutResizer('panel');
+
 layout.appendChild(sidebar);
+layout.appendChild(leftResizer);
 layout.appendChild(chat);
+layout.appendChild(rightResizer);
 layout.appendChild(panel);
+
+restoreColumnWidths();
+
+/** Build a 4-px gutter between two layout columns. Dragging it updates the
+ *  corresponding CSS var on ``#layout`` so sidebar / panel grow or shrink
+ *  in step. Widths are clamped and persisted to localStorage so the layout
+ *  survives a reload. ``which`` selects which column the gutter resizes —
+ *  "sidebar" (left gutter) or "panel" (right gutter).
+ */
+function createLayoutResizer(which: 'sidebar' | 'panel'): HTMLElement {
+  const el = document.createElement('div');
+  el.className = 'layout-resizer';
+  el.dataset.target = which;
+  el.setAttribute('role', 'separator');
+  el.setAttribute('aria-orientation', 'vertical');
+
+  const MIN = 160;
+  const MAX_FRACTION = 0.6; // never let one gutter eat >60% of the viewport
+  const cssVar = which === 'sidebar' ? '--sidebar-width' : '--panel-width';
+  const storageKey = which === 'sidebar' ? 'butterfly.layout.sidebarWidth' : 'butterfly.layout.panelWidth';
+
+  let startX = 0;
+  let startWidth = 0;
+
+  const readCurrentPx = (): number => {
+    const cs = getComputedStyle(layout).getPropertyValue(cssVar).trim();
+    const n = parseFloat(cs);
+    return Number.isFinite(n) && n > 0 ? n : (which === 'sidebar' ? 240 : 300);
+  };
+
+  const onPointerMove = (ev: PointerEvent) => {
+    const dx = ev.clientX - startX;
+    const delta = which === 'sidebar' ? dx : -dx;
+    const viewport = window.innerWidth || 1200;
+    const next = Math.max(MIN, Math.min(viewport * MAX_FRACTION, startWidth + delta));
+    layout.style.setProperty(cssVar, `${Math.round(next)}px`);
+  };
+
+  const onPointerUp = (ev: PointerEvent) => {
+    el.releasePointerCapture(ev.pointerId);
+    el.removeEventListener('pointermove', onPointerMove);
+    el.removeEventListener('pointerup', onPointerUp);
+    el.classList.remove('dragging');
+    document.body.classList.remove('resizing');
+    const finalPx = readCurrentPx();
+    try { localStorage.setItem(storageKey, String(Math.round(finalPx))); } catch {}
+  };
+
+  el.addEventListener('pointerdown', (ev: PointerEvent) => {
+    ev.preventDefault();
+    startX = ev.clientX;
+    startWidth = readCurrentPx();
+    el.setPointerCapture(ev.pointerId);
+    el.classList.add('dragging');
+    document.body.classList.add('resizing');
+    el.addEventListener('pointermove', onPointerMove);
+    el.addEventListener('pointerup', onPointerUp);
+  });
+
+  return el;
+}
+
+function restoreColumnWidths() {
+  try {
+    const saved = {
+      sidebar: localStorage.getItem('butterfly.layout.sidebarWidth'),
+      panel: localStorage.getItem('butterfly.layout.panelWidth'),
+    };
+    if (saved.sidebar) layout.style.setProperty('--sidebar-width', `${parseInt(saved.sidebar, 10)}px`);
+    if (saved.panel) layout.style.setProperty('--panel-width', `${parseInt(saved.panel, 10)}px`);
+  } catch {
+    // localStorage may be unavailable in private-browsing edge cases —
+    // fall through to the CSS defaults.
+  }
+}
 
 // Typed accessor for chat methods
 interface ChatEl extends HTMLElement {

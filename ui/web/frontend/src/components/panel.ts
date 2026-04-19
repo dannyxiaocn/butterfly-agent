@@ -1,7 +1,7 @@
 import { store } from '../store';
 import { api } from '../api';
 import { attachSession } from '../main';
-import type { ModelsCatalog, Params, PanelEntry, PanelEntryDetail, ProviderCatalogEntry, TaskCard } from '../types';
+import type { ModelsCatalog, Params, PanelEntry, PanelEntryDetail, PanelEntryStatus, ProviderCatalogEntry, TaskCard } from '../types';
 import { formatInterval, formatRelative } from '../markdown';
 import { renderTaskEditor } from './taskEditor';
 
@@ -722,8 +722,79 @@ export function createPanel(): HTMLElement {
 
   // ================= PANEL TAB =================
 
+  /** Build a synthetic sub_agent panel entry from a child session.
+   *
+   * Non-background sub-agent spawns don't write a real panel entry — the
+   * SubAgentTool executor just blocks on the child and returns its reply.
+   * The Panel surfaces them anyway by synthesising an entry from the
+   * sessions list. Synthetic tids are prefixed with ``sa_`` so they don't
+   * collide with real background tids (``bg_``). Bound to the child's
+   * session id so the entry is stable across refreshes.
+   */
+  function syntheticSubAgentEntry(child: { id: string; mode?: string | null; display_name?: string | null; status: string; created_at: string | null; last_run_at: string | null; model_state: string }): PanelEntry {
+    const isRunning = child.status !== 'stopped' && child.model_state === 'running';
+    const status = (child.status === 'stopped' ? 'completed' : (isRunning ? 'running' : 'completed')) as PanelEntryStatus;
+    const createdTs = child.created_at ? Date.parse(child.created_at) / 1000 : Date.now() / 1000;
+    const lastTs = child.last_run_at ? Date.parse(child.last_run_at) / 1000 : createdTs;
+    return {
+      tid: `sa_${child.id}`,
+      type: 'sub_agent',
+      tool_name: 'sub_agent',
+      input: {},
+      status,
+      created_at: createdTs,
+      started_at: createdTs,
+      finished_at: status === 'completed' ? lastTs : null,
+      polling_interval: null,
+      last_delivered_bytes: 0,
+      last_activity_at: lastTs,
+      pid: null,
+      exit_code: null,
+      output_file: null,
+      output_bytes: 0,
+      meta: {
+        child_session_id: child.id,
+        mode: child.mode ?? '',
+        display_name: child.display_name ?? '',
+        synthetic: true,
+      },
+    } as PanelEntry;
+  }
+
+  /** Merge real panel entries with synthetic entries for inline sub-agents.
+   *
+   * A sub-agent child is represented by a real panel entry only when its
+   * parent ran `sub_agent` as a background tool. Inline calls block the
+   * parent's turn and never write panel json, so the Panel would otherwise
+   * miss them entirely. We deduplicate on child_session_id — if the same
+   * child shows up in both sources, prefer the real entry (richer meta).
+   */
+  function mergedPanelEntries(): PanelEntry[] {
+    const sid = store.currentSessionId;
+    if (!sid) return store.panelEntries;
+
+    const realChildren = new Set<string>();
+    for (const e of store.panelEntries) {
+      if (e.type === 'sub_agent') {
+        const cid = String((e.meta ?? {}).child_session_id ?? '');
+        if (cid) realChildren.add(cid);
+      }
+    }
+    const synthetic: PanelEntry[] = [];
+    for (const s of store.sessions) {
+      if (s.parent_session_id !== sid) continue;
+      if (realChildren.has(s.id)) continue;
+      synthetic.push(syntheticSubAgentEntry(s));
+    }
+    // created_at ascending so new rows land at the bottom — matches how
+    // list_entries() sorts real panel entries.
+    return [...store.panelEntries, ...synthetic].sort(
+      (a, b) => a.created_at - b.created_at,
+    );
+  }
+
   function renderPanelTab(): string {
-    const entries = store.panelEntries;
+    const entries = mergedPanelEntries();
     if (!entries.length) {
       return `
         <div class="tasks-empty">No panel entries yet.</div>
@@ -755,8 +826,15 @@ export function createPanel(): HTMLElement {
     const outputTailHtml = expanded
       ? renderOutputTailBlock(detail)
       : '';
+    // Tid pill + action row live inside the expanded body only — see the
+    // sub-agent branch for the same rationale (tid is a debug aid, not for
+    // the always-visible summary).
+    const tidLine = expanded
+      ? `<div class="sub-agent-detail-row"><span class="cfg-label">task_id:</span> <span class="hb-pill">${escHtml(entry.tid)}</span></div>`
+      : '';
     const actionsHtml = expanded
       ? `
+        ${tidLine}
         <div class="task-card-actions">
           <button class="btn-sm" data-panel-action="fetch" data-tid="${escHtml(entry.tid)}">Fetch full output</button>
           <button class="btn-sm" data-panel-action="kill" data-tid="${escHtml(entry.tid)}">Kill</button>
@@ -769,7 +847,6 @@ export function createPanel(): HTMLElement {
         <div class="task-card-header panel-row-header" data-tid="${escHtml(entry.tid)}">
           <span class="task-status-badge ${statusClass}">${escHtml(entry.status)}</span>
           <span class="task-name">${escHtml(entry.tool_name)}</span>
-          <span class="hb-pill panel-tid">${escHtml(entry.tid)}</span>
         </div>
         <div class="task-preview panel-tail" title="${escHtml(tailOneLine)}">${escHtml(tailOneLine) || '<span class="cfg-null">(no output yet)</span>'}</div>
         ${fullJsonHtml}
@@ -821,27 +898,41 @@ export function createPanel(): HTMLElement {
       const openLink = childId
         ? `<button class="btn-sm" data-sub-action="open-child" data-child-id="${escHtml(childId)}">Open child session</button>`
         : '';
+      // Synthetic rows cover inline sub-agents that never wrote a panel
+      // entry, so the /panel/{tid} kill endpoint has nothing to target.
+      // Expose "Stop child" instead — hits the sessions stop endpoint on
+      // the child session directly, which the runtime already handles.
+      const synthetic = Boolean(meta.synthetic);
+      const killBtn = synthetic
+        ? (childId && entry.status === 'running'
+          ? `<button class="btn-sm" data-sub-action="stop-child" data-child-id="${escHtml(childId)}">Stop child</button>`
+          : '')
+        : `<button class="btn-sm" data-panel-action="kill" data-tid="${escHtml(entry.tid)}">Kill</button>`;
+      // Surface tid inside the expanded body instead of the always-visible
+      // summary. It's a debugging aid, not user-facing information, so it
+      // doesn't belong in the scannable header.
       expandedHtml = `
         <div class="sub-agent-detail">
           <div class="sub-agent-detail-row"><span class="cfg-label">child:</span> <span class="hb-pill">${escHtml(childId)}</span></div>
+          <div class="sub-agent-detail-row"><span class="cfg-label">task_id:</span> <span class="hb-pill">${escHtml(entry.tid)}</span></div>
           <div class="sub-agent-detail-row"><span class="cfg-label">recent activity (last 5):</span></div>
           ${recentBlock}
           ${resultBlock}
           <div class="task-card-actions">
             ${openLink}
-            <button class="btn-sm" data-panel-action="kill" data-tid="${escHtml(entry.tid)}">Kill</button>
+            ${killBtn}
           </div>
         </div>
       `;
     }
 
+    const modeChipClass = mode === 'explorer' || mode === 'executor' ? ` mode-${mode}` : '';
     return `
       <div class="task-card panel-row sub-agent-row${expanded ? ' expanded' : ''}" data-tid="${escHtml(entry.tid)}">
         <div class="task-card-header panel-row-header" data-tid="${escHtml(entry.tid)}" title="${escHtml(childId || entry.tid)}">
           <span class="task-status-badge ${statusClass}">${escHtml(entry.status)}</span>
           <span class="task-name">${escHtml(headerLabel)}</span>
-          <span class="session-mode-chip">${escHtml(mode)}</span>
-          <span class="hb-pill panel-tid">${escHtml(entry.tid)}</span>
+          <span class="session-mode-chip${modeChipClass}">${escHtml(mode)}</span>
         </div>
         <div class="task-preview panel-tail" title="${escHtml(thumb)}">${thumb}</div>
         ${expandedHtml}
@@ -849,6 +940,11 @@ export function createPanel(): HTMLElement {
     `;
   }
 
+  /** Render one child activity row — tool call, tool output, or agent
+   *  text output. Anything else (thinking, model_status, partial_text,
+   *  loop_start, etc.) is filtered out by ``isDisplayableChildEvent`` so
+   *  the sub-agent card only shows real user-visible activity.
+   */
   function formatChildEvent(evt: Record<string, unknown>): string {
     const t = String(evt.type ?? '');
     if (t === 'tool_call' || t === 'tool') {
@@ -859,17 +955,23 @@ export function createPanel(): HTMLElement {
       const name = String(evt.name ?? '');
       return `<div class="sub-agent-evt"><span class="sub-agent-evt-icon">✓</span> tool done: <code>${escHtml(name)}</code></div>`;
     }
-    if (t === 'model_status') {
-      const v = String(evt.value ?? evt.state ?? '');
-      return `<div class="sub-agent-evt sub-agent-evt-quiet">model: ${escHtml(v)}</div>`;
+    if (t === 'agent_output_done' || t === 'agent_output_start') {
+      return `<div class="sub-agent-evt"><span class="sub-agent-evt-icon">✎</span> output</div>`;
     }
-    if (t === 'thinking_start' || t === 'thinking_done') {
-      return `<div class="sub-agent-evt sub-agent-evt-quiet">${escHtml(t.replace('_', ' '))}</div>`;
-    }
-    if (t === 'partial_text') {
-      return '';
-    }
-    return `<div class="sub-agent-evt sub-agent-evt-quiet">${escHtml(t)}</div>`;
+    return '';
+  }
+
+  /** Keep only user-visible activity markers; drop thinking / status /
+   *  partial deltas / housekeeping events. This runs before the slice so
+   *  the visible 5 entries are all meaningful — picking the raw tail
+   *  meant any busy turn would fill the card with ``model_status`` /
+   *  ``partial_text`` noise.
+   */
+  function isDisplayableChildEvent(evt: Record<string, unknown>): boolean {
+    const t = String(evt.type ?? '');
+    if (t === 'tool_call' || t === 'tool' || t === 'tool_done') return true;
+    if (t === 'agent_output_done' || t === 'agent_output_start') return true;
+    return false;
   }
 
   function entryToJsonView(entry: PanelEntry, detail: PanelEntryDetail | undefined): Record<string, unknown> {
@@ -910,16 +1012,20 @@ export function createPanel(): HTMLElement {
           expandedPanel.delete(tid);
         }
         render();
-        // Sub-agent rows: load the child's last 5 events on first open.
+        // Sub-agent rows: load the child's recent displayable activity on
+        // first open. Fetch 60 raw events, filter to tool/output markers,
+        // keep the last 5 — raw tail often fills with model_status /
+        // partial_text spam so 5 raw entries rarely includes real activity.
         if (opening) {
-          const entry = (store.panelEntries as PanelEntry[]).find(e => e.tid === tid);
+          const entry = mergedPanelEntries().find(e => e.tid === tid);
           const childId = entry && entry.type === 'sub_agent'
             ? String((entry.meta ?? {}).child_session_id ?? '')
             : '';
           if (childId) {
             try {
-              const events = await api.getEventsTail(childId, 5);
-              subAgentChildEvents.set(tid, events);
+              const raw = await api.getEventsTail(childId, 60);
+              const filtered = raw.filter(isDisplayableChildEvent).slice(-5);
+              subAgentChildEvents.set(tid, filtered);
               if (expandedPanel.has(tid)) render();
             } catch (e) {
               console.error('Failed to load child events:', e);
@@ -935,6 +1041,23 @@ export function createPanel(): HTMLElement {
         const childId = (btn as HTMLElement).dataset.childId;
         if (!childId) return;
         await attachSession(childId);
+      });
+    });
+
+    el.querySelectorAll('[data-sub-action="stop-child"]').forEach(btn => {
+      btn.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        const childId = (btn as HTMLElement).dataset.childId;
+        if (!childId) return;
+        try {
+          await api.stopSession(childId);
+        } catch (e) {
+          console.error('Failed to stop child session:', e);
+          return;
+        }
+        const sessions = await api.listSessions();
+        store.sessions = sessions;
+        store.emit('sessions');
       });
     });
 
@@ -978,17 +1101,21 @@ export function createPanel(): HTMLElement {
       store.emit('panel');
       // If user has entries expanded, refresh their details too so the
       // tail-one-line on the collapsed row and the output block stay fresh.
+      // Use the merged list so synthetic (inline sub-agent) entries also
+      // get their child events refreshed.
+      const merged = mergedPanelEntries();
       if (activeTab === 'panel' && expandedPanel.size > 0) {
         await Promise.all([...expandedPanel].map(async tid => {
-          const entry = entries.find(e => e.tid === tid);
+          const entry = merged.find(e => e.tid === tid);
           if (entry?.type === 'sub_agent') {
             // Refresh the child's recent events while the sub-agent card is open.
             const childId = String((entry.meta ?? {}).child_session_id ?? '');
             if (childId) {
               try {
-                const events = await api.getEventsTail(childId, 5);
+                const raw = await api.getEventsTail(childId, 60);
                 if (store.currentSessionId !== sid) return;
-                subAgentChildEvents.set(tid, events);
+                const filtered = raw.filter(isDisplayableChildEvent).slice(-5);
+                subAgentChildEvents.set(tid, filtered);
               } catch (e) {
                 console.error('Failed to refresh sub-agent child events:', e);
               }
@@ -1028,6 +1155,12 @@ export function createPanel(): HTMLElement {
     if (activeTab === 'tasks' && editingTask === null) render();
   });
   store.on('panel', () => {
+    if (activeTab === 'panel') render();
+  });
+  store.on('sessions', () => {
+    // Synthetic sub-agent entries are derived from store.sessions —
+    // re-render so newly-spawned inline sub-agents surface without waiting
+    // for the next 2s panel poll, and finished ones flip to "completed".
     if (activeTab === 'panel') render();
   });
   store.on('config', () => {

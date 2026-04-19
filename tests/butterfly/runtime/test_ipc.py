@@ -756,3 +756,93 @@ class IPCUnitTests(unittest.TestCase):
             system_dir.mkdir(parents=True)
             ipc = FileIPC(system_dir)
             self.assertEqual(ipc._scan_tool_durations(), {})
+
+    def test_tail_history_reorders_bg_notification_after_interrupted_turn(self) -> None:
+        """v2.0.24: bg-notif racing with a turn write lands physically BEFORE
+        the turn in context.jsonl, but its content happened AFTER the turn's
+        content. tail_history must sort by earliest content ts so history
+        replay shows ``user → turn → bg-notif`` in chronological order —
+        matching what the live SSE stream rendered as events arrived."""
+        with TemporaryDirectory() as tmp:
+            system_dir = Path(tmp) / "_sessions" / "demo"
+            system_dir.mkdir(parents=True)
+            ctx = system_dir / "context.jsonl"
+            # File order: user, bg-notif, turn — matches what the outer
+            # daemon loop produces when a bg task completes mid-turn-flush.
+            ctx.write_text(
+                json.dumps({
+                    "type": "user_input", "content": "go", "id": "u1",
+                    "ts": "2026-04-18T23:30:17",
+                }) + "\n"
+                + json.dumps({
+                    "type": "user_input", "content": "bg done",
+                    "id": "u2", "caller": "system", "source": "panel",
+                    "tid": "bg_abc", "tool_name": "sub_agent",
+                    "ts": "2026-04-18T23:30:54",
+                }) + "\n"
+                + json.dumps({
+                    "type": "turn", "triggered_by": "user",
+                    # turn was interrupted at the same instant the bg-notif
+                    # was written → top-level ts ties with the notif.
+                    "ts": "2026-04-18T23:30:54",
+                    "messages": [{
+                        "role": "assistant",
+                        # content block ts reflects actual iteration commit
+                        # — predates the bg-notif, so the sort key pulls
+                        # from here.
+                        "content": [{
+                            "type": "tool_use", "id": "call_1",
+                            "name": "sub_agent",
+                            "input": {"name": "bg-poet"},
+                            "ts": "2026-04-18T23:30:33",
+                        }],
+                    }],
+                }) + "\n",
+                encoding="utf-8",
+            )
+            ipc = FileIPC(system_dir)
+            ordered = [display["type"] for display, _off in ipc.tail_history(0)]
+            # Expect user → turn (rendered as tool) → bg-notif (user),
+            # NOT the buggy user → user → tool order.
+            self.assertEqual(ordered, ["user", "tool", "user"])
+
+    def test_tail_history_cursor_sits_at_eof_despite_sort_reorder(self) -> None:
+        """Reviewer-flagged regression: sort reorders entries, so the
+        last-yielded ``line_end`` can be mid-file (e.g. bg-notif's end
+        offset, which physically precedes turn[1]'s end). Every yielded
+        display must carry the MAX line_end so ``get_history`` stores a
+        cursor at EOF and the next SSE reconnect doesn't re-emit events
+        that land past the sorted-final entry."""
+        with TemporaryDirectory() as tmp:
+            system_dir = Path(tmp) / "_sessions" / "demo"
+            system_dir.mkdir(parents=True)
+            ctx = system_dir / "context.jsonl"
+            ctx.write_text(
+                # Same file layout as the sort test: bg-notif physically
+                # before turn, but sorts after it by content ts.
+                json.dumps({
+                    "type": "user_input", "content": "bg done",
+                    "id": "u2", "caller": "system", "source": "panel",
+                    "ts": "2026-04-18T23:30:54",
+                }) + "\n"
+                + json.dumps({
+                    "type": "turn", "triggered_by": "user",
+                    "ts": "2026-04-18T23:30:54",
+                    "messages": [{
+                        "role": "assistant",
+                        "content": [{
+                            "type": "text", "text": "ok",
+                            "ts": "2026-04-18T23:30:32",
+                        }],
+                    }],
+                }) + "\n",
+                encoding="utf-8",
+            )
+            ipc = FileIPC(system_dir)
+            offsets = [off for _display, off in ipc.tail_history(0)]
+            file_size = ctx.stat().st_size
+            # Every yielded entry must report the EOF cursor — not the
+            # physical line_end of that particular entry, which would
+            # leave the cursor mid-file after a sort reorder.
+            self.assertTrue(all(o == file_size for o in offsets))
+            self.assertEqual(offsets[-1], file_size)

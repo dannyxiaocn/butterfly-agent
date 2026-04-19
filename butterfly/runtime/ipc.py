@@ -61,6 +61,54 @@ from typing import Iterator
 
 # ── Display event converters ──────────────────────────────────────────────────
 
+def _context_entry_sort_ts(entry: dict) -> str:
+    """Earliest wall-clock ts that reflects when this entry's content actually
+    happened. Used by ``tail_history`` to sort context.jsonl entries so that
+    a bg-tool notification (written by ``_drain_background_events`` at the
+    instant of completion) can't leapfrog ahead of the turn it interrupted —
+    they often share the same write-time top-level ``ts``.
+
+    - user_input / task_wakeup: top-level ``ts`` is the write time, which
+      already matches wall-clock (these aren't batched).
+    - turn: the write-time ``ts`` is the END of the turn (or the interrupt
+      instant for partial saves). Internal blocks carry better data:
+        * ``thinking_blocks[].ts``  — stamped at on_thinking_end
+        * ``messages[].content[].ts`` — stamped by core/agent.py per commit
+      Take the minimum across both lists so the turn sorts at its true
+      start. Falls back to top-level ``ts`` when no per-block ts is present
+      (older persisted turns).
+    """
+    top = entry.get("ts") or ""
+    if entry.get("type") != "turn":
+        return top
+    candidates: list[str] = []
+    for tb in entry.get("thinking_blocks") or []:
+        if isinstance(tb, dict):
+            ts = tb.get("ts")
+            if isinstance(ts, str) and ts:
+                candidates.append(ts)
+    for msg in entry.get("messages") or []:
+        if not isinstance(msg, dict):
+            continue
+        msg_ts = msg.get("ts")
+        if isinstance(msg_ts, str) and msg_ts:
+            candidates.append(msg_ts)
+        content = msg.get("content")
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict):
+                    ts = block.get("ts")
+                    if isinstance(ts, str) and ts:
+                        candidates.append(ts)
+    if not candidates:
+        return top
+    earliest = min(candidates)
+    # If top-level ts predates every internal ts (rare — would require a
+    # legacy write-path that stamped the turn before content was serialised)
+    # keep it; otherwise the internal earliest wins.
+    return min(earliest, top) if top else earliest
+
+
 def _context_event_to_display(
     event: dict,
     *,
@@ -718,16 +766,82 @@ class FileIPC:
         Agent output durations are persisted directly on the turn event (see
         ``turn["agent_output_durations"]`` in Session), so no corresponding
         scan is needed.
+
+        v2.0.24: context.jsonl is written by two async producers — the chat
+        consumer task (turn entries) and the outer daemon loop
+        (_drain_background_events, which appends ``user_input`` notifications
+        for background-tool completions). A bg task that completes WHILE the
+        parent turn is still finalising races the turn write: the notification
+        lands in the file BEFORE the turn entry, producing
+        ``user[1], user[bg], turn[1]`` file order even though wall-clock was
+        ``turn[1]-end → bg-notif``. The live SSE stream doesn't hit this
+        because each event is rendered in its own right via
+        tail_runtime_events; only history replay (context-only) sees the
+        ordering anomaly. Sort by ``ts`` (stable — same-ts entries keep file
+        order) so the reloaded view matches what the user watched live.
         """
         tool_durations = self._scan_tool_durations()
-        yield from self._readline_loop(
-            self.context_path, offset,
-            lambda e: _context_event_to_display(
-                e,
+        # Read the whole file first so we can sort by ts. Context files are
+        # bounded by the session's turn count and tend to stay in the tens of
+        # KB range even for long sessions; buffering them is cheap and spares
+        # us a second pass.
+        raw_events: list[tuple[dict, int]] = []
+        max_line_end = offset
+        for raw, line_end in self._read_context_lines(offset):
+            raw_events.append((raw, line_end))
+            if line_end > max_line_end:
+                max_line_end = line_end
+        # Sort by the earliest REAL content timestamp inside each entry, not
+        # the write-time top-level ``ts``. A turn interrupted by a bg-tool
+        # notification gets persisted AT THE INTERRUPT INSTANT — same ts as
+        # the notification itself — so top-level ts is ambiguous and stable
+        # sort preserves the buggy file order. Pulling from
+        # ``thinking_blocks[].ts`` (wall-clock at thinking_end) and message
+        # content block ``ts`` (wall-clock at commit, stamped by
+        # core/agent.py) gives the turn's actual start moment, which lands
+        # BEFORE any bg notification that preempted it.
+        raw_events.sort(key=lambda re: _context_entry_sort_ts(re[0]))
+        # Yield ``max_line_end`` for every display, NOT the per-entry
+        # ``line_end``. After sorting, the last-yielded entry is the one
+        # with the latest ts — not the one at the largest byte offset —
+        # and ``get_history`` consumes the final yielded offset as the
+        # cursor. Without this, a bg-notif that physically lives past an
+        # interrupted turn but sorts before it would leave the cursor
+        # mid-file; the next SSE reconnect's ``context_since`` seeks there
+        # and re-emits the already-displayed turn. Clamping to the
+        # max-observed end guarantees the cursor sits at the EOF seen by
+        # this read, so every physical line was covered.
+        for raw, _unused_line_end in raw_events:
+            for display in _context_event_to_display(
+                raw,
                 for_history=True,
                 tool_durations=tool_durations,
-            ),
-        )
+            ):
+                yield display, max_line_end
+
+    def _read_context_lines(self, offset: int) -> Iterator[tuple[dict, int]]:
+        """Iterate context.jsonl from ``offset``; yield (parsed_event, line_end).
+
+        Skips malformed lines silently — matches the tolerance of
+        ``_readline_loop`` which the live-tail path uses.
+        """
+        if not self.context_path.exists():
+            return
+        with self.context_path.open("r", encoding="utf-8") as f:
+            f.seek(offset)
+            while True:
+                line = f.readline()
+                if not line:
+                    break
+                line_end = f.tell()
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                try:
+                    event = json.loads(stripped)
+                except json.JSONDecodeError:
+                    continue
+                yield event, line_end
 
     def _scan_tool_durations(self) -> dict[str, int]:
         """Build ``tool_use_id → duration_ms`` from events.jsonl tool_done lines.

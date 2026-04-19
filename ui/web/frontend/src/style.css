@@ -150,17 +150,43 @@ html, body {
   display: flex;
   flex: 1;
   overflow: hidden;
+  /* Sidebar + panel widths are driven by CSS vars so the drag handles can
+   * update one property instead of mutating inline style on the column. */
+  --sidebar-width: 240px;
+  --panel-width: 300px;
 }
 
 /* ====== SIDEBAR ====== */
 #sidebar {
-  width: 240px;
+  width: var(--sidebar-width);
   flex-shrink: 0;
   background: var(--bg2);
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+
+/* ====== RESIZE HANDLES ======
+ * Thin vertical grips between columns. 4px hit target, 1px visible line on
+ * hover/drag. Cursor stays col-resize across the gutter so the drag feels
+ * continuous even when the pointer drifts a pixel off the visible line. */
+.layout-resizer {
+  flex: 0 0 4px;
+  background: transparent;
+  cursor: col-resize;
+  position: relative;
+  z-index: 5;
+  transition: background 0.12s;
+}
+.layout-resizer:hover,
+.layout-resizer.dragging {
+  background: var(--accent, #7ac3f2);
+}
+body.resizing,
+body.resizing * {
+  cursor: col-resize !important;
+  user-select: none !important;
 }
 
 .sidebar-header {
@@ -309,21 +335,37 @@ html, body {
 .session-mode-chip {
   display: inline-block;
   margin-left: 6px;
-  padding: 0 5px;
-  font-size: 9px;
-  line-height: 14px;
+  padding: 0 6px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 15px;
   border-radius: 7px;
   background: var(--bg3);
   color: var(--muted);
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.06em;
   vertical-align: 1px;
+}
+
+.session-mode-chip.mode-explorer {
+  background: rgba(122, 195, 242, 0.18);
+  color: #7ac3f2;
+  border: 1px solid rgba(122, 195, 242, 0.35);
+}
+
+.session-mode-chip.mode-executor {
+  background: rgba(232, 169, 74, 0.18);
+  color: #e8a94a;
+  border: 1px solid rgba(232, 169, 74, 0.35);
 }
 
 /* Sub-agent panel card. Shares structure with .panel-row but adds a
    recent-activity block when expanded. */
 .sub-agent-row .sub-agent-detail {
-  padding: 8px 10px 10px;
+  /* Parent .panel-row already has 10/12 padding so the detail block only
+   * needs top-spacing + column layout. Keeping its own horizontal padding
+   * would stack and push content inward visibly. */
+  padding: 6px 0 0;
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -384,11 +426,6 @@ html, body {
   overflow-y: auto;
 }
 
-/* HUD sub-agent badge */
-.hud-subagent .hud-subagent-text {
-  color: var(--accent);
-}
-
 .sidebar-footer {
   display: flex;
   gap: 4px;
@@ -407,6 +444,11 @@ html, body {
   border-top: 1px solid var(--border);
   background: var(--bg3);
   flex-shrink: 0;
+}
+
+.new-session-form.new-session-form-top {
+  border-top: none;
+  border-bottom: 1px solid var(--border);
 }
 
 .new-session-form.hidden {
@@ -1209,17 +1251,161 @@ button:disabled {
 /* ====== HUD BAR ====== */
 .hud-bar {
   display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 16px;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 16px;
   background: var(--bg2);
   border-top: 1px solid var(--border);
+  border-top-left-radius: var(--radius);
+  border-top-right-radius: var(--radius);
   font-size: 11px;
   font-family: var(--mono);
   color: var(--dimmed);
   flex-shrink: 0;
-  min-height: 26px;
   overflow: hidden;
+}
+
+.hud-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 18px;
+}
+
+.hud-spacer {
+  flex: 1;
+}
+
+/* --- Row 1: model + ctx bar + speed ---------------------------------- */
+.hud-model-text {
+  color: var(--text2);
+}
+
+.hud-effort {
+  color: var(--text2);
+  margin-left: 4px;
+}
+
+.hud-effort.hidden { display: none; }
+
+.hud-context {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  /* Default heat colour — overridden by .ctx-low / .ctx-mid / .ctx-high
+   * applied in updateHudContext (chat.ts). */
+  --ctx-heat: var(--accent);
+}
+
+/* Bar / bracket colour tracks heat at all thresholds. Text (pct + totals)
+ * only colours from 60% up — below that it reads as plain white so the
+ * eye isn't drawn to a low-signal number. */
+.hud-context.ctx-low  { --ctx-heat: var(--accent); --ctx-text-heat: var(--text2); }
+.hud-context.ctx-mid  { --ctx-heat: var(--yellow); --ctx-text-heat: var(--yellow); }
+.hud-context.ctx-high { --ctx-heat: var(--red);    --ctx-text-heat: var(--red);    }
+
+.hud-ctx-bar {
+  font-family: var(--mono);
+  letter-spacing: 0.5px;
+}
+
+.hud-ctx-bracket { color: var(--ctx-heat); }
+
+.hud-ctx-filled {
+  color: var(--ctx-heat);
+}
+
+.hud-ctx-empty {
+  color: var(--dimmed);
+  opacity: 0.6;
+}
+
+.hud-ctx-pct {
+  color: var(--ctx-text-heat);
+}
+
+.hud-ctx-totals {
+  color: var(--ctx-text-heat);
+  margin-left: -2px;
+}
+
+.hud-speed-text {
+  color: var(--dimmed);
+  transition: color 0.2s;
+}
+
+#hud-bar.running .hud-speed-text {
+  color: var(--yellow);
+}
+
+/* --- Row 2: runners (bash / sub-agents) ------------------------------ */
+.hud-row-runners {
+  font-size: 11px;
+  color: var(--dimmed);
+}
+
+.hud-runners-caret {
+  color: var(--dimmed);
+  transition: color 0.15s;
+}
+
+.hud-runners-caret.active {
+  color: var(--yellow);
+}
+
+.hud-runner {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--dimmed);
+  padding: 1px 6px;
+  border-radius: 999px;
+  /* Dim-metallic — same recipe as the active pills below, just mixed
+   * against muted greys so an idle "0 bash running" still carries the
+   * brushed-metal chrome. Active colours override these vars. */
+  --runner-hi: rgba(139,148,158,0.12);
+  --runner-lo: rgba(139,148,158,0.05);
+  --runner-border: rgba(139,148,158,0.22);
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.035) 0%, rgba(0,0,0,0.12) 100%),
+    linear-gradient(135deg, var(--runner-hi) 0%, var(--runner-lo) 55%, var(--runner-hi) 100%);
+  border: 1px solid var(--runner-border);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.04),
+    inset 0 -1px 0 rgba(0,0,0,0.18);
+  transition: color 0.15s, background 0.15s, border-color 0.15s, box-shadow 0.15s;
+}
+
+/* Active lifts the metal tint from dim grey to the chat-cell palette. */
+.hud-runner.active {
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.055) 0%, rgba(0,0,0,0.18) 100%),
+    linear-gradient(135deg, var(--runner-hi) 0%, var(--runner-lo) 55%, var(--runner-hi) 100%);
+  border-color: var(--runner-border);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.08),
+    inset 0 -1px 0 rgba(0,0,0,0.25);
+}
+
+/* bash — aligns with tool-output cell (.msg-user-tool-output): #e8a94a. */
+.hud-runner-bash.active {
+  --runner-hi: rgba(232,169,74,0.24);
+  --runner-lo: rgba(232,169,74,0.10);
+  --runner-border: rgba(232,169,74,0.45);
+  color: #e8a94a;
+}
+
+/* sub-agents — aligns with sub-agent cell (.msg-user-sub-agent): #ff8c3a. */
+.hud-runner-sub.active {
+  --runner-hi: rgba(255,140,58,0.26);
+  --runner-lo: rgba(255,140,58,0.11);
+  --runner-border: rgba(255,140,58,0.48);
+  color: #ff8c3a;
+}
+
+.hud-runners-sep {
+  color: var(--dimmed);
+  opacity: 0.6;
 }
 
 .agent-status {
@@ -1339,7 +1525,7 @@ button:disabled {
 
 /* ====== RIGHT PANEL ====== */
 #panel {
-  width: 300px;
+  width: var(--panel-width);
   flex-shrink: 0;
   background: var(--bg2);
   border-left: 1px solid var(--border);
@@ -1537,7 +1723,17 @@ button:disabled {
 .panel-status-killed { background: rgba(248,81,73,0.12); color: var(--red); }
 .panel-status-killed_by_restart { background: rgba(140,40,40,0.18); color: #8c2828; }
 
-/* Panel row (reuses .task-card styles + one-line tail preview) */
+/* Panel row (reuses .task-card styles + one-line tail preview).
+ * .task-card intentionally has no default padding, but .panel-row content
+ * hugs the border without it — summary row + tail preview need breathing
+ * room on all four sides. */
+.panel-row {
+  padding: 10px 12px;
+}
+.panel-row.expanded {
+  padding-bottom: 12px;
+}
+
 .panel-row .panel-tid {
   font-family: var(--mono);
   font-size: 10px;
@@ -1758,18 +1954,6 @@ button:disabled {
   0%, 100% { opacity: 0.85; }
   50% { opacity: 0.4; }
 }
-.hud-model-text {
-  color: var(--text2);
-  font-weight: 500;
-}
-.hud-ctx-text {
-  color: var(--muted);
-}
-.hud-tool-text {
-  color: var(--yellow);
-  font-weight: 500;
-}
-
 /* ====== Send-mode toggle (v2.0.12) — wait checkbox in chat input bar ===== */
 /* Replaces the v2.0.9 5 s pending-bar UI; backend dispatcher now owns
    queue / merge / interrupt semantics, so the per-tab pending buffer is
