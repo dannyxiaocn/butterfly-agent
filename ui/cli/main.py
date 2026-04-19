@@ -655,8 +655,15 @@ def cmd_tasks(args) -> int:
         print("(empty)")
     else:
         for card in cards:
-            interval_str = f"every {card['interval']}s" if card['interval'] else "one-shot"
-            print(f"  [{card['status']}] {card['name']}  ({interval_str})")
+            interval = card.get('check_interval') or 0
+            interval_str = f"every {interval:g}s" if interval else "on-demand"
+            scripts = []
+            if card.get('trigger_script') is not None:
+                scripts.append("trigger")
+            if card.get('end_script') is not None:
+                scripts.append("end")
+            scripts_str = f"[{','.join(scripts)}]" if scripts else ""
+            print(f"  [{card['status']}] {card['name']}  ({interval_str}) {scripts_str}")
             if card.get('last_finished_at'):
                 print(f"          last finished: {card['last_finished_at']}")
             desc = card.get('description') or ''

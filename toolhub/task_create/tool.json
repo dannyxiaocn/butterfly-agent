@@ -1,31 +1,31 @@
 {
   "name": "task_create",
-  "description": "Create a new task card. Recurring if `interval` is set (seconds between runs); one-shot otherwise. Use for work the agent wants to pick up later or on a schedule.",
+  "description": "Create a bash-driven task card. The runtime polls `trigger_script` every `check_interval` seconds; the LAST line of stdout must be `[start]`, `[start] <message>`, or `[skip]`. On `[start]` the agent is activated; the optional `<message>` becomes the seed input. Optional `end_script` is polled while the agent is running and must end with `[done]` (mark card finished) or `[not_done]`. Non-zero exit or unrecognised output is treated as `[skip]` / `[not_done]` (fail-closed) and logged as an error.\n\nExamples — just the trigger_script body:\n  * Every hour: `echo [start]` (check_interval=3600)\n  * After 9am daily: `[[ $(date +%H) -ge 9 ]] && echo [start] || echo [skip]`\n  * When a build flag appears: `[[ -f build/done.flag ]] && echo [start] \"build ready\" || echo [skip]`\n  * One-shot at epoch: `(( $(date +%s) >= 1735689600 )) && echo [start] || echo [skip]`\n\nScripts land on disk at core/tasks/<name>.trigger.sh and core/tasks/<name>.end.sh; the agent can bash-edit them directly after creation. Agents also have `task_finish` to end cards imperatively.",
   "input_schema": {
     "type": "object",
     "properties": {
       "name": {
         "type": "string",
-        "description": "Task name. Must be unique within the session; used as the JSON filename in core/tasks/."
+        "description": "Task name (unique per session; used as the filename under core/tasks/)."
       },
       "description": {
         "type": "string",
-        "description": "What this task should do when it fires."
+        "description": "What this task should do when it fires. Shown in the wakeup prompt."
       },
-      "interval": {
+      "check_interval": {
         "type": ["number", "null"],
         "exclusiveMinimum": 0,
-        "description": "Recurring interval in seconds (must be > 0). Omit or set null for a one-shot task."
+        "description": "Seconds between trigger_script runs. Defaults to 3600 (1h). Also applied to end_script polling while the card is active."
       },
-      "start_at": {
-        "type": ["number", "null"],
-        "description": "Earliest fire time (unix epoch seconds). Omit for the default (recurring: created + interval; one-shot: immediately)."
+      "trigger_script": {
+        "type": "string",
+        "description": "Bash snippet (body only — shebang is prepended). Last line of stdout MUST be `[start]`, `[start] <message>`, or `[skip]`."
       },
-      "end_at": {
-        "type": ["number", "null"],
-        "description": "Auto-expire time (unix epoch seconds). Omit for the default (created + 7 days, or 10*interval if interval > 7 days)."
+      "end_script": {
+        "type": ["string", "null"],
+        "description": "Optional bash snippet polled while status=working. Last line must be `[done]` (card finishes) or `[not_done]`."
       }
     },
-    "required": ["name", "description"]
+    "required": ["name", "description", "trigger_script"]
   }
 }

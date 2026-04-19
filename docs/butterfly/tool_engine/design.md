@@ -41,8 +41,8 @@ The catalog is split into **toolhub tools** (declared in `toolhub/<name>/`) and 
 | `skill` | Load a SKILL.md into context | No | `skill, args?` |
 | `memory_recall` | Read full sub-memory file | No | `name?` |
 | `memory_update` | Edit sub-memory **and** update main-memory index line | No | `name, old_string, new_string, description?` |
-| `task_create` | Create a task card | No | `name, description, interval?, start_at?, end_at?` |
-| `task_update` | Update a task card (description, interval, progress, comments) | No | `name, ...` |
+| `task_create` | Create a bash-driven task card | No | `name, description, check_interval?, trigger_script, end_script?` |
+| `task_update` | Update a task card (description, check_interval, scripts, progress, comments) | No | `name, ...` |
 | `task_finish` | Mark a task card finished | No | `name` |
 | `task_pause` | Pause a recurring task | No | `name` |
 | `task_resume` | Resume a paused task | No | `name` |

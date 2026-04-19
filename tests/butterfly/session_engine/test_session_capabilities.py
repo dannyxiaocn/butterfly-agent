@@ -300,8 +300,9 @@ async def test_task_replaces_prompt_with_compact_marker(tmp_path):
     session = make_session(tmp_path, agent)
 
     # Write the recurring task card so a real task activation fires.
-    past = (datetime.now() - timedelta(hours=2)).isoformat()
-    save_card(session.tasks_dir, TaskCard(name="duty", description="- [ ] Do something", interval=600, start_at=past))
+    from butterfly.session_engine.task_cards import write_trigger_script
+    save_card(session.tasks_dir, TaskCard(name="duty", description="- [ ] Do something", check_interval=600))
+    write_trigger_script(session.tasks_dir, "duty", "echo [start]")
     (session.core_dir / "task.md").write_text(
         "Task wakeup.\n\nCurrent tasks:\n{task}", encoding="utf-8"
     )

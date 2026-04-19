@@ -108,7 +108,7 @@ class WebUnitTests(unittest.TestCase):
         with TemporaryDirectory() as td:
             root = _make_session(Path(td))
             tasks_dir = root / "sessions" / "test-session" / "core" / "tasks"
-            save_card(tasks_dir, TaskCard(name="duty", description="check inbox", interval=300))
+            save_card(tasks_dir, TaskCard(name="duty", description="check inbox", check_interval=300))
             app = create_app(root / "sessions", root / "_sessions")
             with TestClient(app) as client:
                 resp = client.get("/api/sessions/test-session/tasks")
@@ -116,7 +116,7 @@ class WebUnitTests(unittest.TestCase):
             cards = resp.json()["cards"]
             duty = next(c for c in cards if c["name"] == "duty")
             self.assertEqual(duty["description"], "check inbox")
-            self.assertEqual(duty["interval"], 300)
+            self.assertEqual(duty["check_interval"], 300)
 
     def test_put_tasks_by_name_creates_named_card(self) -> None:
         """PUT /tasks with {name, description} should create/update the named card."""
@@ -160,7 +160,7 @@ class WebUnitTests(unittest.TestCase):
                 TaskCard(
                     name="duty",
                     description="v1",
-                    interval=600,
+                    check_interval=600,
                     status="paused",
                     last_finished_at="2026-04-09T10:00:00",
                     created_at="2026-04-08T09:00:00",
@@ -177,12 +177,12 @@ class WebUnitTests(unittest.TestCase):
 
             card = next(c for c in get_resp.json()["cards"] if c["name"] == "duty")
             self.assertEqual(card["description"], "v2")
-            self.assertEqual(card["interval"], 600)
+            self.assertEqual(card["check_interval"], 600)
             self.assertEqual(card["status"], "paused")
             self.assertEqual(card["last_finished_at"], "2026-04-09T10:00:00")
             self.assertEqual(card["created_at"], "2026-04-08T09:00:00")
 
-    def test_put_tasks_by_name_updates_interval(self) -> None:
+    def test_put_tasks_by_name_updates_check_interval(self) -> None:
         with TemporaryDirectory() as td:
             root = _make_session(Path(td))
             app = create_app(root / "sessions", root / "_sessions")
@@ -192,13 +192,13 @@ class WebUnitTests(unittest.TestCase):
                     json={
                         "name": "duty",
                         "description": "check messages",
-                        "interval": 900,
+                        "check_interval": 900,
                     },
                 )
                 self.assertEqual(resp.status_code, 200)
                 cards = client.get("/api/sessions/test-session/tasks").json()["cards"]
             duty = next(c for c in cards if c["name"] == "duty")
-            self.assertEqual(duty["interval"], 900)
+            self.assertEqual(duty["check_interval"], 900)
 
     def test_put_tasks_can_rename_card(self) -> None:
         with TemporaryDirectory() as td:

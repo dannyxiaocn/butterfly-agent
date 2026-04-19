@@ -21,11 +21,14 @@ from butterfly.session_engine.pending_inputs import (
     TaskItem,
     default_mode_for_source,
 )
+from butterfly.session_engine.external_hooks import run_hooks
 from butterfly.session_engine.session_config import read_config, ensure_config
 from butterfly.session_engine.task_cards import (
-    TaskCard, clear_all_cards,
-    load_card, load_due_cards, save_card,
+    TaskCard, cards_needing_check, cards_with_end_check_due, clear_all_cards,
+    end_script_path, load_card, parse_end_output, parse_trigger_output,
+    save_card, trigger_script_path,
 )
+from butterfly.session_engine.task_runner import run_script
 from butterfly.llm_engine.registry import provider_name, resolve_provider
 from butterfly.session_engine.session_status import ensure_session_status, read_session_status, write_session_status
 from butterfly.tool_engine.background import BackgroundEvent, BackgroundTaskManager
@@ -37,6 +40,10 @@ if TYPE_CHECKING:
 SESSIONS_DIR = Path(__file__).parent.parent.parent / "sessions"
 _SYSTEM_SESSIONS_DIR = Path(__file__).parent.parent.parent / "_sessions"
 SESSION_FINISHED = "SESSION_FINISHED"
+
+# Cap retained on task_check events so a screenful of bash output doesn't
+# bloat events.jsonl. Full output is still reachable via the panel.
+_TASK_STDOUT_CAP = 4000
 
 # Background-spawn placeholder pattern. Agent.py returns this exact prefix
 # from ``_execute_tools`` when a tool was routed to BackgroundTaskManager.spawn:
@@ -226,6 +233,7 @@ class Session:
         self.core_dir.mkdir(exist_ok=True)
         (self.core_dir / "tools").mkdir(exist_ok=True)
         (self.core_dir / "skills").mkdir(exist_ok=True)
+        self.hook_dir.mkdir(parents=True, exist_ok=True)
         self.panel_dir.mkdir(parents=True, exist_ok=True)
         self.docs_dir.mkdir(exist_ok=True)
         self.playground_dir.mkdir(exist_ok=True)
@@ -497,6 +505,112 @@ class Session:
                 return f"{header}\n\n---\n\n{args}" if args else header
         return message
 
+    # ── Task-card trigger/end script polling (v2.0.27) ─────────────
+
+    async def _poll_trigger_script(self, card: TaskCard) -> str | None:
+        """Run ``<name>.trigger.sh`` and return a seed on ``[start]``.
+
+        Returns ``None`` when the card should NOT fire this pass (``[skip]``,
+        missing script, non-zero exit, unparseable output, timeout). A
+        ``task_check`` event is written to ``events.jsonl`` so the panel can
+        display task_id + script output. An error outcome is additionally
+        reported as ``task_check_error`` so the UI can flag it distinctly.
+
+        Side effect: the card's ``last_checked_at`` is stamped and persisted
+        after every run, fire or skip — the polling cadence must not loop
+        hot on a misconfigured script.
+        """
+        script = trigger_script_path(self.tasks_dir, card.name)
+        if not script.is_file():
+            return None
+        result = await run_script(script, cwd=self.session_dir)
+        card.mark_checked()
+        save_card(self.tasks_dir, card)
+        parsed = parse_trigger_output(result.stdout, result.exit_code)
+        event: dict = {
+            "type": "task_check",
+            "card": card.name,
+            "kind": "trigger",
+            "tag": parsed[0] if parsed else None,
+            "stdout": result.stdout[-_TASK_STDOUT_CAP:],
+            "stderr": result.stderr[-_TASK_STDOUT_CAP:],
+            "exit_code": result.exit_code,
+            "duration_ms": result.duration_ms,
+        }
+        if result.timed_out:
+            event["timed_out"] = True
+        self._append_event(event)
+        if parsed is None:
+            self._append_event({
+                "type": "task_check_error",
+                "card": card.name,
+                "kind": "trigger",
+                "reason": "timed_out" if result.timed_out else (
+                    "non_zero_exit" if result.exit_code not in (0, None) else "unparseable"
+                ),
+            })
+            return None
+        tag, message = parsed
+        if tag == "[start]":
+            return message or ""
+        return None
+
+    async def _poll_end_script(self, card: TaskCard) -> bool:
+        """Run ``<name>.end.sh`` and return True iff the card should end."""
+        script = end_script_path(self.tasks_dir, card.name)
+        if not script.is_file():
+            return False
+        result = await run_script(script, cwd=self.session_dir)
+        card.mark_checked()
+        save_card(self.tasks_dir, card)
+        parsed = parse_end_output(result.stdout, result.exit_code)
+        event: dict = {
+            "type": "task_check",
+            "card": card.name,
+            "kind": "end",
+            "tag": parsed[0] if parsed else None,
+            "stdout": result.stdout[-_TASK_STDOUT_CAP:],
+            "stderr": result.stderr[-_TASK_STDOUT_CAP:],
+            "exit_code": result.exit_code,
+            "duration_ms": result.duration_ms,
+        }
+        if result.timed_out:
+            event["timed_out"] = True
+        self._append_event(event)
+        if parsed is None:
+            self._append_event({
+                "type": "task_check_error",
+                "card": card.name,
+                "kind": "end",
+                "reason": "timed_out" if result.timed_out else (
+                    "non_zero_exit" if result.exit_code not in (0, None) else "unparseable"
+                ),
+            })
+            return False
+        return parsed[0] == "[done]"
+
+    # ── External hooks (core/hook/<event>/main.sh) ─────────────────
+
+    async def _fire_external_hook(self, event: str, data: dict | None = None) -> None:
+        """Run the user-configured hook for ``event`` — observe-only.
+
+        Swallows anything the script throws so a broken hook never stops
+        the main loop. A ``hook_run`` event is emitted to ``events.jsonl``
+        with exit code / stdout / stderr / duration so the UI (and the
+        agent itself) can see what happened.
+        """
+        try:
+            await run_hooks(
+                event,
+                data or {},
+                hook_dir=self.hook_dir,
+                session_id=self._session_id,
+                cwd=self.session_dir,
+                emit_event=self._append_event,
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            self._append_event({"type": "hook_run", "event": event, "error": str(exc)})
+
     # ── Public chat / tick (queue-routed) ──────────────────────────
 
     async def chat(
@@ -543,24 +657,39 @@ class Session:
         await self._enqueue(item)
         return await future
 
-    async def tick(self, card: TaskCard | None = None) -> AgentResult | None:
-        """Execute a single task card (or the next due card).
+    async def tick(
+        self,
+        card: TaskCard | None = None,
+        *,
+        seed: str = "",
+    ) -> AgentResult | None:
+        """Execute a single task card through the dispatcher as a ``TaskItem``.
 
-        If ``card`` is omitted, picks the first due card from ``core/tasks/``;
-        returns ``None`` if nothing is due. v2.0.12: routed through the
-        dispatcher as a ``TaskItem`` (always wait mode), so a chat in flight
-        completes before the wakeup fires and a follow-up interrupt-chat
-        cleanly cancels the wakeup and resets the card to ``pending``.
+        Always wait-mode — a chat in flight completes before the wakeup
+        fires, and a follow-up interrupt-chat cleanly cancels the wakeup
+        and resets the card to ``pending``.
+
+        When ``card`` is omitted we run the FIRST pending card's
+        trigger_script inline. If it emits ``[start]`` the card (plus the
+        trigger's optional seed message) is dispatched; otherwise nothing
+        happens and the method returns ``None``. Tests use the explicit
+        ``card`` + ``seed`` form to skip the script entirely.
         """
         if card is None:
-            due = load_due_cards(self.tasks_dir)
-            if due:
-                card = due[0]
-            else:
+            # Walk pending cards; the first one whose trigger_script fires
+            # wins this tick. This mirrors the daemon-loop behaviour when
+            # ``tick()`` is invoked manually in tests / CLI one-shot.
+            for candidate in cards_needing_check(self.tasks_dir):
+                fired_seed = await self._poll_trigger_script(candidate)
+                if fired_seed is not None:
+                    card = candidate
+                    seed = fired_seed
+                    break
+            if card is None:
                 return None
         loop = asyncio.get_running_loop()
         future: asyncio.Future = loop.create_future()
-        item = TaskItem(card=card, futures=[future])
+        item = TaskItem(card=card, seed=seed, futures=[future])
         await self._enqueue(item)
         return await future
 
@@ -676,7 +805,9 @@ class Session:
             self._run_history_baseline = len(self._agent._history)
             self._run_task = asyncio.create_task(self._do_chat(item))
         else:  # TaskItem
-            self._run_task = asyncio.create_task(self._do_tick(item.card))
+            self._run_task = asyncio.create_task(
+                self._do_tick(item.card, seed=getattr(item, "seed", ""))
+            )
         try:
             result = await self._run_task
             item.resolve(result)
@@ -750,6 +881,12 @@ class Session:
         on_chunk = self._make_text_chunk_callback()
         on_thinking_start, on_thinking_end, had_thinking, get_thinking_blocks = self._make_thinking_callbacks()
         result: AgentResult | None = None
+        loop_end_reason = "finished"
+        await self._fire_external_hook("agent_loop_start", {
+            "source": item.source,
+            "caller_type": item.caller_type,
+            "content": message,
+        })
         try:
             async with self._agent_lock:
                 self._load_session_capabilities()
@@ -766,16 +903,26 @@ class Session:
                     caller_type=item.caller_type,
                 )
         except asyncio.CancelledError:
+            loop_end_reason = "cancelled"
             on_chunk.flush()
             self._set_model_status("idle", "user")
             self._save_partial_chat_turn(
                 item, old_len, get_tool_call_count(), had_thinking(),
                 thinking_blocks=get_thinking_blocks(),
             )
+            await self._fire_external_hook("agent_loop_end", {
+                "source": item.source,
+                "reason": loop_end_reason,
+            })
             raise
         except BaseException:
+            loop_end_reason = "error"
             on_chunk.flush()
             self._set_model_status("idle", "user")
+            await self._fire_external_hook("agent_loop_end", {
+                "source": item.source,
+                "reason": loop_end_reason,
+            })
             raise
         finally:
             on_chunk.flush()
@@ -796,9 +943,14 @@ class Session:
             thinking_blocks=get_thinking_blocks(),
         )
         self._set_model_status("idle", "user")
+        await self._fire_external_hook("agent_loop_end", {
+            "source": item.source,
+            "reason": loop_end_reason,
+            "iterations": getattr(result, "iterations", 0) if result else 0,
+        })
         return result
 
-    async def _do_tick(self, card: TaskCard) -> AgentResult | None:
+    async def _do_tick(self, card: TaskCard, seed: str = "") -> AgentResult | None:
         """Execute a task card (was tick() body pre-v2.0.12)."""
         # v2.0.26: pause-aware gate. A concurrent ``stop_session`` may have
         # flipped this card to ``paused`` after it was enqueued but before
@@ -825,6 +977,11 @@ class Session:
             prompt = f"Task wakeup: {card.name}\n\n{task_info}"
             if task_prompt:
                 prompt += f"\n\n{task_prompt}"
+        # v2.0.27: the trigger script can emit a "[start] <message>" tag
+        # — carry <message> as context to the agent so they don't have to
+        # re-run the check script to learn why they were activated.
+        if seed:
+            prompt = f"{prompt}\n\nTrigger reason: {seed}"
 
         trigger_ts = datetime.now().isoformat()
         # v2.0.23: write the wakeup marker to context.jsonl (not events.jsonl).
@@ -852,6 +1009,14 @@ class Session:
         tool_call_cb, get_tool_call_count = self._make_tool_call_callback()
         on_chunk = self._make_text_chunk_callback()
         on_thinking_start, on_thinking_end, had_thinking, get_thinking_blocks = self._make_thinking_callbacks()
+        loop_end_reason = "finished"
+        await self._fire_external_hook("agent_loop_start", {
+            "source": "task",
+            "caller_type": "system",
+            "card": card.name,
+            "seed": seed,
+            "content": prompt,
+        })
         try:
             async with self._agent_lock:
                 self._load_session_capabilities()
@@ -873,12 +1038,18 @@ class Session:
             self._agent._history = history_snapshot
             self._set_model_status("idle", triggered_by)
             on_chunk.flush()
+            await self._fire_external_hook("agent_loop_end", {
+                "source": "task", "card": card.name, "reason": "cancelled",
+            })
             raise
         except BaseException:
             card.mark_pending()
             save_card(self.tasks_dir, card)
             self._set_model_status("idle", triggered_by)
             on_chunk.flush()
+            await self._fire_external_hook("agent_loop_end", {
+                "source": "task", "card": card.name, "reason": "error",
+            })
             raise
         finally:
             on_chunk.flush()
@@ -931,6 +1102,12 @@ class Session:
                 self._append_context(turn)
 
         self._set_model_status("idle", triggered_by)
+        await self._fire_external_hook("agent_loop_end", {
+            "source": "task",
+            "card": card.name,
+            "reason": loop_end_reason,
+            "iterations": getattr(result, "iterations", 0) if result else 0,
+        })
         return result
 
     # ── Turn writers (success + interrupted-with-commit) ───────────
@@ -1067,6 +1244,9 @@ class Session:
 
         self._emit_version_notice_if_stale()
         self._bg_manager.sweep_restart()
+        await self._fire_external_hook("session_start", {
+            "resumed": bool(self._initial_input_offset()),
+        })
 
         # v2.0.13 fix (PR #28 review Bug #1): start input_offset at the byte
         # position immediately after the last committed ``turn`` in
@@ -1136,14 +1316,27 @@ class Session:
                             except Exception:
                                 pass
 
-                    # Task card scheduling — enqueue at most once per card while
-                    # it sits in the inbox or is currently running.
+                    # Task card scheduling (v2.0.27) — for each pending
+                    # card whose check interval has elapsed, run its
+                    # trigger.sh; on [start], enqueue a TaskItem. For each
+                    # working card with an end.sh due for check, run it
+                    # and mark_terminal on [done]. Scripts run serially so
+                    # one slow check doesn't starve the next poll — the
+                    # check cadence is minutes (default 1h), and a bad
+                    # script has a 10s cap via task_runner.
                     if not self.is_stopped():
-                        due_cards = load_due_cards(self.tasks_dir)
-                        for card in due_cards:
+                        for card in cards_needing_check(self.tasks_dir):
                             if card.name in self._scheduled_task_names:
                                 continue
-                            await self._enqueue(TaskItem(card=card))
+                            seed = await self._poll_trigger_script(card)
+                            if seed is None:
+                                continue
+                            await self._enqueue(TaskItem(card=card, seed=seed))
+                        for card in cards_with_end_check_due(self.tasks_dir):
+                            done = await self._poll_end_script(card)
+                            if done:
+                                card.mark_terminal()
+                                save_card(self.tasks_dir, card)
 
                     next_housekeeping_at = now + self._TASK_POLL_INTERVAL
 
@@ -1296,6 +1489,11 @@ class Session:
     @property
     def panel_dir(self) -> Path:
         return self.core_dir / "panel"
+
+    @property
+    def hook_dir(self) -> Path:
+        """External-hook script root: ``core/hook/<event>/main.sh``."""
+        return self.core_dir / "hook"
 
     @property
     def tool_results_dir(self) -> Path:

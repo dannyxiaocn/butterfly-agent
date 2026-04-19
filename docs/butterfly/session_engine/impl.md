@@ -90,19 +90,24 @@ Each agent is fully self-contained — no inheritance chain:
 | `default` | Standard session, no autonomous tasks |
 | `persistent` | Has recurring task card (e.g. duty) with configured interval |
 
-## Task Card System
+## Task Card System (v2.0.27 bash-driven)
 
-Each task card is a `.json` file in `core/tasks/`:
+Each task has three artefacts under `core/tasks/`:
+
+- `<name>.json` — status + metadata
+- `<name>.trigger.sh` — bash check polled every `check_interval` seconds
+- `<name>.end.sh` *(optional)* — bash check polled while `status == working`
+
+JSON schema:
 
 ```json
 {
   "name": "duty",
   "description": "Review and process child sessions",
   "status": "pending",
-  "interval": 3600,
-  "start_at": "2026-04-12T11:00:00",
-  "end_at": null,
-  "created_at": "2026-04-12T10:00:00",
+  "check_interval": 3600,
+  "created_at": "2026-04-19T10:00:00",
+  "last_checked_at": null,
   "last_started_at": null,
   "last_finished_at": null,
   "comments": "",
@@ -110,24 +115,37 @@ Each task card is a `.json` file in `core/tasks/`:
 }
 ```
 
-`end_at: null` (default) means the card never auto-expires. Set an explicit ISO timestamp (e.g. `"2026-04-19T10:00:00"`) to create a bounded window.
-
 ### Status values
 
 | Status | Meaning |
 |--------|---------|
-| `pending` | Waiting for next trigger (default state for new and recurring tasks) |
-| `working` | Currently being executed |
-| `finished` | Completed (one-shot) or manually finished |
+| `pending` | Waiting for next trigger_script check |
+| `working` | Agent is currently running the card's wakeup |
+| `finished` | Completed (via `task_finish` tool or end_script `[done]`) |
 | `paused` | User-initiated pause; won't fire until explicitly resumed |
 
-### Scheduling (`start_at` / `end_at`)
+### Script contract
 
-- `start_at`: earliest time a task can fire. Default for recurring = `ceil(created_at + interval)`; for one-shot = `floor(created_at)`.
-- `end_at`: auto-expire time. No default — `None` means the card never expires. Callers that want a bounded window set an explicit ISO timestamp.
-- Hour-level granularity: `_ceil_to_hour()` rounds up, `_floor_to_hour()` truncates down.
-- A task with `status=pending` fires when: `now >= start_at AND (end_at is None OR now < end_at) AND (never finished OR interval elapsed)`.
-- If `end_at` is set and `now >= end_at` → auto-marked `finished` and persisted to disk by `load_due_cards()`. Cards with `end_at=None` are never auto-expired.
+Last non-empty line of stdout must match:
+
+| Script | Token | Meaning |
+|--------|-------|---------|
+| `trigger.sh` | `[start]` | Activate the agent now |
+| `trigger.sh` | `[start] <message>` | Activate; `<message>` becomes the seed input |
+| `trigger.sh` | `[skip]` | Not yet, check again next `check_interval` |
+| `end.sh` | `[done]` | Mark card finished |
+| `end.sh` | `[not_done]` | Keep running |
+
+Non-zero exit / timeout / unrecognised output → treated as `[skip]` / `[not_done]` (fail-closed) and emitted as `task_check_error` on `events.jsonl`. Every run (success or fail) emits a `task_check` event carrying `stdout`, `stderr`, `exit_code`, `duration_ms`.
+
+### Scheduling
+
+The daemon's housekeeping tick (`_TASK_POLL_INTERVAL = 500 ms`) walks `core/tasks/` and:
+
+1. For each `status=pending` card whose `needs_check(now)` is true (first check or `now - last_checked_at >= check_interval`), run `trigger.sh`. On `[start]` enqueue a `TaskItem(card, seed=<msg>)` into the wait queue; on `[skip]` / error, just stamp `last_checked_at` and move on.
+2. For each `status=working` card whose `end_check_due(now)` is true *and* has an `end.sh` on disk, run it. On `[done]` call `mark_terminal()` (the currently running chat finishes naturally). Otherwise noop.
+
+Trigger scripts have a 10 s hard timeout (see `task_runner._CHECK_TIMEOUT_SEC`). All time logic (daily windows, cron-like gates, file presence, etc.) lives inside the agent-authored script — the runtime only tracks cadence.
 
 ## Important Behaviors
 

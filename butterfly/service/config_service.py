@@ -39,17 +39,26 @@ def update_config(session_id: str, sessions_dir: Path, system_sessions_dir: Path
     # silently corrupts the schema.
     params = {k: v for k, v in dict(params).items() if k in _ALLOWED_KEYS}
 
-    # Sync duty config field with task card
+    # Sync duty config field with task card. v2.0.27: the legacy ``interval``
+    # config key now maps to ``check_interval`` on the new card; the trigger
+    # script defaults to ``echo [start]`` (runtime's check cadence is the
+    # only gate) — baking in a duty-specific custom script here would lock
+    # users out of editing the card later.
     duty = params.get('duty')
     if isinstance(duty, dict) and duty.get('interval'):
         tasks_dir = session_dir / 'core' / 'tasks'
         existing = load_card(tasks_dir, 'duty')
         if existing is not None:
-            existing.interval = float(duty['interval'])
+            existing.check_interval = float(duty['interval'])
             existing.description = duty.get('description', existing.description)
             save_card(tasks_dir, existing)
         else:
-            ensure_card(tasks_dir, name='duty', interval=float(duty['interval']), description=duty.get('description', ''))
+            ensure_card(
+                tasks_dir,
+                name='duty',
+                check_interval=float(duty['interval']),
+                description=duty.get('description', ''),
+            )
 
     write_config(session_dir, **params)
     saved = read_config(session_dir)

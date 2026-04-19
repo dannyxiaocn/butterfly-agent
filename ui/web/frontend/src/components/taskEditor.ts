@@ -8,9 +8,9 @@ export function renderTaskEditor(card: TaskCard | null, sessionId: string, onDon
   const el = document.createElement('div');
   el.className = 'task-editor';
 
-  const intervalVal = card?.interval ?? (isNew ? '' : '');
-  const startsVal = card?.start_at ? toDatetimeLocal(card.start_at) : '';
-  const endsVal = card?.end_at ? toDatetimeLocal(card.end_at) : '';
+  const intervalVal = card?.check_interval ?? 3600;
+  const triggerVal = card?.trigger_script ?? '#!/bin/bash\necho [start]\n';
+  const endVal = card?.end_script ?? '';
   const statusOptions = ['pending', 'working', 'finished', 'paused']
     .map(s => `<option value="${s}"${(card?.status ?? 'pending') === s ? ' selected' : ''}>${s}</option>`)
     .join('');
@@ -28,22 +28,20 @@ export function renderTaskEditor(card: TaskCard | null, sessionId: string, onDon
       <select id="te-status">${statusOptions}</select>
     </div>
     <div class="form-field">
-      <label>Interval (seconds, blank = one-shot)</label>
-      <input id="te-interval" type="number" value="${intervalVal}" placeholder="e.g. 7200" min="1" />
-    </div>
-    <div class="form-row">
-      <div class="form-field flex1">
-        <label>Starts at</label>
-        <input id="te-starts" type="datetime-local" value="${escapeHtml(startsVal)}" />
-      </div>
-      <div class="form-field flex1">
-        <label>Ends at</label>
-        <input id="te-ends" type="datetime-local" value="${escapeHtml(endsVal)}" />
-      </div>
+      <label>Check interval (seconds — how often to run trigger_script)</label>
+      <input id="te-interval" type="number" value="${intervalVal}" placeholder="3600" min="1" />
     </div>
     <div class="form-field">
-      <label>Content</label>
-      <textarea id="te-content" class="task-content-textarea" rows="10">${escapeHtml(card?.description ?? '')}</textarea>
+      <label>Description</label>
+      <textarea id="te-content" class="task-content-textarea" rows="5">${escapeHtml(card?.description ?? '')}</textarea>
+    </div>
+    <div class="form-field">
+      <label>Trigger script (last line: <code>[start]</code> / <code>[start] &lt;msg&gt;</code> / <code>[skip]</code>)</label>
+      <textarea id="te-trigger" class="task-content-textarea" rows="6">${escapeHtml(triggerVal)}</textarea>
+    </div>
+    <div class="form-field">
+      <label>End script — optional (last line: <code>[done]</code> / <code>[not_done]</code>)</label>
+      <textarea id="te-end" class="task-content-textarea" rows="4">${escapeHtml(endVal)}</textarea>
     </div>
     <div class="form-row task-editor-actions">
       <button class="btn-primary" id="te-save">Save</button>
@@ -64,29 +62,25 @@ export function renderTaskEditor(card: TaskCard | null, sessionId: string, onDon
     const nameEl = el.querySelector('#te-name') as HTMLInputElement;
     const statusEl = el.querySelector('#te-status') as HTMLSelectElement;
     const intervalEl = el.querySelector('#te-interval') as HTMLInputElement;
-    const startsEl = el.querySelector('#te-starts') as HTMLInputElement;
-    const endsEl = el.querySelector('#te-ends') as HTMLInputElement;
     const contentEl = el.querySelector('#te-content') as HTMLTextAreaElement;
+    const triggerEl = el.querySelector('#te-trigger') as HTMLTextAreaElement;
+    const endEl = el.querySelector('#te-end') as HTMLTextAreaElement;
 
     const name = nameEl.value.trim();
     if (!name) { showError('Task name is required'); return; }
 
     const intervalRaw = intervalEl.value.trim();
-    let interval: number | null = null;
-    if (intervalRaw) {
-      interval = parseFloat(intervalRaw);
-      if (isNaN(interval) || interval < 1) { showError('Interval must be at least 1 second'); return; }
-    }
-    const startAt = startsEl.value ? fromDatetimeLocal(startsEl.value) : null;
-    const endAt = endsEl.value ? fromDatetimeLocal(endsEl.value) : null;
+    const interval = intervalRaw ? parseFloat(intervalRaw) : 3600;
+    if (isNaN(interval) || interval < 1) { showError('check_interval must be at least 1 second'); return; }
+    if (!triggerEl.value.trim()) { showError('trigger_script cannot be empty'); return; }
 
     const body: Partial<TaskCard> & { previous_name?: string } = {
       name,
       status: statusEl.value as TaskCard['status'],
-      interval,
-      start_at: startAt,
-      end_at: endAt,
+      check_interval: interval,
       description: contentEl.value,
+      trigger_script: triggerEl.value,
+      end_script: endEl.value.trim() ? endEl.value : null,
     };
     if (!isNew && card!.name !== name) {
       body.previous_name = card!.name;
@@ -113,22 +107,4 @@ export function renderTaskEditor(card: TaskCard | null, sessionId: string, onDon
   el.querySelector('#te-cancel')?.addEventListener('click', onDone);
 
   return el;
-}
-
-function toDatetimeLocal(iso: string): string {
-  try {
-    const d = new Date(iso);
-    const pad = (n: number) => String(n).padStart(2, '0');
-    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  } catch {
-    return '';
-  }
-}
-
-function fromDatetimeLocal(local: string): string {
-  try {
-    return new Date(local).toISOString();
-  } catch {
-    return local;
-  }
 }

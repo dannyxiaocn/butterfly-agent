@@ -92,11 +92,11 @@ async def test_tick_fires_due_task_card(tmp_path):
         system_base=tmp_path / "_sessions",
     )
 
-    past = (datetime.now() - timedelta(hours=2)).isoformat()
+    from butterfly.session_engine.task_cards import write_trigger_script
     save_card(session.tasks_dir, TaskCard(
-        name="check", description="Check state", interval=600,
-        start_at=past,
+        name="check", description="Check state", check_interval=600,
     ))
+    write_trigger_script(session.tasks_dir, "check", "echo [start]")
 
     result = await session.tick()
     assert result is not None
@@ -123,8 +123,9 @@ async def test_tick_writes_triggered_by_task(tmp_path):
         system_base=tmp_path / "_sessions",
     )
 
-    past = (datetime.now() - timedelta(hours=2)).isoformat()
-    save_card(session.tasks_dir, TaskCard(name="duty", description="Do stuff", interval=600, start_at=past))
+    from butterfly.session_engine.task_cards import write_trigger_script
+    save_card(session.tasks_dir, TaskCard(name="duty", description="Do stuff", check_interval=600))
+    write_trigger_script(session.tasks_dir, "duty", "echo [start]")
 
     result = await session.tick()
     assert result is not None
@@ -153,7 +154,7 @@ async def test_tick_with_explicit_card(tmp_path):
         system_base=tmp_path / "_sessions",
     )
 
-    card = TaskCard(name="manual", description="- do something real", interval=None)
+    card = TaskCard(name="manual", description="- do something real")
     save_card(session.tasks_dir, card)
 
     result = await session.tick(card)
@@ -215,10 +216,7 @@ def test_session_init_creates_duty_card_from_config(tmp_path):
     duty = load_card(sessions_base / "s1" / "core" / "tasks", "duty")
     assert duty is not None
     assert duty.description == "Check mail"
-    assert duty.interval == 3600
-    # v2.0.6 regression pin: duty cards must default to end_at=None so
-    # long-running agents don't silently auto-expire after 7 days.
-    assert duty.end_at is None
+    assert duty.check_interval == 3600
 
 
 def test_session_init_no_duty_keeps_empty_tasks(tmp_path):
