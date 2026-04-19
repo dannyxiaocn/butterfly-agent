@@ -74,7 +74,14 @@ self._wait_queue:      list[ChatItem | TaskItem]   # mode=wait + every TaskItem
 - **Uncommitted** → fold the cancelled prefix into the head of `_interrupt_queue` via `merge_before`. The next consumer iteration drains the queue and merges; the cancelled prefix appears at the start of the aggregated turn.
 - **Committed** → `_do_chat` writes a `turn` event with `interrupted: True` carrying just the committed prefix. The aggregated interrupt then runs as a fresh user turn (history already ends with a committed assistant message, so consecutive-user-message is impossible).
 
-Tick cancellation is simpler: the card is `mark_pending`-ed and re-fires on the next due check; cancelled wakeup content is discarded (task prompts don't textually merge with chat content).
+Tick cancellation is simpler: the card is `mark_pending`-ed and re-fires on the next due check; cancelled wakeup content is discarded (task prompts don't textually merge with chat content). Consequence on **meta sessions** (whose only activity is a heartbeat `task_wakeup` card): a bare ⚡ cancels *this* tick but the card's `last_finished_at` is not stamped, so `is_due()` returns True on the next 500 ms housekeeping poll and the tick restarts almost immediately. This is intentional — a heartbeat is supposed to beat. To actually quiet a meta session, use the **Stop** button, which additionally calls `pause_all_cards` (see below) so no card re-fires until ▶ Start.
+
+Two race guards (v2.0.26) cooperate to make Stop + racing tick-cancel deterministic:
+
+- `_do_tick` reads the card's on-disk status before calling `mark_working`; if it's already `paused` or `finished` (racing Stop or a Finish marker landed while this tick was in the queue), the tick returns immediately without running the wakeup prompt.
+- `_dispatch_one`'s TaskItem CancelledError handler re-reads the card from disk before calling `mark_pending`; if the on-disk status is `paused` or `finished`, the mark_pending is skipped.
+
+Either guard alone would be insufficient — `_do_tick` runs `mark_working` right at entry, which would overwrite a paused disk marker; the cancel handler alone can't fix that because the tick may have already written `working`. Both checks together ensure a Stop during a tick converges cleanly on `paused`.
 
 #### Uniform cancel path for ChatItem and TaskItem
 

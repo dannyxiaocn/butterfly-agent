@@ -24,7 +24,7 @@ from butterfly.session_engine.pending_inputs import (
 from butterfly.session_engine.session_config import read_config, ensure_config
 from butterfly.session_engine.task_cards import (
     TaskCard, clear_all_cards,
-    load_due_cards, save_card,
+    load_card, load_due_cards, save_card,
 )
 from butterfly.llm_engine.registry import provider_name, resolve_provider
 from butterfly.session_engine.session_status import ensure_session_status, read_session_status, write_session_status
@@ -685,9 +685,20 @@ class Session:
                 # Task was interrupted. Reset the card so it fires again on
                 # next due check; the cancelled wakeup content is discarded
                 # (task prompts don't textually merge with chat content).
+                #
+                # Race guard (v2.0.26): a concurrent ``pause_all_cards`` from
+                # ``stop_session`` (web Stop button posts /interrupt → /stop)
+                # may have flipped the card to ``paused`` on disk while we
+                # were being cancelled. Re-read from disk; if the on-disk
+                # status is already ``paused`` or ``finished``, leave it
+                # alone — our in-memory object is stale and overwriting
+                # with ``pending`` would silently un-pause a stopped
+                # session, causing a wakeup flood on resume.
                 try:
-                    item.card.mark_pending()
-                    save_card(self.tasks_dir, item.card)
+                    fresh = load_card(self.tasks_dir, item.card.name)
+                    if fresh is None or fresh.status not in ("paused", "finished"):
+                        item.card.mark_pending()
+                        save_card(self.tasks_dir, item.card)
                 except Exception:
                     pass
                 item.reject(asyncio.CancelledError())
@@ -789,6 +800,17 @@ class Session:
 
     async def _do_tick(self, card: TaskCard) -> AgentResult | None:
         """Execute a task card (was tick() body pre-v2.0.12)."""
+        # v2.0.26: pause-aware gate. A concurrent ``stop_session`` may have
+        # flipped this card to ``paused`` after it was enqueued but before
+        # we start running — re-read the on-disk status and skip the tick
+        # entirely if it's not ``pending`` / ``working``. Without this
+        # guard, the tick would ``mark_working`` (overwriting the paused
+        # marker), run the whole wakeup prompt, and silently un-pause a
+        # stopped session.
+        fresh = load_card(self.tasks_dir, card.name)
+        if fresh is not None and fresh.status in ("paused", "finished"):
+            return None
+
         triggered_by = f"task:{card.name}"
         task_info = card.description or card.name
 

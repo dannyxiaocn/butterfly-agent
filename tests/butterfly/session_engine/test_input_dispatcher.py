@@ -34,6 +34,13 @@ from butterfly.session_engine.pending_inputs import (
     merge_chat_content,
 )
 from butterfly.session_engine.session import Session
+from butterfly.session_engine.task_cards import (
+    TaskCard,
+    load_card,
+    pause_all_cards,
+    resume_all_paused_cards,
+    save_card,
+)
 from butterfly.tool_engine.background import BackgroundEvent
 
 
@@ -885,4 +892,195 @@ async def test_daemon_background_event_interrupts_committed_run(tmp_path):
     assert any(
         m.get("role") == "assistant" and "response-2" in str(m.get("content", ""))
         for m in turns[1].get("messages", [])
+    )
+
+
+# ── v2.0.26: two-queue drain priority + Stop/Start task-card pause ──────────
+
+
+async def _await_item_futures(items):
+    """Wait for every item's future to settle (resolve or reject)."""
+    loop = asyncio.get_running_loop()
+    pending = [f for it in items for f in it.futures]
+    for fut in pending:
+        try:
+            await fut
+        except Exception:
+            pass
+    # Safety — yield once so the consumer loop can exit cleanly.
+    await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_interrupt_queue_drains_before_wait_queue(tmp_path):
+    """Two-queue invariant: while the interrupt queue is non-empty the
+    consumer never pops from the wait queue. Enqueue [wait, interrupt]
+    with the consumer idle, kick it, and observe that interrupt runs
+    first even though it arrived second."""
+    observed: list[str] = []
+    provider = RecordingProvider(
+        [("interrupt-done", []), ("wait-done", [])],
+        observed_user_messages=observed,
+    )
+    agent = Agent(provider=provider)
+    session = make_session(tmp_path, agent, session_id="two-queue-priority")
+
+    loop = asyncio.get_running_loop()
+    wait_item = ChatItem(content="first", mode="wait", futures=[loop.create_future()])
+    interrupt_item = ChatItem(
+        content="second", mode="interrupt", futures=[loop.create_future()]
+    )
+
+    session._ensure_inbox_primitives()
+    async with session._inbox_lock:
+        session._wait_queue.append(wait_item)
+        session._interrupt_queue.append(interrupt_item)
+
+    session._consumer_task = asyncio.create_task(session._consumer_loop())
+    await _await_item_futures([interrupt_item, wait_item])
+
+    # Interrupt-first: observed[0] is the interrupt content.
+    assert observed == ["second", "first"]
+
+
+@pytest.mark.asyncio
+async def test_interrupt_queue_drains_whole_queue_into_one_turn(tmp_path):
+    """Spec: ``_interrupt_queue`` drains the *whole* queue per dispatch,
+    merging every item via ``merge_after`` into one ChatItem. A burst of
+    three interrupt arrivals should run as a single LLM turn with content
+    ``a\\n\\nb\\n\\nc``."""
+    observed: list[str] = []
+    provider = RecordingProvider(
+        [("merged", [])],
+        observed_user_messages=observed,
+    )
+    agent = Agent(provider=provider)
+    session = make_session(tmp_path, agent, session_id="whole-queue-drain")
+
+    loop = asyncio.get_running_loop()
+    items = [
+        ChatItem(content="a", mode="interrupt", futures=[loop.create_future()]),
+        ChatItem(content="b", mode="interrupt", futures=[loop.create_future()]),
+        ChatItem(content="c", mode="interrupt", futures=[loop.create_future()]),
+    ]
+    session._ensure_inbox_primitives()
+    async with session._inbox_lock:
+        for it in items:
+            session._interrupt_queue.append(it)
+
+    session._consumer_task = asyncio.create_task(session._consumer_loop())
+    await _await_item_futures(items)
+
+    # One call, merged content.
+    assert len(observed) == 1
+    assert observed[0] == "a\n\nb\n\nc"
+
+
+@pytest.mark.asyncio
+async def test_uncommitted_cancel_folds_into_interrupt_queue_head(tmp_path):
+    """When a run is cancelled with ``len(history) == baseline`` (no
+    commit), ``_dispatch_one`` merges the cancelled prefix into
+    ``_interrupt_queue[0]`` via ``merge_before`` — so the prefix lands at
+    the *start* of the aggregated turn, not the end."""
+    observed: list[str] = []
+    provider = SlowProvider(delay=5.0, observed_user_messages=observed)
+    agent = Agent(provider=provider)
+    session = make_session(tmp_path, agent, session_id="fold-head")
+
+    first = asyncio.create_task(session.chat("prefix", mode="interrupt"))
+    await asyncio.sleep(0.05)
+    fast = RecordingProvider([("ok", [])], observed_user_messages=observed)
+    agent._provider = fast
+    second = asyncio.create_task(session.chat("tail", mode="interrupt"))
+
+    await asyncio.gather(first, second)
+    # "prefix" appears before "tail" in the merged content.
+    merged = fast.observed_user_messages[-1]
+    assert merged == "prefix\n\ntail"
+
+
+# ── Stop/Start ↔ task-card pause roundtrip ─────────────────────────────────
+
+
+def test_pause_all_cards_flips_pending_and_working_to_paused(tmp_path):
+    tasks_dir = tmp_path / "tasks"
+    tasks_dir.mkdir()
+    a = TaskCard(name="a", description="", status="pending")
+    b = TaskCard(name="b", description="", status="working")
+    c = TaskCard(name="c", description="", status="finished")
+    for card in (a, b, c):
+        save_card(tasks_dir, card)
+
+    count = pause_all_cards(tasks_dir)
+    assert count == 2  # finished left alone
+    assert load_card(tasks_dir, "a").status == "paused"
+    assert load_card(tasks_dir, "b").status == "paused"
+    assert load_card(tasks_dir, "c").status == "finished"
+
+
+def test_resume_all_paused_cards_only_touches_paused(tmp_path):
+    tasks_dir = tmp_path / "tasks"
+    tasks_dir.mkdir()
+    a = TaskCard(name="a", description="", status="paused")
+    b = TaskCard(name="b", description="", status="pending")
+    c = TaskCard(name="c", description="", status="finished")
+    for card in (a, b, c):
+        save_card(tasks_dir, card)
+
+    count = resume_all_paused_cards(tasks_dir)
+    assert count == 1
+    assert load_card(tasks_dir, "a").status == "pending"
+    assert load_card(tasks_dir, "b").status == "pending"
+    assert load_card(tasks_dir, "c").status == "finished"
+
+
+# ── Race safety: cancel handler respects on-disk paused status ──────────────
+
+
+@pytest.mark.asyncio
+async def test_task_cancel_respects_on_disk_paused_status(tmp_path):
+    """If ``pause_all_cards`` flips a card to paused on disk while a
+    tick is being cancelled, the ``_dispatch_one`` TaskItem branch must
+    NOT call ``mark_pending`` + save — otherwise the racing Stop is
+    silently undone and the card re-fires on resume.
+
+    This pins the v2.0.26 race guard: the cancel handler re-reads the
+    card from disk before writing and skips when status is paused."""
+    # SlowProvider sleeps long enough that the cancel always lands mid-tick.
+    provider = SlowProvider(delay=5.0)
+    agent = Agent(provider=provider)
+    session = make_session(tmp_path, agent, session_id="race-paused")
+
+    # Seed the card on disk as "paused" (simulates the concurrent
+    # ``pause_all_cards`` from /stop already having won the race). The
+    # TaskItem we pass to _dispatch_one still holds an in-memory copy
+    # with status="working" — this is the stale-memory view the cancel
+    # handler would naively overwrite without the race guard.
+    tasks_dir = session.tasks_dir
+    card_in_memory = TaskCard(name="heartbeat", description="", status="working")
+    save_card(tasks_dir, card_in_memory)
+    pause_all_cards(tasks_dir)
+    assert load_card(tasks_dir, "heartbeat").status == "paused"
+
+    item = TaskItem(card=card_in_memory)
+
+    async def cancel_in_flight():
+        # Give _dispatch_one a few ms to enter ``await self._run_task``
+        # (SlowProvider sleeps 5s so we are safely mid-tick), then cancel.
+        await asyncio.sleep(0.1)
+        if session._run_task is not None and not session._run_task.done():
+            session._run_task.cancel()
+
+    cancel_task = asyncio.create_task(cancel_in_flight())
+    try:
+        await session._dispatch_one(item)
+    except Exception:
+        pass
+    await cancel_task
+
+    # Disk card MUST still be paused — the race guard protected it.
+    disk = load_card(tasks_dir, "heartbeat")
+    assert disk is not None
+    assert disk.status == "paused", (
+        f"race guard failed: expected paused, got {disk.status}"
     )
