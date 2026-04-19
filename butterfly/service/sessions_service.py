@@ -194,8 +194,20 @@ def stop_session(session_id: str, system_sessions_dir: Path) -> bool:
     if not (system_dir / 'manifest.json').exists():
         return False
     write_session_status(system_dir, status="stopped", pid=None, stopped_at=datetime.now().isoformat())
-    from butterfly.runtime.ipc import FileIPC
-    FileIPC(system_dir).append_event({"type": "status", "value": "paused — use ▶ Start to resume"})
+    # v2.0.24: also pause every active task card so the session is fully
+    # quiet while stopped (otherwise pending cards would re-fire the moment
+    # the user resumes). Resolved via the session's tasks_dir to keep this
+    # service-layer call free of per-call disk-layout knowledge.
+    sessions_base = _resolve_sessions_base(system_sessions_dir)
+    if sessions_base is not None:
+        try:
+            from butterfly.session_engine.task_cards import pause_all_cards
+            pause_all_cards(sessions_base / session_id / "core" / "tasks")
+        except Exception:
+            pass  # best-effort — stop should still succeed even if pause fails
+    # v2.0.24: dropped the "paused — use ▶ Start to resume" status row.
+    # The sidebar already renders the stopped state via /api/sessions; the
+    # context-stream notice was redundant chrome.
     return True
 
 
@@ -205,6 +217,33 @@ def start_session(session_id: str, system_sessions_dir: Path) -> bool:
     if not (system_dir / 'manifest.json').exists():
         return False
     write_session_status(system_dir, status="active", stopped_at=None)
-    from butterfly.runtime.ipc import FileIPC
-    FileIPC(system_dir).append_event({"type": "status", "value": "resumed"})
+    # v2.0.24: symmetric to stop_session — un-pause every card we paused on
+    # Stop. Cards manually paused by the user via CLI/UI also flip back; if
+    # someone wants per-card persistence across Start they can re-pause
+    # after resume. Best-effort.
+    sessions_base = _resolve_sessions_base(system_sessions_dir)
+    if sessions_base is not None:
+        try:
+            from butterfly.session_engine.task_cards import resume_all_paused_cards
+            resume_all_paused_cards(sessions_base / session_id / "core" / "tasks")
+        except Exception:
+            pass
+    # v2.0.24: dropped the "resumed" context-stream notice — see stop_session.
     return True
+
+
+def _resolve_sessions_base(system_sessions_dir: Path) -> Path | None:
+    """Map ``_sessions/`` → ``sessions/`` so we can reach a session's task
+    cards from a service that only knows the system dir.
+
+    The pair always lives side-by-side under the same parent (see the
+    repo-root constants in ``butterfly/session_engine/agent_state.py``);
+    relying on the trailing-segment swap keeps the service layer free of
+    a global config import and naturally handles test tmp_path layouts
+    that mirror the same structure. Returns None when the parent layout
+    doesn't match — caller treats that as "best-effort skip".
+    """
+    parent = system_sessions_dir.parent
+    sibling_name = system_sessions_dir.name.lstrip("_") or "sessions"
+    candidate = parent / sibling_name
+    return candidate if candidate.is_dir() else None

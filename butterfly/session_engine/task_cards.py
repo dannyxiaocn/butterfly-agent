@@ -272,6 +272,42 @@ def clear_all_cards(tasks_dir: Path) -> None:
         save_card(tasks_dir, card)
 
 
+def pause_all_cards(tasks_dir: Path) -> int:
+    """Mark every active card (pending/working) as paused. Returns count.
+
+    Used by ``stop_session`` so a paused session also halts its scheduled
+    wakeups; without this, ``load_due_cards`` would still surface them on
+    the next housekeeping tick (the daemon's ``is_stopped`` short-circuit
+    skips scheduling but the cards stay ``pending`` and would re-fire the
+    moment the session resumes — losing the user's intent that "stopped
+    means quiet").
+    """
+    count = 0
+    for card in load_all_cards(tasks_dir):
+        if card.status in ("pending", "working"):
+            card.mark_paused()
+            save_card(tasks_dir, card)
+            count += 1
+    return count
+
+
+def resume_all_paused_cards(tasks_dir: Path) -> int:
+    """Flip every paused card back to pending. Returns count.
+
+    Symmetric counterpart to ``pause_all_cards`` — invoked by
+    ``start_session`` so resuming the session also un-quiets every card
+    the user paused via Stop. Cards that were ``finished`` stay finished;
+    only ``paused`` is touched.
+    """
+    count = 0
+    for card in load_all_cards(tasks_dir):
+        if card.status == "paused":
+            card.mark_pending()
+            save_card(tasks_dir, card)
+            count += 1
+    return count
+
+
 def ensure_card(
     tasks_dir: Path,
     name: str,

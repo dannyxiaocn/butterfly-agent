@@ -44,30 +44,77 @@ Each agent has a meta session (`<agent>_meta`) that:
 
 When a child session starts its daemon loop, it compares its `agent_version` against the meta session's current version. If meta has advanced, a `system_notice` event is emitted — rendered in both web UI and CLI — suggesting the user start a new session to pick up the latest configuration.
 
-### Input dispatcher — interrupt / wait modes (v2.0.12)
+### Input dispatcher — two-queue model (v2.0.24)
 
-`Session` no longer drives the agent loop straight from `chat()`. Every chat call, every drained background-tool notification, and every due task card is enqueued into a single in-memory inbox; a dedicated consumer task drains it serially. The two modes the queue supports correspond exactly to the user-visible verbs the web UI used to fake on the frontend:
+`Session` doesn't drive the agent loop from `chat()` directly — every chat call, every drained background-tool notification, and every due task card is enqueued into the dispatcher; a dedicated consumer task drains it serially. v2.0.24 replaced the v2.0.12 single-inbox model with **two independent queues** so the spec's intent ("interrupt always aggregates and pre-empts; wait always queues") falls out of the data structure rather than from per-pop merge predicates.
 
-| Mode | Producer defaults | Effect on inbox / running run |
-| --- | --- | --- |
-| `interrupt` | chat from UI/CLI; background-tool notifications (`source=panel`) | Cancel the in-flight run if any; append to inbox. If the cancelled run had not yet committed an assistant turn, the consumer folds the cancelled item's content into this item via `merge_before` so the LLM only sees one user turn (no consecutive `user` messages). |
-| `wait` | task wakeups (`source=task`); explicit `mode=wait` chats | Append to inbox without cancelling. If the trailing inbox entry is itself a wait-mode `ChatItem`, merge into it via `merge_after` so a burst of "...also" sends collapses into one user turn. |
+```
+self._interrupt_queue: list[ChatItem]              # mode=interrupt only
+self._wait_queue:      list[ChatItem | TaskItem]   # mode=wait + every TaskItem
+```
 
-A bare `send_interrupt()` (the explicit ⚡ Interrupt button) cancels the in-flight run **and** drops the entire inbox — it is not a chat-with-mode; it just stops.
+| Producer | Routing |
+| --- | --- |
+| `ChatItem(mode=interrupt)` — chat from UI/CLI; background-tool notifications (`source=panel`); background sub-agent completions | Append to `_interrupt_queue`. If a run is in flight, cancel `_run_task` immediately. |
+| `ChatItem(mode=wait)` — explicit ⌥+Enter from UI; SDK `mode="wait"` callers | Append to `_wait_queue`. If the queue's tail is itself a chat-wait, `merge_after` so consecutive "...also" sends collapse into one user turn. |
+| `TaskItem` — every due task card (heartbeat, user-defined, etc.) | Append to `_wait_queue`. Never merges with anything (cards own per-name `mark_working` / `mark_finished` / `SESSION_FINISHED` rollback bookkeeping that wouldn't survive textual merge). |
 
-#### Why the cancelled-merge rule is non-negotiable
+**Consumer rule** — interrupt always wins:
 
-`Agent.run()` builds `messages = [..._history, user_message]` and writes nothing to `_history` until after each iteration commits an assistant turn. Cancellation mid-`provider.complete()` therefore leaves history clean — the user turn was never durably appended. If the dispatcher then sent the new content as a fresh user message, the next agent run would still build `[..._history, new_user]`, but the **prior on-disk state** (any earlier turns) would still end with whatever was last committed; the *intended* user turn for the cancelled chat is lost. By folding the cancelled content into the new chat (`merged = old + new`), the LLM receives the full intent without any consecutive-user-message violation.
+1. If `_interrupt_queue` is non-empty, drain the **whole** queue, fold every item via `merge_after` into one `ChatItem`, and dispatch it. A burst of cancel-and-aggregate arrivals therefore runs as a single LLM turn — the consumer never lets two interrupt items dispatch separately.
+2. Otherwise, pop one item from `_wait_queue`. If it's a chat-wait, drain the chat-wait tail at the head of the queue into it the same way `_enqueue` does (catches arrivals that race the per-arrival merge). `TaskItem` falls straight through — pop one and dispatch.
+3. Both queues empty → consumer exits; `_enqueue` restarts it on the next arrival.
 
-For the symmetric case — cancellation **after** at least one iteration commits — `_do_chat` writes a `turn` event with `interrupted: True` carrying just the committed prefix. The new chat then runs as a fresh user turn (history already ends with the committed assistant message, so consecutive-user-message is impossible).
+**Bare `send_interrupt()`** — the explicit ⚡ button — cancels `_run_task`, clears **both** queues, rejects every queued future, and cascades into `BackgroundTaskManager.kill()` for every non-terminal panel entry (bash bg subprocesses + background sub-agents). Distinct from a chat-with-mode=interrupt: this one runs nothing in its place.
+
+#### Why the cancel-and-fold rule is non-negotiable
+
+`Agent.run()` builds `messages = [..._history, user_message]` and writes nothing to `_history` until each iteration commits an assistant turn. Cancellation mid-`provider.complete()` therefore leaves history clean — the user turn was never durably appended. If the dispatcher then sent the new content as a fresh user message, the next agent run would still build `[..._history, new_user]`, but the **prior on-disk state** would still end with whatever was last committed; the *intended* user turn for the cancelled chat is lost. So when an in-flight chat is cancelled by an interrupt arrival, `_dispatch_one` checks `committed = len(history) > baseline`:
+
+- **Uncommitted** → fold the cancelled prefix into the head of `_interrupt_queue` via `merge_before`. The next consumer iteration drains the queue and merges; the cancelled prefix appears at the start of the aggregated turn.
+- **Committed** → `_do_chat` writes a `turn` event with `interrupted: True` carrying just the committed prefix. The aggregated interrupt then runs as a fresh user turn (history already ends with a committed assistant message, so consecutive-user-message is impossible).
+
+Tick cancellation is simpler: the card is `mark_pending`-ed and re-fires on the next due check; cancelled wakeup content is discarded (task prompts don't textually merge with chat content). Consequence on **meta sessions** (whose only activity is a heartbeat `task_wakeup` card): a bare ⚡ cancels *this* tick but the card's `last_finished_at` is not stamped, so `is_due()` returns True on the next 500 ms housekeeping poll and the tick restarts almost immediately. This is intentional — a heartbeat is supposed to beat. To actually quiet a meta session, use the **Stop** button, which additionally calls `pause_all_cards` (see below) so no card re-fires until ▶ Start.
+
+Two race guards (v2.0.26) cooperate to make Stop + racing tick-cancel deterministic:
+
+- `_do_tick` reads the card's on-disk status before calling `mark_working`; if it's already `paused` or `finished` (racing Stop or a Finish marker landed while this tick was in the queue), the tick returns immediately without running the wakeup prompt.
+- `_dispatch_one`'s TaskItem CancelledError handler re-reads the card from disk before calling `mark_pending`; if the on-disk status is `paused` or `finished`, the mark_pending is skipped.
+
+Either guard alone would be insufficient — `_do_tick` runs `mark_working` right at entry, which would overwrite a paused disk marker; the cancel handler alone can't fix that because the tick may have already written `working`. Both checks together ensure a Stop during a tick converges cleanly on `paused`.
+
+#### Uniform cancel path for ChatItem and TaskItem
+
+`_dispatch_one` wraps **both** branches in `self._run_task = asyncio.create_task(...)`, then awaits it. Pre-v2.0.24 the TaskItem branch awaited `_do_tick` inline, so `_run_task` stayed `None` while a tick was running — `_enqueue`'s interrupt-cancel hook (and `_handle_explicit_interrupt`) had nothing to call `cancel()` on, and the in-flight tick ran to completion with the interrupting chat queued behind it. Meta sessions felt this hardest: their only activity is the heartbeat `task_wakeup` tick, so the ⚡ button was effectively a no-op on them. Routing both paths through the same handle lets cancellation propagate uniformly; tick CancelledError routes through the TaskItem branch (mark card pending, reject futures), chat cancel walks the uncommitted-merge / committed-partial-save fork above.
+
+#### What v2.0.24 simplified away
+
+The v2.0.12 single-inbox model encoded merging as "merge into the trailing same-mode item" and added v2.0.21 "consumer-side same-mode tail merge" on top. Both checks compared `item.mode == inbox[-1 / 0].mode`, which only worked when arrivals were perfectly ordered — interleaved modes broke the invariant. The two-queue model retires both predicates: queue membership encodes mode, drain rules encode merge intent. Interrupt always-aggregates is now **structural** ("drain the whole queue at dispatch"), wait-tail merge is contained to the chat-wait case, and `TaskItem` automatically lives in the right queue without a `mode` field.
+
+#### v2.0.24 — bare-interrupt cascade to background workloads
+
+`Session._handle_explicit_interrupt` now also calls `_cascade_interrupt_background()` after cancelling `self._run_task` and clearing the inbox. The cascade walks `self.panel_dir`, finds every non-terminal panel entry, and calls `BackgroundTaskManager.kill(tid)` on each. The runner-specific `kill` does the right thing per type:
+
+- `BashRunner.kill` — `os.killpg(SIGKILL)` on the subprocess group.
+- `SubAgentRunner.kill` — `BridgeSession.send_interrupt()` to the child session **then** `stop_session()` (was just `stop_session` before — that path only set `status=stopped`, but the child's stopped check fires only when a fresh input arrives, so the child's in-flight chat kept running until a natural break).
+
+Per spec, this only fires on the **bare** ⚡ button. A chat with `mode=interrupt` (i.e., a new user input arrives during a run) leaves background workloads alone — the cancel propagates only through the await chain rooted at `_run_task`, which reaches *blocking* sub-agents (awaited inside `_execute_tools`) but not background runners (which live on the `BackgroundTaskManager`'s own task list).
+
+#### v2.0.24 — blocking sub-agent cascade in `SubAgentTool.execute`
+
+Even with the new bare-interrupt cascade, a chat-with-mode=interrupt that lands while the parent is mid-`sub_agent(run_in_background=false)` would previously leave the child session daemon churning on a discarded task: cancellation would propagate up through `_execute_tools` and `SubAgentTool.execute()`, but the child daemon, started by `init_session` and adopted by `SessionWatcher`, runs independently of that await chain. `SubAgentTool.execute` now wraps the `await _wait_for_reply` in a try/except that calls `BridgeSession.send_interrupt()` on the child before re-raising — same primitive the bare-interrupt cascade uses on background sub-agents, applied here at the blocking-sub-agent boundary. Best-effort; failures are swallowed so cancellation propagation stays clean.
 
 #### Per-iteration history commits (`Agent.run`)
 
-The dispatcher's "uncommitted vs committed" decision needs a sharp signal. `Agent.run()` therefore writes `self._history = list(messages)` after each iteration's assistant append (and again after the tool-result append), so cancellation at any point reflects exactly what the LLM has produced. The trailing `self._history = list(messages)` after the loop is now redundant but harmless.
+The dispatcher's "uncommitted vs committed" decision needs a sharp signal. `Agent.run()` writes `self._history = list(messages)` after each iteration's assistant append (and again after the tool-result append), so cancellation at any point reflects exactly what the LLM has produced.
 
 #### Task-card scheduling
 
-Task cards enter the inbox as `TaskItem(card=...)`. `_scheduled_task_names` is a guard the daemon uses to skip a card it has already enqueued so the same wakeup isn't queued every 0.5 s while it sits behind a chat. `TaskItem` never merges with chat items — task wakeups have their own prompt template and `mark_working` / `mark_finished` bookkeeping. If a wait-mode chat arrives while a task is queued behind a chat, both run in their own activations, in order.
+Task cards enter `_wait_queue` as `TaskItem(card=...)`. `_scheduled_task_names` guards a card from being re-enqueued while it already sits in the queue or is currently running — without it, the daemon's housekeeping tick (every 0.5 s) would re-due the same card every cycle. `TaskItem` never merges with chat items: each wakeup owns its own prompt template (`agent.task_prompt`) and per-card bookkeeping (`mark_working` / `mark_finished` / `SESSION_FINISHED` rollback) that wouldn't survive textual merge. Wait-mode chat arrivals queue alongside in arrival order; each runs in its own activation.
+
+#### Stop / Start ↔ task-card pause / resume (v2.0.24)
+
+The web sidebar's Stop button calls `service.stop_session`, which now also calls `pause_all_cards(tasks_dir)` so every `pending` / `working` card flips to `paused`. Without this, the daemon's `is_stopped()` short-circuit just skipped the housekeeping branch — the cards stayed `pending`, and the moment the user hit ▶ Start every overdue wakeup would fire at once. Symmetrically, `start_session` calls `resume_all_paused_cards(tasks_dir)` to flip every `paused` card back to `pending`. Cards manually paused via CLI/UI also un-pause on Start; if separate persistence is needed, the user re-pauses after resume. Both helpers are best-effort — Stop / Start succeed even if the disk write fails, and the per-context "paused — use ▶ Start to resume" / "resumed" status rows that the pre-2.0.24 service emitted are dropped (the sidebar renders the stopped state from `/api/sessions`; the context-stream notice was redundant chrome).
 
 #### Frontend implications
 
@@ -84,7 +131,7 @@ The 5 s pending bar (PR #24) is removed. The dispatcher owns merging, so each En
 
 Why split: with a single 500 ms cadence, a fast provider could finish the **first** chat before the daemon ever saw the **second** message, so the two runs produced two separate turns instead of the expected cancel-and-merge behaviour described above. A 50 ms input poll closes that race while leaving task scheduling on the coarser cadence — task cards have `interval`s measured in seconds to hours, so a sub-second check serves no purpose. The loop body calls `self._drain_background_events()` and `ipc.poll_interrupt()` / `ipc.poll_inputs()` every tick; the housekeeping block runs only when `loop.time() >= next_housekeeping_at`, which is advanced by `_TASK_POLL_INTERVAL` each firing.
 
-`_scheduled_task_names` still guards a card against being re-enqueued while it sits in the inbox or is currently running, so the faster input tick cannot multi-queue the same wakeup.
+`_scheduled_task_names` still guards a card against being re-enqueued while it sits in `_wait_queue` or is currently running, so the faster input tick cannot multi-queue the same wakeup.
 
 #### `merged_user_input_ids` on `turn` events
 

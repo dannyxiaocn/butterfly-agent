@@ -256,12 +256,29 @@ class SubAgentTool:
             )
         except Exception as exc:  # noqa: BLE001 — surface spawn failures cleanly
             return f"Error: sub_agent spawn failed: {exc}"
-        reply = await _wait_for_reply(
-            child_id=child_id,
-            msg_id=msg_id,
-            system_sessions_base=self._system_sessions_base,
-            timeout=timeout,
-        )
+        try:
+            reply = await _wait_for_reply(
+                child_id=child_id,
+                msg_id=msg_id,
+                system_sessions_base=self._system_sessions_base,
+                timeout=timeout,
+            )
+        except asyncio.CancelledError:
+            # v2.0.24: parent's interrupt must cascade — otherwise the child
+            # session daemon keeps churning on a task whose result the parent
+            # already discarded. Send a bare interrupt to the child so its
+            # own dispatcher cancels in-flight work and drops the inbox; the
+            # session stays alive in the sidebar so the user can inspect
+            # what it managed before the cascade. Best-effort; failures are
+            # swallowed so cancellation propagation stays clean.
+            try:
+                from butterfly.runtime.bridge import BridgeSession
+                BridgeSession(
+                    self._system_sessions_base / child_id
+                ).send_interrupt()
+            except Exception:
+                pass
+            raise
         return _format_result(child_id, mode, reply, timeout)
 
 
@@ -375,11 +392,23 @@ class SubAgentRunner:
         entry = ctx.load_entry(tid)
         if entry is None or entry.is_terminal():
             return False
-        # Cooperative stop: mark child stopped so its daemon stays paused.
-        # The runner's wait loop will eventually time out; the manager picks
-        # up STATUS_KILLED from the entry and emits the right event kind.
+        # v2.0.24: send interrupt FIRST, then stop. Pre-2.0.24 the kill path
+        # only set ``status=stopped`` — the daemon's stopped check fires only
+        # when a new input arrives, so the child's in-flight chat would keep
+        # running until it hit a natural break. ``send_interrupt`` cancels
+        # the in-flight run + drops the inbox immediately; ``stop_session``
+        # then prevents future task wakeups from auto-resuming. Both are
+        # best-effort — the kill marker on the panel entry is the source of
+        # truth for the parent.
         child_id = (entry.meta or {}).get("child_session_id")
         if child_id:
+            try:
+                from butterfly.runtime.bridge import BridgeSession
+                BridgeSession(
+                    self._system_sessions_base / child_id
+                ).send_interrupt()
+            except Exception:
+                pass
             try:
                 from butterfly.service.sessions_service import stop_session
                 stop_session(child_id, self._system_sessions_base)

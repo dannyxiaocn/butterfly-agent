@@ -24,7 +24,7 @@ from butterfly.session_engine.pending_inputs import (
 from butterfly.session_engine.session_config import read_config, ensure_config
 from butterfly.session_engine.task_cards import (
     TaskCard, clear_all_cards,
-    load_due_cards, save_card,
+    load_card, load_due_cards, save_card,
 )
 from butterfly.llm_engine.registry import provider_name, resolve_provider
 from butterfly.session_engine.session_status import ensure_session_status, read_session_status, write_session_status
@@ -124,14 +124,41 @@ class Session:
         self._agent_lock: asyncio.Lock = asyncio.Lock()
         self._ipc: FileIPC | None = None
 
-        # ── v2.0.12: input dispatcher ────────────────────────────────
-        # Inbox of pending ChatItem / TaskItem. Producers (daemon poll loop,
-        # background-task drain, chat() callers) enqueue here; a single
-        # consumer task drains and runs them serially with cancel-on-interrupt
-        # and tail-merge semantics — see docs/butterfly/session_engine/design.md.
-        # Lock + event are created lazily on first use so the Session can be
-        # constructed outside an event loop (existing test fixtures do this).
-        self._inbox: list = []
+        # ── v2.0.24: input dispatcher (two-queue model) ───────────────
+        # The dispatcher splits arrivals into two independent queues:
+        #
+        #   _interrupt_queue: every ChatItem(mode=interrupt). Consumer
+        #     drains the WHOLE queue on each dispatch, merges them into one
+        #     ChatItem, and runs it as a single LLM turn. New arrivals
+        #     while a run is in flight cancel ``_run_task`` (uniformly for
+        #     chats AND ticks since v2.0.24), so the cancel-and-aggregate
+        #     loop converges on a single user message.
+        #
+        #   _wait_queue: ChatItem(mode=wait) AND every TaskItem (task
+        #     wakeups don't have a "mode" — they live here unconditionally).
+        #     Consumer pops one item per dispatch in arrival order. When
+        #     popping a chat-wait, consecutive chat-wait items at the head
+        #     drain into it via ``merge_after`` so a burst of "...also"
+        #     sends collapses into one user turn. TaskItems never merge
+        #     with anything — they own per-card prompt + mark_working /
+        #     mark_finished / SESSION_FINISHED bookkeeping.
+        #
+        # Scheduling rule: interrupt queue takes priority. While the
+        # interrupt queue is non-empty the consumer never touches the wait
+        # queue — interrupts always pre-empt. Once interrupt is drained,
+        # the wait queue runs in arrival order.
+        #
+        # This replaces the v2.0.12 single-inbox model where mode was per-
+        # item and merging keyed on "adjacent same-mode in inbox" — the
+        # two-queue model encodes the spec ("interrupt always aggregates,
+        # wait always queues") structurally rather than via per-pop merge
+        # checks. See docs/butterfly/session_engine/design.md.
+        #
+        # Lock is created lazily inside the running event loop so the
+        # Session can be constructed outside one (existing test fixtures
+        # do this).
+        self._interrupt_queue: list = []
+        self._wait_queue: list = []
         self._inbox_lock: asyncio.Lock | None = None
         self._consumer_task: asyncio.Task | None = None
         # Active chat run task and its history-baseline. Used at cancellation
@@ -545,127 +572,162 @@ class Session:
             self._inbox_lock = asyncio.Lock()
 
     async def _enqueue(self, item) -> None:
-        """Append item to the inbox and (re)start the consumer if idle.
+        """Route an item to the right queue and (re)start the consumer.
 
-        Wait-mode chat items merge into the trailing wait-mode chat item
-        if one exists, so a burst of follow-up sends collapses into a
-        single user turn. Interrupt-mode chat items always append; if a
-        run is in flight, they trigger cancellation here.
+        v2.0.24 two-queue model:
+
+        - ``ChatItem(mode=interrupt)`` → ``_interrupt_queue``. The consumer
+          drains the whole queue on each dispatch (no per-arrival merge
+          needed). If a run is in flight, cancel it — the cancelled prefix
+          will fold back at dispatch time.
+        - ``ChatItem(mode=wait)`` → ``_wait_queue``. If the queue's tail is
+          itself a chat-wait, ``merge_after`` so a burst of "...also" sends
+          collapses into one user turn. (Consumer-side has the same merge
+          to catch arrivals that race the tail-check.)
+        - ``TaskItem`` → ``_wait_queue``. Never merges with anything; task
+          wakeups own per-card bookkeeping (mark_working / mark_finished /
+          SESSION_FINISHED rollback) that wouldn't survive textual merge.
+
+        Interrupt-cancel propagates uniformly across chats and ticks since
+        v2.0.24 (``_run_task`` is set for both branches in ``_dispatch_one``).
         """
         self._ensure_inbox_primitives()
         async with self._inbox_lock:
-            merged = False
-            if isinstance(item, ChatItem) and item.mode == "wait":
+            if isinstance(item, ChatItem) and item.mode == "interrupt":
+                self._interrupt_queue.append(item)
+                if self._run_task is not None and not self._run_task.done():
+                    self._run_task.cancel()
+            elif isinstance(item, ChatItem):  # wait-mode chat
                 if (
-                    self._inbox
-                    and isinstance(self._inbox[-1], ChatItem)
-                    and self._inbox[-1].mode == "wait"
+                    self._wait_queue
+                    and isinstance(self._wait_queue[-1], ChatItem)
+                    and self._wait_queue[-1].mode == "wait"
                 ):
-                    self._inbox[-1].merge_after(item)
-                    merged = True
-            if not merged:
-                if isinstance(item, TaskItem):
-                    self._scheduled_task_names.add(item.card.name)
-                self._inbox.append(item)
-            # Cancel current run for interrupt-mode chat items. The consumer
-            # observes the CancelledError and either merges the cancelled
-            # input back into ``item`` (uncommitted) or saves a partial
-            # turn and runs ``item`` fresh (committed).
-            if (
-                isinstance(item, ChatItem)
-                and item.mode == "interrupt"
-                and self._run_task is not None
-                and not self._run_task.done()
-            ):
-                self._run_task.cancel()
+                    self._wait_queue[-1].merge_after(item)
+                else:
+                    self._wait_queue.append(item)
+            else:  # TaskItem
+                self._scheduled_task_names.add(item.card.name)
+                self._wait_queue.append(item)
             # Kick the consumer if it has gone idle.
             if self._consumer_task is None or self._consumer_task.done():
                 self._consumer_task = asyncio.create_task(self._consumer_loop())
 
     async def _consumer_loop(self) -> None:
-        """Drain the inbox sequentially, merging wait-tail items per pop."""
+        """Drain the two queues per the v2.0.24 priority rule.
+
+        Interrupt queue takes priority: while it's non-empty, drain ALL of
+        it into one merged ChatItem (so a burst of cancel-and-aggregate
+        arrivals runs as a single LLM turn) and dispatch. Wait queue runs
+        only after interrupt is empty; pop one item, then drain consecutive
+        chat-wait items at the head into it via ``merge_after``. Task
+        wakeups (TaskItem) never merge — popped one at a time.
+        """
         try:
             while True:
                 item = None
                 async with self._inbox_lock:
-                    if not self._inbox:
-                        # No more work — exit so the event loop can shut down
-                        # cleanly. ``_enqueue`` will start a new consumer when
+                    if self._interrupt_queue:
+                        item = self._interrupt_queue.pop(0)
+                        while self._interrupt_queue:
+                            nxt = self._interrupt_queue.pop(0)
+                            item.merge_after(nxt)
+                    elif self._wait_queue:
+                        item = self._wait_queue.pop(0)
+                        # Same-tail merge for chat-wait bursts only.
+                        # TaskItem deliberately falls through.
+                        if isinstance(item, ChatItem) and item.mode == "wait":
+                            while (
+                                self._wait_queue
+                                and isinstance(self._wait_queue[0], ChatItem)
+                                and self._wait_queue[0].mode == "wait"
+                            ):
+                                nxt = self._wait_queue.pop(0)
+                                item.merge_after(nxt)
+                    else:
+                        # Both queues empty — exit so the event loop can
+                        # shut down cleanly. ``_enqueue`` restarts us when
                         # the next item arrives.
                         return
-                    item = self._inbox.pop(0)
-                    # Greedy wait-tail merge: pull all consecutive wait-mode
-                    # ChatItems that landed behind this one in the same poll
-                    # cycle so they share a single LLM turn.
-                    while (
-                        isinstance(item, ChatItem)
-                        and self._inbox
-                        and isinstance(self._inbox[0], ChatItem)
-                        and self._inbox[0].mode == "wait"
-                    ):
-                        nxt = self._inbox.pop(0)
-                        item.merge_after(nxt)
                 await self._dispatch_one(item)
         except asyncio.CancelledError:
             async with self._inbox_lock:
-                for it in self._inbox:
+                for it in (*self._interrupt_queue, *self._wait_queue):
                     it.reject(asyncio.CancelledError())
-                self._inbox.clear()
+                self._interrupt_queue.clear()
+                self._wait_queue.clear()
                 self._scheduled_task_names.clear()
             raise
 
     async def _dispatch_one(self, item) -> None:
-        """Run a single item; on CancelledError, route per uncommitted/committed."""
-        if isinstance(item, TaskItem):
-            try:
-                result = await self._do_tick(item.card)
-                item.resolve(result)
-            except asyncio.CancelledError:
-                # Task was interrupted. Reset the card so it fires again on
-                # next due check; the cancelled wakeup content is discarded
-                # (task prompts don't textually merge with chat content).
-                try:
-                    item.card.mark_pending()
-                    save_card(self.tasks_dir, item.card)
-                except Exception:
-                    pass
-                item.reject(asyncio.CancelledError())
-            except BaseException as exc:
-                item.reject(exc)
-            finally:
-                self._scheduled_task_names.discard(item.card.name)
-            return
+        """Run a single item; on CancelledError, route per uncommitted/committed.
 
-        # ChatItem dispatch
-        self._current_chat_item = item
-        self._run_history_baseline = len(self._agent._history)
-        self._run_task = asyncio.create_task(self._do_chat(item))
+        v2.0.24: TaskItem now also runs through ``self._run_task`` (was
+        awaited inline previously). Without this, ``_enqueue``'s
+        interrupt-mode cancel hook (and ``_handle_explicit_interrupt``)
+        could not reach an in-flight tick — interrupt-mode chats and the
+        bare ⚡ Interrupt button silently queued behind task wakeups,
+        which bit hardest on meta sessions whose only activity is the
+        heartbeat tick. Routing both paths through the same handle lets
+        the cancel propagate uniformly.
+        """
+        self._current_chat_item = item if isinstance(item, ChatItem) else None
+        if isinstance(item, ChatItem):
+            self._run_history_baseline = len(self._agent._history)
+            self._run_task = asyncio.create_task(self._do_chat(item))
+        else:  # TaskItem
+            self._run_task = asyncio.create_task(self._do_tick(item.card))
         try:
             result = await self._run_task
             item.resolve(result)
         except asyncio.CancelledError:
-            committed = len(self._agent._history) > self._run_history_baseline
-            if not committed:
-                # Uncommitted → fold our content into the next interrupt-mode
-                # chat item so they go to the LLM as one user message.
-                merged = False
-                async with self._inbox_lock:
-                    for nxt in self._inbox:
-                        if isinstance(nxt, ChatItem) and nxt.mode == "interrupt":
-                            nxt.merge_before(item)
-                            merged = True
-                            break
-                if not merged:
-                    # No follow-up to absorb us — caller's chat() rejects.
-                    item.reject(asyncio.CancelledError())
-            else:
-                # Committed → partial turn already saved by _do_chat's
-                # cancellation handler; caller's future rejects so they
-                # know the run was preempted.
+            if isinstance(item, TaskItem):
+                # Task was interrupted. Reset the card so it fires again on
+                # next due check; the cancelled wakeup content is discarded
+                # (task prompts don't textually merge with chat content).
+                #
+                # Race guard (v2.0.26): a concurrent ``pause_all_cards`` from
+                # ``stop_session`` (web Stop button posts /interrupt → /stop)
+                # may have flipped the card to ``paused`` on disk while we
+                # were being cancelled. Re-read from disk; if the on-disk
+                # status is already ``paused`` or ``finished``, leave it
+                # alone — our in-memory object is stale and overwriting
+                # with ``pending`` would silently un-pause a stopped
+                # session, causing a wakeup flood on resume.
+                try:
+                    fresh = load_card(self.tasks_dir, item.card.name)
+                    if fresh is None or fresh.status not in ("paused", "finished"):
+                        item.card.mark_pending()
+                        save_card(self.tasks_dir, item.card)
+                except Exception:
+                    pass
                 item.reject(asyncio.CancelledError())
+            else:
+                committed = len(self._agent._history) > self._run_history_baseline
+                if not committed:
+                    # Uncommitted → fold our content into the head of the
+                    # interrupt queue (the cancelling arrival landed there).
+                    # The next consumer iteration drains the whole queue and
+                    # merges; merging into the head ensures our cancelled
+                    # prefix appears at the start of the aggregated turn.
+                    merged = False
+                    async with self._inbox_lock:
+                        if self._interrupt_queue and isinstance(self._interrupt_queue[0], ChatItem):
+                            self._interrupt_queue[0].merge_before(item)
+                            merged = True
+                    if not merged:
+                        # No follow-up to absorb us — caller's chat() rejects.
+                        item.reject(asyncio.CancelledError())
+                else:
+                    # Committed → partial turn already saved by _do_chat's
+                    # cancellation handler; caller's future rejects so they
+                    # know the run was preempted.
+                    item.reject(asyncio.CancelledError())
         except BaseException as exc:
             item.reject(exc)
         finally:
+            if isinstance(item, TaskItem):
+                self._scheduled_task_names.discard(item.card.name)
             self._current_chat_item = None
             self._run_task = None
 
@@ -738,6 +800,17 @@ class Session:
 
     async def _do_tick(self, card: TaskCard) -> AgentResult | None:
         """Execute a task card (was tick() body pre-v2.0.12)."""
+        # v2.0.26: pause-aware gate. A concurrent ``stop_session`` may have
+        # flipped this card to ``paused`` after it was enqueued but before
+        # we start running — re-read the on-disk status and skip the tick
+        # entirely if it's not ``pending`` / ``working``. Without this
+        # guard, the tick would ``mark_working`` (overwriting the paused
+        # marker), run the whole wakeup prompt, and silently un-pause a
+        # stopped session.
+        fresh = load_card(self.tasks_dir, card.name)
+        if fresh is not None and fresh.status in ("paused", "finished"):
+            return None
+
         triggered_by = f"task:{card.name}"
         task_info = card.description or card.name
 
@@ -1098,6 +1171,16 @@ class Session:
         Bound to the ``send_interrupt()`` control event — different from a
         chat with ``mode=interrupt``. A bare interrupt clears everything
         and runs nothing in its place.
+
+        v2.0.24: cascade to non-blocking workloads too. The asyncio cancel
+        on ``_run_task`` only reaches code awaited beneath it (so blocking
+        sub-agents, which are awaited inside ``_execute_tools``, propagate
+        naturally — and ``SubAgentTool.execute`` cascades the cancel to
+        the child via ``send_interrupt``). Background runners — bash bg
+        subprocesses and ``run_in_background=true`` sub-agents — live in
+        ``self._bg_manager`` and don't share that await chain, so we kill
+        them explicitly. Per spec, this only fires on the bare ⚡ button:
+        a chat-with-mode=interrupt leaves background workloads alone.
         """
         # Seed the lock now so subsequent ``_enqueue`` calls share the same
         # instance. ``self._inbox_lock or asyncio.Lock()`` would have created
@@ -1110,17 +1193,46 @@ class Session:
             if self._run_task is not None and not self._run_task.done():
                 self._run_task.cancel()
                 cancelled_run = True
-            if self._inbox:
-                for it in self._inbox:
-                    it.reject(asyncio.CancelledError())
-                dropped = len(self._inbox)
-                self._inbox.clear()
-                self._scheduled_task_names.clear()
+            for it in (*self._interrupt_queue, *self._wait_queue):
+                it.reject(asyncio.CancelledError())
+            dropped = len(self._interrupt_queue) + len(self._wait_queue)
+            self._interrupt_queue.clear()
+            self._wait_queue.clear()
+            self._scheduled_task_names.clear()
+        killed_background = await self._cascade_interrupt_background()
         self._append_event({
             "type": "interrupted",
             "discarded": discarded_inbound + dropped,
             "cancelled_run": cancelled_run,
+            "killed_background": killed_background,
         })
+
+    async def _cascade_interrupt_background(self) -> int:
+        """Best-effort kill of every running background runner.
+
+        Iterates the panel for non-terminal entries and calls
+        ``BackgroundTaskManager.kill(tid)`` on each. The runner-specific
+        ``kill`` does the right thing per type — ``BashRunner`` SIGKILLs
+        the process group, ``SubAgentRunner`` sends interrupt + stop to
+        the child session. Failures are swallowed so one stuck runner
+        never blocks the cascade for the rest. Returns the number of
+        entries actually stopped (already-terminal ones don't count).
+        """
+        from butterfly.session_engine.panel import list_entries
+        killed = 0
+        try:
+            entries = list_entries(self.panel_dir)
+        except Exception:
+            return 0
+        for entry in entries:
+            if entry.is_terminal():
+                continue
+            try:
+                if await self._bg_manager.kill(entry.tid):
+                    killed += 1
+            except Exception:
+                pass
+        return killed
 
     async def _shutdown_consumer(self) -> None:
         """Cancel the dispatcher consumer + reject any orphan futures."""
@@ -1133,9 +1245,10 @@ class Session:
                 pass
         if self._inbox_lock is not None:
             async with self._inbox_lock:
-                for it in self._inbox:
+                for it in (*self._interrupt_queue, *self._wait_queue):
                     it.reject(asyncio.CancelledError())
-                self._inbox.clear()
+                self._interrupt_queue.clear()
+                self._wait_queue.clear()
                 self._scheduled_task_names.clear()
 
     async def _shutdown_background_manager(self) -> None:

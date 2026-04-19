@@ -353,6 +353,15 @@ The mode prompt (`toolhub/sub_agent/<mode>.md`) is copied to the child's
 system prompt by `Session._load_session_capabilities` (between `system.md`
 and `env.md`).
 
+### Sub-agent cancel cascade (v2.0.24)
+
+A child session's daemon runs independently of the parent's await chain — `init_session` writes the child's manifest, the parent's `SessionWatcher` adopts it, and the child polls its own `context.jsonl` from there. When the parent cancels mid-`sub_agent` (chat-with-mode=interrupt, ⚡ Interrupt button, or Stop), the asyncio cancel propagating up through `_execute_tools → SubAgentTool.execute()` does **not** reach the child daemon — without explicit cascade, the child keeps spending tokens on a discarded task. Two cooperating fixes:
+
+- `SubAgentTool.execute` (blocking path): wraps `await _wait_for_reply` in `try/except CancelledError` that calls `BridgeSession(child).send_interrupt()` before re-raising. Reaches the child via the same control event the bare ⚡ button uses; child's own `_handle_explicit_interrupt` cancels its in-flight run + drops its inbox + cascades to its own background runners (recursive).
+- `SubAgentRunner.kill` (background path): now calls `send_interrupt()` first, then `stop_session()`. Pre-2.0.24 the kill path only set `status=stopped` on the child, but the daemon's stopped-check fires only when a fresh input arrives — so an in-flight chat kept running until a natural break. Sending interrupt first cancels immediately; the stop call then prevents future task wakeups from auto-resuming.
+
+The bare-interrupt cascade in `Session._handle_explicit_interrupt` reaches background sub-agents via `_cascade_interrupt_background()` → `BackgroundTaskManager.kill(tid)` → `SubAgentRunner.kill`. Blocking sub-agents are reached through the parent's `_run_task.cancel()` propagating naturally to the awaited `SubAgentTool.execute()`. See `docs/butterfly/session_engine/design.md` "v2.0.24 — bare-interrupt cascade" for the parent-side path.
+
 ### Implementation split
 
 - `butterfly/tool_engine/sub_agent.py` — both `SubAgentTool` (sync executor)

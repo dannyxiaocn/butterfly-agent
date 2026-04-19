@@ -213,6 +213,14 @@ export function createSidebar(): HTMLElement {
 
     el.querySelector('#btn-stop')?.addEventListener('click', async () => {
       if (!store.currentSessionId) return;
+      // v2.0.24: Stop must also fire interrupt. ``stop_session`` alone only
+      // flips ``status=stopped`` on disk; the daemon's stopped-check runs
+      // when new input arrives, so any in-flight agent loop kept executing
+      // until it hit a natural break. Sending interrupt first cancels the
+      // run + drops the inbox + cascades to background tools / sub-agents
+      // (see Session._handle_explicit_interrupt), then stop pauses the
+      // session so future task wakeups don't auto-resume work.
+      await api.interruptSession(store.currentSessionId).catch(console.error);
       await api.stopSession(store.currentSessionId).catch(console.error);
       const sessions = await api.listSessions();
       store.sessions = sessions;
