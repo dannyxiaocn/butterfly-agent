@@ -293,7 +293,7 @@ async def test_session_tick_emits_hook_events_and_preserves_turn_flags(tmp_path)
     session._load_session_capabilities = lambda: None
     session._ipc = FileIPC(session.system_dir)
 
-    result = await session.tick(TaskCard(name="duty", description="stay alive", interval=60))
+    result = await session.tick(TaskCard(name="duty", description="stay alive", check_interval=60))
 
     runtime_events = read_jsonl(session.system_dir / "events.jsonl")
     context_events = read_jsonl(session.system_dir / "context.jsonl")

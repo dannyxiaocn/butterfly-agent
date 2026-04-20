@@ -1,132 +1,182 @@
-"""Task card system — JSON-based task files in core/tasks/.
+"""Task card system — bash-driven trigger/end (v2.0.27).
 
-Each task card is a .json file:
+Each card has two parts:
 
-    {
-      "name": "duty",
-      "description": "Review and process child sessions",
-      "status": "pending",
-      "interval": 3600,
-      "start_at": "2026-04-12T11:00:00",
-      "end_at": null,                        # None = never expires (default)
-      # e.g. set "end_at": "2026-04-19T10:00:00" for a bounded window
-      "created_at": "2026-04-12T10:00:00",
-      "last_started_at": null,
-      "last_finished_at": null,
-      "comments": "",
-      "progress": ""
-    }
+    core/tasks/<name>.json          status + metadata
+    core/tasks/<name>.trigger.sh    bash check run every ``check_interval``
+                                    seconds. Last line must be one of:
+                                      [start]            — activate the agent
+                                      [start] <message>  — activate with <message>
+                                                            appended as the seed
+                                      [skip]             — do nothing, recheck
+                                                            next interval
+    core/tasks/<name>.end.sh        optional; polled while status == working.
+                                    Last line:
+                                      [done]             — mark card finished
+                                      [not_done]         — keep running
 
-Status values: pending | working | finished | paused
-- pending: task is waiting for next trigger (auto-state for new & recurring tasks)
-- working: task is currently being executed
-- finished: task completed (one-shot) or manually finished
-- paused: user-initiated pause; won't fire until user explicitly resumes
+Unknown output / non-zero exit → treated as ``[skip]`` for trigger and
+``[not_done]`` for end, logged as a ``task_check_error`` via the runtime.
 
-Interval: null = one-shot, N = recurring every N seconds.
+Status values
+-------------
+    pending   waiting for the next trigger_script check
+    working   agent is currently running the card's wakeup
+    finished  card completed (one-shot agent ``task_finish`` tool or ``[done]``)
+    paused    user-initiated pause; won't fire until explicitly resumed
 
-Scheduling:
-- start_at: earliest time this task can fire. Default for recurring = created_at + interval;
-            for one-shot = created_at (immediate).
-- end_at:   auto-expire time (ISO string). None = never expires (no auto-expiry).
-            Callers that want a bounded window set an explicit ISO timestamp; the
-            duty card seeded for every meta session is end_at=None so long-running
-            agents do not self-cancel after a week.
-
-A task with status=pending fires when:
-  now >= start_at AND (end_at is None OR now < end_at) AND
-  (last_finished_at is None OR (now - last_finished_at) >= interval)
+Time semantics
+--------------
+No ``start_at`` / ``end_at`` / ``interval`` fields — all time gating lives
+inside the trigger_script. ``check_interval`` is purely "how often do we
+RE-RUN the check script"; its last_checked_at tracks the last run so the
+runtime can skip cards whose interval hasn't elapsed yet. For a card that
+wants to fire every N seconds, the trigger script is literally ``echo [start]``
+(or empty — the polling cadence does the work).
 """
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 
-def _ceil_to_hour(dt: datetime) -> datetime:
-    """Round a datetime UP to the next whole hour (unless already exact)."""
-    if dt.minute == 0 and dt.second == 0 and dt.microsecond == 0:
-        return dt
-    return (dt.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1))
+
+# Sentinel prefixes emitted by trigger / end scripts (must be the last line
+# of stdout). Anything after the tag on the same line is carried as a
+# "reason" — trigger can use it as the agent's seed input.
+_TRIGGER_FIRE = "[start]"
+_TRIGGER_SKIP = "[skip]"
+_END_DONE = "[done]"
+_END_NOT_DONE = "[not_done]"
 
 
-def _floor_to_hour(dt: datetime) -> datetime:
-    """Truncate a datetime DOWN to the hour."""
-    return dt.replace(minute=0, second=0, microsecond=0)
+@dataclass
+class ScriptResult:
+    """Outcome of running a trigger/end script."""
+    tag: str | None             # one of: [start] / [skip] / [done] / [not_done] / None (unparseable)
+    message: str                # text after the tag on the same line (may be empty)
+    stdout: str                 # full captured stdout (may be truncated upstream)
+    stderr: str
+    exit_code: int | None
+    duration_ms: int
+    timed_out: bool = False
 
 
-def _default_start_at(created: datetime, interval: float | None) -> str:
-    """Compute default start_at (hour-level granularity).
+def parse_trigger_output(stdout: str, exit_code: int | None) -> tuple[str, str] | None:
+    """Parse last-line of trigger_script stdout.
 
-    Recurring: ceil(created + 1 interval) — never earlier than a full interval.
-    One-shot: created (immediate).
+    Returns (tag, message) where tag ∈ {"[start]", "[skip]"} on clean
+    output. Returns ``None`` if the script exited non-zero OR the last
+    non-empty line does not begin with a recognised tag — callers treat
+    both as fail-closed ``skip`` and emit an error event.
     """
-    if interval is not None and interval > 0:
-        raw = created + timedelta(seconds=interval)
-        return _ceil_to_hour(raw).isoformat()
-    return _floor_to_hour(created).isoformat()
+    if exit_code not in (0, None):
+        return None
+    tag, msg = _last_line_tag(stdout)
+    if tag in (_TRIGGER_FIRE, _TRIGGER_SKIP):
+        return tag, msg
+    return None
+
+
+def parse_end_output(stdout: str, exit_code: int | None) -> tuple[str, str] | None:
+    """Parse last-line of end_script stdout.
+
+    Returns (tag, message) where tag ∈ {"[done]", "[not_done]"} on clean
+    output. Returns ``None`` on fail-closed (script error / bad output) —
+    end_script errors are conservative: no spurious ``mark_finished``.
+    """
+    if exit_code not in (0, None):
+        return None
+    tag, msg = _last_line_tag(stdout)
+    if tag in (_END_DONE, _END_NOT_DONE):
+        return tag, msg
+    return None
+
+
+def _last_line_tag(stdout: str) -> tuple[str | None, str]:
+    """Return (tag, message) from the last non-empty line of stdout.
+
+    Tag is None when the line doesn't start with a recognised marker.
+    """
+    if not stdout:
+        return None, ""
+    # iterate in reverse to find the last non-empty line
+    last_line = ""
+    for line in reversed(stdout.splitlines()):
+        s = line.strip()
+        if s:
+            last_line = s
+            break
+    if not last_line:
+        return None, ""
+    for tag in (_TRIGGER_FIRE, _TRIGGER_SKIP, _END_DONE, _END_NOT_DONE):
+        if last_line == tag:
+            return tag, ""
+        if last_line.startswith(tag + " "):
+            return tag, last_line[len(tag) + 1:].strip()
+    return None, last_line
+
+
+# ── Dataclass ─────────────────────────────────────────────────────────────────
+
+_DEFAULT_CHECK_INTERVAL = 3600.0
 
 
 @dataclass
 class TaskCard:
-    """A single task card stored as core/tasks/<name>.json."""
+    """A single task card stored as ``core/tasks/<name>.json``."""
     name: str
     description: str = ""
     status: str = "pending"             # pending | working | finished | paused
-    interval: float | None = None       # seconds; None = one-shot
-    start_at: str | None = None         # earliest fire time (ISO; hour granularity)
-    end_at: str | None = None           # auto-expire time (ISO; hour granularity)
+    check_interval: float = _DEFAULT_CHECK_INTERVAL  # seconds between trigger runs
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
+    last_checked_at: str | None = None
     last_started_at: str | None = None
     last_finished_at: str | None = None
     comments: str = ""
     progress: str = ""
 
-    def __post_init__(self) -> None:
-        """Fill start_at default if not set.
+    def needs_check(self, now: datetime | None = None) -> bool:
+        """True when the trigger_script is due to be polled.
 
-        end_at is intentionally NOT auto-filled: None means 'never expires'.
-        Callers that want a bounded window pass an explicit ISO timestamp.
+        Cards in ``working`` / ``finished`` / ``paused`` never check the
+        TRIGGER script (end_script is handled separately). For ``pending``
+        cards: fire the very first check immediately on first sight, then
+        throttle to one check per ``check_interval`` seconds.
         """
-        try:
-            created = datetime.fromisoformat(self.created_at)
-        except (ValueError, TypeError):
-            created = datetime.now()
-        if self.start_at is None:
-            self.start_at = _default_start_at(created, self.interval)
-
-    def is_due(self, now: datetime | None = None) -> bool:
-        """True if this card should fire now."""
         if self.status != "pending":
             return False
+        if self.last_checked_at is None:
+            return True
         current = now or datetime.now()
-
-        # Time window check
         try:
-            if self.start_at and current < datetime.fromisoformat(self.start_at):
-                return False
-        except (ValueError, TypeError):
-            pass
-        try:
-            if self.end_at and current >= datetime.fromisoformat(self.end_at):
-                # Auto-expire: mark finished so it won't be checked again
-                self.status = "finished"
-                return False
-        except (ValueError, TypeError):
-            pass
-
-        # First-run or interval check
-        if self.last_finished_at is None:
-            return True  # never finished → due immediately (within window)
-        if self.interval is None:
-            return False  # one-shot already finished
-        try:
-            last = datetime.fromisoformat(self.last_finished_at)
-            elapsed = (current - last).total_seconds()
-            return elapsed >= self.interval
+            last = datetime.fromisoformat(self.last_checked_at)
         except (ValueError, TypeError):
             return True
+        return (current - last).total_seconds() >= float(self.check_interval or 0)
+
+    def end_check_due(self, now: datetime | None = None) -> bool:
+        """Same cadence as ``needs_check`` but for the end_script.
+
+        Only relevant while status == ``working``. Reuses the same
+        ``last_checked_at`` bookkeeping so the trigger + end checks share a
+        single cadence (they're mutually exclusive by status anyway).
+        """
+        if self.status != "working":
+            return False
+        if self.last_checked_at is None:
+            return True
+        current = now or datetime.now()
+        try:
+            last = datetime.fromisoformat(self.last_checked_at)
+        except (ValueError, TypeError):
+            return True
+        return (current - last).total_seconds() >= float(self.check_interval or 0)
+
+    def mark_checked(self, now: datetime | None = None) -> None:
+        """Stamp last_checked_at — called right after the script runs."""
+        self.last_checked_at = (now or datetime.now()).isoformat()
 
     def mark_working(self) -> None:
         self.status = "working"
@@ -135,18 +185,22 @@ class TaskCard:
     def mark_finished(self) -> None:
         """Mark task as finished after execution.
 
-        For one-shot tasks (interval is None): status → finished (terminal).
-        For recurring tasks: status → pending, ready for next interval.
+        Cards return to ``pending`` so the trigger_script keeps polling —
+        the agent's trigger script decides whether to fire again. A truly
+        one-shot card is expressed by a trigger script that emits
+        ``[start]`` once and ``[skip]`` forever after (e.g. gating on a
+        file or marker the card itself touches on completion).
         """
-        now_iso = datetime.now().isoformat()
-        self.last_finished_at = now_iso
-        if self.interval is None:
-            self.status = "finished"
-        else:
-            self.status = "pending"
+        self.last_finished_at = datetime.now().isoformat()
+        self.status = "pending"
+
+    def mark_terminal(self) -> None:
+        """Force-finalise a card (used by ``task_finish`` tool / ``[done]``)."""
+        self.last_finished_at = datetime.now().isoformat()
+        self.status = "finished"
 
     def mark_pending(self) -> None:
-        """Return task to pending state (e.g. after error recovery)."""
+        """Return task to pending (e.g. after error recovery)."""
         self.status = "pending"
 
     def mark_paused(self) -> None:
@@ -158,10 +212,9 @@ class TaskCard:
             "name": self.name,
             "description": self.description,
             "status": self.status,
-            "interval": self.interval,
-            "start_at": self.start_at,
-            "end_at": self.end_at,
+            "check_interval": self.check_interval,
             "created_at": self.created_at,
+            "last_checked_at": self.last_checked_at,
             "last_started_at": self.last_started_at,
             "last_finished_at": self.last_finished_at,
             "comments": self.comments,
@@ -170,14 +223,26 @@ class TaskCard:
 
     @classmethod
     def from_dict(cls, data: dict, name: str | None = None) -> "TaskCard":
+        """Load a card from its JSON. Tolerates pre-2.0.27 fields by
+        dropping them (start_at / end_at / interval). A legacy ``interval``
+        is forwarded as ``check_interval`` so operators with existing
+        sessions don't lose their polling cadence.
+        """
+        check_interval = data.get("check_interval")
+        if check_interval is None:
+            legacy_interval = data.get("interval")
+            check_interval = (
+                float(legacy_interval)
+                if isinstance(legacy_interval, (int, float)) and legacy_interval > 0
+                else _DEFAULT_CHECK_INTERVAL
+            )
         return cls(
             name=name or data.get("name", "unknown"),
             description=data.get("description", ""),
             status=data.get("status", "pending"),
-            interval=data.get("interval"),
-            start_at=data.get("start_at"),
-            end_at=data.get("end_at"),
+            check_interval=float(check_interval),
             created_at=data.get("created_at", datetime.now().isoformat()),
+            last_checked_at=data.get("last_checked_at"),
             last_started_at=data.get("last_started_at"),
             last_finished_at=data.get("last_finished_at"),
             comments=data.get("comments", ""),
@@ -185,8 +250,7 @@ class TaskCard:
         )
 
 
-
-# ── File operations ──────────────────────────────────────────────────────────
+# ── File paths ────────────────────────────────────────────────────────────────
 
 def _card_path(tasks_dir: Path, name: str) -> Path:
     safe_name = str(name or "").strip()
@@ -195,8 +259,16 @@ def _card_path(tasks_dir: Path, name: str) -> Path:
     return tasks_dir / f"{safe_name}.json"
 
 
+def trigger_script_path(tasks_dir: Path, name: str) -> Path:
+    return tasks_dir / f"{name}.trigger.sh"
+
+
+def end_script_path(tasks_dir: Path, name: str) -> Path:
+    return tasks_dir / f"{name}.end.sh"
+
+
 def save_card(tasks_dir: Path, card: TaskCard) -> Path:
-    """Write a task card to disk as JSON. Returns the file path."""
+    """Write a task card JSON to disk."""
     tasks_dir.mkdir(parents=True, exist_ok=True)
     path = _card_path(tasks_dir, card.name)
     path.write_text(
@@ -204,6 +276,63 @@ def save_card(tasks_dir: Path, card: TaskCard) -> Path:
         encoding="utf-8",
     )
     return path
+
+
+def write_trigger_script(tasks_dir: Path, name: str, body: str) -> Path:
+    """Write ``body`` to ``<name>.trigger.sh`` (mode 0644). Body stored
+    verbatim — the agent owns the script content. Empty body is allowed
+    (equivalent to ``echo [start]`` for the degenerate "always fire" case)
+    and is normalised to that one-liner so the parser sees a valid tag.
+    """
+    tasks_dir.mkdir(parents=True, exist_ok=True)
+    path = trigger_script_path(tasks_dir, name)
+    text = (body or "").strip() or f"echo {_TRIGGER_FIRE}"
+    if not text.startswith("#!"):
+        text = "#!/bin/bash\n" + text
+    if not text.endswith("\n"):
+        text += "\n"
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def write_end_script(tasks_dir: Path, name: str, body: str | None) -> Path | None:
+    """Write ``body`` to ``<name>.end.sh``. ``None`` removes any existing
+    end script (so updating a card to drop its end condition is explicit).
+    """
+    path = end_script_path(tasks_dir, name)
+    if body is None or not body.strip():
+        if path.exists():
+            path.unlink()
+        return None
+    tasks_dir.mkdir(parents=True, exist_ok=True)
+    text = body.strip()
+    if not text.startswith("#!"):
+        text = "#!/bin/bash\n" + text
+    if not text.endswith("\n"):
+        text += "\n"
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def read_trigger_script(tasks_dir: Path, name: str) -> str | None:
+    """Return trigger.sh body (including shebang) or None when absent."""
+    path = trigger_script_path(tasks_dir, name)
+    if not path.is_file():
+        return None
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+
+def read_end_script(tasks_dir: Path, name: str) -> str | None:
+    path = end_script_path(tasks_dir, name)
+    if not path.is_file():
+        return None
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return None
 
 
 def load_card(tasks_dir: Path, name: str) -> TaskCard | None:
@@ -219,21 +348,24 @@ def load_card(tasks_dir: Path, name: str) -> TaskCard | None:
 
 
 def delete_card(tasks_dir: Path, name: str) -> bool:
-    """Delete one task card by name. Returns True if it existed."""
+    """Delete a card's JSON and any trigger/end scripts beside it."""
     path = _card_path(tasks_dir, name)
-    if not path.exists():
-        return False
-    path.unlink()
-    return True
+    existed = path.exists()
+    if existed:
+        path.unlink()
+    for side in (trigger_script_path(tasks_dir, name), end_script_path(tasks_dir, name)):
+        if side.exists():
+            side.unlink()
+    return existed
 
 
-# ── Directory-level operations ──────────────────────────────────────────────
+# ── Directory-level helpers ───────────────────────────────────────────────────
 
 def load_all_cards(tasks_dir: Path) -> list[TaskCard]:
-    """Load all task cards from core/tasks/ directory."""
+    """Load all cards under ``tasks_dir`` sorted by filename."""
     if not tasks_dir.is_dir():
         return []
-    cards = []
+    cards: list[TaskCard] = []
     for path in sorted(tasks_dir.glob("*.json")):
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
@@ -243,44 +375,39 @@ def load_all_cards(tasks_dir: Path) -> list[TaskCard]:
     return cards
 
 
-def load_due_cards(tasks_dir: Path, now: datetime | None = None) -> list[TaskCard]:
-    """Return task cards that are due for execution.
+def cards_needing_check(tasks_dir: Path, now: datetime | None = None) -> list[TaskCard]:
+    """Return pending cards whose trigger_script should be polled now."""
+    return [c for c in load_all_cards(tasks_dir) if c.needs_check(now)]
 
-    Side effect: cards that expired (past end_at) are auto-marked finished
-    and saved to disk.
-    """
-    due = []
-    for card in load_all_cards(tasks_dir):
-        before = card.status
-        if card.is_due(now):
-            due.append(card)
-        elif card.status != before:
-            # is_due() changed status (e.g. auto-expired) → persist
-            save_card(tasks_dir, card)
-    return due
+
+def cards_with_end_check_due(tasks_dir: Path, now: datetime | None = None) -> list[TaskCard]:
+    """Return working cards whose end_script should be polled now."""
+    out: list[TaskCard] = []
+    for c in load_all_cards(tasks_dir):
+        if c.end_check_due(now) and end_script_path(tasks_dir, c.name).is_file():
+            out.append(c)
+    return out
 
 
 def has_pending_cards(tasks_dir: Path) -> bool:
-    """True if any task card has status=pending (ready to fire)."""
+    """True if any card has status=pending (ready to be checked)."""
     return any(c.status == "pending" for c in load_all_cards(tasks_dir))
 
 
 def clear_all_cards(tasks_dir: Path) -> None:
     """Mark all cards as finished (used on SESSION_FINISHED)."""
     for card in load_all_cards(tasks_dir):
-        card.status = "finished"
+        card.mark_terminal()
         save_card(tasks_dir, card)
 
 
 def pause_all_cards(tasks_dir: Path) -> int:
     """Mark every active card (pending/working) as paused. Returns count.
 
-    Used by ``stop_session`` so a paused session also halts its scheduled
-    wakeups; without this, ``load_due_cards`` would still surface them on
-    the next housekeeping tick (the daemon's ``is_stopped`` short-circuit
-    skips scheduling but the cards stay ``pending`` and would re-fire the
-    moment the session resumes — losing the user's intent that "stopped
-    means quiet").
+    Paired with ``resume_all_paused_cards`` — used by ``stop_session`` so a
+    stopped session also halts its scheduled wakeups. Without this, the
+    runtime's pending-card scan would keep firing trigger_scripts even
+    while the session sits stopped.
     """
     count = 0
     for card in load_all_cards(tasks_dir):
@@ -294,10 +421,9 @@ def pause_all_cards(tasks_dir: Path) -> int:
 def resume_all_paused_cards(tasks_dir: Path) -> int:
     """Flip every paused card back to pending. Returns count.
 
-    Symmetric counterpart to ``pause_all_cards`` — invoked by
-    ``start_session`` so resuming the session also un-quiets every card
-    the user paused via Stop. Cards that were ``finished`` stay finished;
-    only ``paused`` is touched.
+    Symmetric to ``pause_all_cards`` — invoked by ``start_session`` when
+    the user resumes. Cards that were ``finished`` stay finished; only
+    ``paused`` is touched.
     """
     count = 0
     for card in load_all_cards(tasks_dir):
@@ -311,12 +437,19 @@ def resume_all_paused_cards(tasks_dir: Path) -> int:
 def ensure_card(
     tasks_dir: Path,
     name: str,
-    interval: float | None = None,
+    *,
+    check_interval: float | None = None,
     description: str = "",
-    start_at: str | None = None,
-    end_at: str | None = None,
+    trigger_script: str | None = None,
+    end_script: str | None = None,
 ) -> TaskCard:
-    """Ensure a task card exists. Creates if missing; returns existing or new."""
+    """Ensure a task card (+scripts) exists. Idempotent.
+
+    Returns the existing card unchanged if one is on disk. The trigger
+    script defaults to ``echo [start]`` (unconditional fire every
+    ``check_interval`` seconds) when not supplied — matches the most
+    common "recurring" use case without forcing the caller to write bash.
+    """
     tasks_dir.mkdir(parents=True, exist_ok=True)
     existing = load_card(tasks_dir, name)
     if existing is not None:
@@ -324,11 +457,12 @@ def ensure_card(
     card = TaskCard(
         name=name,
         description=description,
-        interval=interval,
-        start_at=start_at,
-        end_at=end_at,
+        check_interval=float(check_interval) if check_interval else _DEFAULT_CHECK_INTERVAL,
         status="pending",
     )
     save_card(tasks_dir, card)
+    if not trigger_script_path(tasks_dir, name).exists():
+        write_trigger_script(tasks_dir, name, trigger_script or f"echo {_TRIGGER_FIRE}")
+    if end_script is not None:
+        write_end_script(tasks_dir, name, end_script)
     return card
-

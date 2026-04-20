@@ -69,15 +69,16 @@ export interface PanelEntryDetail extends PanelEntry {
 export interface TaskCard {
   name: string;
   description: string;
-  interval: number | null;
-  start_at: string | null;
-  end_at: string | null;
+  check_interval: number;
   status: 'pending' | 'working' | 'finished' | 'paused';
+  last_checked_at: string | null;
   last_started_at: string | null;
   last_finished_at: string | null;
   created_at: string;
   comments: string;
   progress: string;
+  trigger_script?: string | null;
+  end_script?: string | null;
 }
 
 export interface ModelCatalogEntry {

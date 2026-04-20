@@ -131,7 +131,7 @@ export function createPanel(): HTMLElement {
   function renderTaskCard(card: TaskCard): string {
     const isDuty = card.name === 'duty';
     const dutyPill = isDuty ? `<span class="hb-pill">duty</span>` : '';
-    const intervalStr = formatInterval(card.interval);
+    const intervalStr = formatInterval(card.check_interval);
     const lastRun = formatRelative(card.last_finished_at);
     const statusClass = `task-status-${card.status}`;
 
@@ -158,9 +158,13 @@ export function createPanel(): HTMLElement {
            <div class="task-card-section-body">${escHtml(card.comments)}</div>
          </div>`
       : '';
-    const windowMeta = (card.start_at || card.end_at)
-      ? `<span class="task-window">window: ${escHtml(card.start_at ?? '∞')} → ${escHtml(card.end_at ?? '∞')}</span>`
+    const scripts: string[] = [];
+    if (card.trigger_script) scripts.push('trigger');
+    if (card.end_script) scripts.push('end');
+    const scriptsMeta = scripts.length
+      ? `<span class="task-window">scripts: ${escHtml(scripts.join(' + '))}</span>`
       : '';
+    const windowMeta = scriptsMeta;
 
     return `
       <details class="task-card" data-name="${escHtml(card.name)}">

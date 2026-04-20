@@ -1,25 +1,18 @@
 """task_update tool — update selected fields on an existing task card."""
 from __future__ import annotations
 
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from butterfly.session_engine.task_cards import load_card, save_card
+from butterfly.session_engine.task_cards import (
+    load_card,
+    save_card,
+    write_end_script,
+    write_trigger_script,
+)
 
 
 _UNSET = object()
-
-
-def _coerce_time(value: Any) -> str | None:
-    """Accept unix-epoch number or ISO string; return ISO (or None)."""
-    if value is None:
-        return None
-    if isinstance(value, (int, float)):
-        return datetime.fromtimestamp(float(value)).isoformat()
-    if isinstance(value, str) and value.strip():
-        return value.strip()
-    return None
 
 
 class TaskUpdateExecutor:
@@ -30,9 +23,9 @@ class TaskUpdateExecutor:
         self,
         name: str = "",
         description: Any = _UNSET,
-        interval: Any = _UNSET,
-        start_at: Any = _UNSET,
-        end_at: Any = _UNSET,
+        check_interval: Any = _UNSET,
+        trigger_script: Any = _UNSET,
+        end_script: Any = _UNSET,
         progress: Any = _UNSET,
         comments: Any = _UNSET,
         **_: Any,
@@ -54,21 +47,27 @@ class TaskUpdateExecutor:
         if description is not _UNSET:
             card.description = description or ""
             changed.append("description")
-        if interval is not _UNSET:
-            card.interval = interval  # may be None
-            changed.append("interval")
-        if start_at is not _UNSET:
-            card.start_at = _coerce_time(start_at)
-            changed.append("start_at")
-        if end_at is not _UNSET:
-            card.end_at = _coerce_time(end_at)
-            changed.append("end_at")
+        if check_interval is not _UNSET and check_interval is not None:
+            try:
+                new_interval = float(check_interval)
+            except (TypeError, ValueError):
+                return "Error: 'check_interval' must be a number."
+            if new_interval <= 0:
+                return "Error: 'check_interval' must be > 0."
+            card.check_interval = new_interval
+            changed.append("check_interval")
         if progress is not _UNSET:
             card.progress = progress or ""
             changed.append("progress")
         if comments is not _UNSET:
             card.comments = comments or ""
             changed.append("comments")
+        if trigger_script is not _UNSET and trigger_script is not None:
+            write_trigger_script(self._tasks_dir, name, str(trigger_script))
+            changed.append("trigger_script")
+        if end_script is not _UNSET:
+            write_end_script(self._tasks_dir, name, end_script)
+            changed.append("end_script")
 
         if not changed:
             return f"Task '{name}': no fields provided to update."

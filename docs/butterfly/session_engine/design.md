@@ -347,3 +347,23 @@ Bare interrupt (`bridge.send_interrupt()` → control event on `events.jsonl` �
 The frontend fix lives entirely in `chat.ts::markRunningToolsInterrupted` — called from the `model_status: idle` branch next to the pre-existing `markRunningThinkingInterrupted`. It sweeps every `.msg-tool:not(.done)` into a terminal `done interrupted` state (dim yellow chrome + `✗ interrupted Xs`) and clears the `runningTools` / `backgroundCells` maps + HUD. Safe to call on every idle transition: a clean run has already transitioned every tool to `.done` via its `tool_done`, so both maps are empty and the DOM scan is a no-op.
 
 The backend `"interrupt" / "interrupted"` control events remain intentionally filtered out of `_runtime_event_to_display` — the UI needs no direct event handler, only the `model_status=idle` sweep.
+
+## External hooks — agent-authored lifecycle scripts (v2.0.27)
+
+Agents drop a single `main.sh` under `sessions/<id>/core/hook/<event>/` to react to session lifecycle events. Three events are wired: `session_start` (daemon start), `agent_loop_start` (before every `Agent.run`), `agent_loop_end` (after — `data.reason` ∈ `finished`/`cancelled`/`error`). The runtime fires each via `external_hooks.run_hooks()` which pipes a `{event, session_id, data}` JSON envelope over stdin, runs `bash <event>/main.sh`, hard-caps at 30 s, and writes a `hook_run` event to `events.jsonl` with exit code, duration, stdout/stderr tails.
+
+Only `main.sh` is inspected — the agent owns ordering and conditional execution inside the script (calling any number of siblings it wrote). Keeping it one file per event kept timeout / output capture semantics simple: one timer, one stream cap (4 KB per stream), one exit code.
+
+Observe-only baseline: exit codes are logged but do NOT block or mutate the pending agent work. A future release may add a blocking opt-in for `session_start` and `agent_loop_start` — TODO `blocking-hooks` tracks it. `agent_loop_end` should remain observe-only since the loop has already ended.
+
+## Bash-driven task cards (v2.0.27)
+
+Task cards drop all time fields (`start_at` / `end_at` / `interval` as trigger). A card is a tuple of JSON metadata + `<name>.trigger.sh` + optional `<name>.end.sh`. The runtime polls the scripts on the card's `check_interval` cadence via `session._poll_trigger_script` / `_poll_end_script`:
+
+- `trigger.sh` last line `[start]` → enqueue `TaskItem(card, seed=<rest-of-line>)` into the wait queue. The seed is appended to the generated wakeup prompt as `Trigger reason: <seed>`.
+- `trigger.sh` last line `[skip]` → stamp `last_checked_at`, move on.
+- Non-zero exit / timeout / unparseable → fail-closed (`[skip]` + `task_check_error` event).
+
+All time logic lives inside the agent's bash (e.g. `[[ $(date +%H) -ge 9 ]] && echo [start] || echo [skip]`) — the runtime is stateless beyond cadence. Scripts run serially during the housekeeping tick; each has a 10 s timeout (`task_runner._CHECK_TIMEOUT_SEC`) so a misconfigured check never stalls the daemon.
+
+Every run emits a `task_check` event carrying `card` (card name), `kind` (`trigger`/`end`), `tag`, truncated `stdout`/`stderr`, `exit_code`, `duration_ms` — the UI surfaces these in the panel so agents and operators can see why a card did (or did not) fire without re-running the script.

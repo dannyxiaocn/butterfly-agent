@@ -442,11 +442,11 @@ def start_meta_agent(
     # Ensure basic config exists
     ensure_config(meta_dir)
 
-    # Create meta task card (6-hour recurring cycle)
+    # Create meta task card (6-hour recurring cycle; v2.0.27 bash-driven).
     ensure_card(
         core_dir / "tasks",
         name="meta",
-        interval=21600.0,
+        check_interval=21600.0,
         description="Dream: review and process all child sessions for this agent",
     )
     return system_dir

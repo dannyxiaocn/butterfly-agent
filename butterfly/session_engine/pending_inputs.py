@@ -160,9 +160,15 @@ class TaskItem:
     Always runs in wait mode — task wakeups never preempt active runs and
     never merge with chat items (the prompt template and the mark_working /
     mark_finished bookkeeping are card-specific).
+
+    ``seed`` is the optional message emitted alongside ``[start]`` by the
+    trigger script — e.g. ``echo "[start] build failed"``. The Session's
+    tick body appends it to the generated wakeup prompt so the agent sees
+    the reason its trigger fired without having to re-run the check.
     """
 
     card: "TaskCard"
+    seed: str = ""
     futures: list[asyncio.Future] = field(default_factory=list)
 
     @property

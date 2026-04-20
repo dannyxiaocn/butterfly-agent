@@ -294,10 +294,14 @@ def init_session(
     session_cfg = read_config(session_dir)
     duty = session_cfg.get("duty")
     if isinstance(duty, dict) and duty.get("interval"):
+        # v2.0.27: the duty card becomes a pure-cadence recurring trigger —
+        # ``echo [start]`` fires every ``check_interval`` seconds. Custom
+        # time/precondition logic is the agent's job to add via
+        # ``task_update(trigger_script=...)``.
         ensure_card(
             tasks_dir,
             name="duty",
-            interval=float(duty["interval"]),
+            check_interval=float(duty["interval"]),
             description=duty.get("description", ""),
         )
 
