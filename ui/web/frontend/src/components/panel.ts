@@ -4,6 +4,7 @@ import { attachSession } from '../main';
 import type { ModelsCatalog, Params, PanelEntry, PanelEntryDetail, PanelEntryStatus, ProviderCatalogEntry, TaskCard } from '../types';
 import { formatInterval, formatRelative } from '../markdown';
 import { renderTaskEditor } from './taskEditor';
+import { highlightShell } from '../shellHighlight';
 
 type PanelTab = 'tasks' | 'panel' | 'config';
 
@@ -161,6 +162,16 @@ export function createPanel(): HTMLElement {
     const windowMeta = card.script
       ? `<span class="task-window">script</span>`
       : '';
+    // v2.0.30 — render the bash body inline with shell highlighting so the
+    // card view shows the same content as the editor without needing to
+    // click Edit. The highlighter HTML-escapes its output, so feed it
+    // directly into <code> without a second escape pass.
+    const scriptBlock = card.script
+      ? `<div class="task-card-section">
+           <div class="task-card-section-label">script</div>
+           <pre class="task-card-script lang-bash"><code>${highlightShell(card.script)}</code></pre>
+         </div>`
+      : '';
 
     return `
       <details class="task-card" data-name="${escHtml(card.name)}">
@@ -180,6 +191,7 @@ export function createPanel(): HTMLElement {
           ${descriptionBlock}
           ${progressBlock}
           ${commentsBlock}
+          ${scriptBlock}
           <div class="task-card-actions">
             <button class="btn-sm btn-edit" data-name="${escHtml(card.name)}">Edit</button>
           </div>

@@ -298,41 +298,31 @@ def create_app(
             raise HTTPException(404, f"Session not found: {session_id}")
 
         async def generator() -> AsyncIterator[str]:
+            # Simple consumer: `async for` lets CancelledError (uvicorn
+            # graceful shutdown or client disconnect) propagate cleanly
+            # into the inner generator's `asyncio.sleep(0.3)`, which
+            # unwinds without leaving a partially-running __anext__ —
+            # the v2.0.30-pre pattern that manually raced `__anext__`
+            # against `shutdown_event.wait()` tripped
+            # "aclose(): asynchronous generator is already running"
+            # whenever the stop happened mid-__anext__.
+            #
+            # The ``shutdown_event`` check gates the next yield: under a
+            # steady event stream it fires as soon as lifespan drops the
+            # flag; under an idle stream uvicorn's 1 s
+            # timeout_graceful_shutdown takes over.
             seq = 0
-            inner = service_iter_events(
+            async for event, _ctx, _evt in service_iter_events(
                 session_id,
                 system_sessions_dir,
                 context_offset=context_since,
                 events_offset=events_since,
                 poll_interval=0.3,
-            ).__aiter__()
-            try:
-                while not shutdown_event.is_set():
-                    next_task = asyncio.create_task(inner.__anext__())
-                    stop_task = asyncio.create_task(shutdown_event.wait())
-                    done, _pending = await asyncio.wait(
-                        {next_task, stop_task},
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-                    if stop_task in done and next_task not in done:
-                        # Server is shutting down — cancel the pending event
-                        # fetch and bail out so graceful shutdown doesn't
-                        # stall on this streaming response.
-                        next_task.cancel()
-                        try:
-                            await next_task
-                        except (asyncio.CancelledError, StopAsyncIteration):
-                            pass
-                        return
-                    stop_task.cancel()
-                    try:
-                        event, _ctx, _evt = next_task.result()
-                    except StopAsyncIteration:
-                        return
-                    yield _sse_format(event, seq=seq, ctx=_ctx, evt=_evt)
-                    seq += 1
-            finally:
-                await inner.aclose()
+            ):
+                if shutdown_event.is_set():
+                    return
+                yield _sse_format(event, seq=seq, ctx=_ctx, evt=_evt)
+                seq += 1
 
         return StreamingResponse(
             generator(),
