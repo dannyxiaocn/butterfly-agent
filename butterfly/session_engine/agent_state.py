@@ -378,6 +378,25 @@ b. Create PR to mecam/agent-update branch:
    gh pr create --title "Agent update: {agent} vX.Y.Z" --base main --head mecam/agent-update --body "Automated update from meta-agent dream cycle."
    ```
 
+## 4. Tune your own wakeup
+Your wakeup cadence is gated by `core/tasks/meta.sh` (single-script task, v2.0.29). The default just emits `[start]` every check_interval — a no-op cycle still costs LLM tokens. When there's nothing worth reviewing, make the script say `[skip]` instead, e.g.:
+```bash
+# Skip if no non-meta sessions exist or none are stale enough.
+shopt -s nullglob
+candidates=( sessions/*/ )
+filtered=()
+for s in "${{candidates[@]}}"; do
+  [[ "$s" == *_meta/ ]] && continue
+  filtered+=("$s")
+done
+if (( ${{#filtered[@]}} == 0 )); then
+  echo "[skip] no child sessions"
+else
+  echo "[start] ${{#filtered[@]}} child session(s) to review"
+fi
+```
+Tags: `[skip]` keeps polling without waking you; `[start]` (with optional message) wakes you; `[done]` retires the card permanently. Edit `core/tasks/meta.sh` directly with bash, or use `task_update name=meta script=...`.
+
 Be intelligent — consider context and importance, not just mechanical rules.
 
 # TODO: more efficient tools for learning what to update (session diff summaries, change detection)
@@ -442,12 +461,18 @@ def start_meta_agent(
     # Ensure basic config exists
     ensure_config(meta_dir)
 
-    # Create meta task card (6-hour recurring cycle; v2.0.27 bash-driven).
+    # Create meta task card (6-hour recurring cycle; v2.0.29 single-script).
+    # Default ``meta.sh`` is ``echo [start]`` (always fires every
+    # check_interval). The meta heartbeat prompt teaches the agent how to
+    # gate this with ``[skip]`` so empty cycles stop costing LLM tokens.
     ensure_card(
         core_dir / "tasks",
         name="meta",
         check_interval=21600.0,
-        description="Dream: review and process all child sessions for this agent",
+        description=(
+            "Dream: review child sessions, sync agent updates, gate the next "
+            "wakeup via core/tasks/meta.sh"
+        ),
     )
     return system_dir
 

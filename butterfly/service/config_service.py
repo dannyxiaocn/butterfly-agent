@@ -39,11 +39,11 @@ def update_config(session_id: str, sessions_dir: Path, system_sessions_dir: Path
     # silently corrupts the schema.
     params = {k: v for k, v in dict(params).items() if k in _ALLOWED_KEYS}
 
-    # Sync duty config field with task card. v2.0.27: the legacy ``interval``
-    # config key now maps to ``check_interval`` on the new card; the trigger
-    # script defaults to ``echo [start]`` (runtime's check cadence is the
-    # only gate) — baking in a duty-specific custom script here would lock
-    # users out of editing the card later.
+    # Sync duty config field with task card. v2.0.29: the legacy ``interval``
+    # config key maps to ``check_interval`` on the (single-script) card; the
+    # script defaults to ``echo [start]`` (runtime cadence is the only gate)
+    # — baking in a duty-specific custom script here would lock users out of
+    # editing the card later.
     duty = params.get('duty')
     if isinstance(duty, dict) and duty.get('interval'):
         tasks_dir = session_dir / 'core' / 'tasks'
