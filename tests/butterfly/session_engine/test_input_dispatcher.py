@@ -1011,8 +1011,11 @@ def test_pause_all_cards_flips_pending_and_working_to_paused(tmp_path):
     for card in (a, b, c):
         save_card(tasks_dir, card)
 
-    count = pause_all_cards(tasks_dir)
-    assert count == 2  # finished left alone
+    affected = pause_all_cards(tasks_dir)
+    # v2.0.30: returns the affected names (finished left alone). Shape
+    # changed from int count so callers can emit one task_card_changed
+    # event per flipped card.
+    assert sorted(affected) == ["a", "b"]
     assert load_card(tasks_dir, "a").status == "paused"
     assert load_card(tasks_dir, "b").status == "paused"
     assert load_card(tasks_dir, "c").status == "finished"
@@ -1027,8 +1030,9 @@ def test_resume_all_paused_cards_only_touches_paused(tmp_path):
     for card in (a, b, c):
         save_card(tasks_dir, card)
 
-    count = resume_all_paused_cards(tasks_dir)
-    assert count == 1
+    affected = resume_all_paused_cards(tasks_dir)
+    # v2.0.30: list of affected names instead of int count.
+    assert affected == ["a"]
     assert load_card(tasks_dir, "a").status == "pending"
     assert load_card(tasks_dir, "b").status == "pending"
     assert load_card(tasks_dir, "c").status == "finished"
@@ -1084,6 +1088,67 @@ async def test_task_cancel_respects_on_disk_paused_status(tmp_path):
     assert disk.status == "paused", (
         f"race guard failed: expected paused, got {disk.status}"
     )
+
+
+# ── v2.0.30: task_finish drops queued TaskItems for that card ──────────────
+
+
+def test_prune_queue_for_task_drops_matching_task_items(tmp_path):
+    """v2.0.30 — when a card transitions to ``finished`` (via the
+    ``task_finish`` tool or a script's ``[done]`` tag), any already-
+    enqueued ``TaskItem`` for that card must be discarded so the agent
+    isn't woken by a card it just retired. Other cards' TaskItems and
+    all ChatItems pass through untouched.
+    """
+    agent = Agent(provider=RecordingProvider([]))
+    session = make_session(tmp_path, agent, session_id="prune-test")
+
+    card_a = TaskCard(name="a", description="", status="pending")
+    card_b = TaskCard(name="b", description="", status="pending")
+    # Four queued items: two TaskItems for `a`, one ChatItem (must
+    # survive), and a TaskItem for `b` (must survive). Items with no
+    # futures have a harmless reject() — keeps the test setup small.
+    ta1 = TaskItem(card=card_a)
+    chat = ChatItem(content="hi", mode="wait")
+    ta2 = TaskItem(card=card_a)
+    tb = TaskItem(card=card_b)
+    session._wait_queue.extend([ta1, chat, ta2, tb])
+
+    dropped = session._prune_queue_for_task("a")
+    assert dropped == 2
+    # Only `a` items removed; chat + `b` item remain in order.
+    assert list(session._wait_queue) == [chat, tb]
+
+
+@pytest.mark.asyncio
+async def test_task_finish_callback_prunes_queue(tmp_path):
+    """End-to-end: invoking the ``on_task_change`` callback with
+    ``change="finished"`` (mirroring what the ``task_finish`` tool does
+    inside the session) prunes the matching TaskItems. The in-process
+    callback is the contract wired by ``ToolLoader(on_task_change=...)``.
+    """
+    agent = Agent(provider=RecordingProvider([]))
+    session = make_session(tmp_path, agent, session_id="finish-prune")
+
+    card = TaskCard(name="done-me", description="", status="pending")
+    ta = TaskItem(card=card)
+    chat = ChatItem(content="keep me", mode="wait")
+    other = TaskItem(card=TaskCard(name="other", description=""))
+    session._wait_queue.extend([ta, chat, other])
+
+    # Rebuild the same closure Session defines internally so the test
+    # doesn't depend on ToolLoader wiring.
+    def _emit(card_name: str, change: str) -> None:
+        session._append_event({
+            "type": "task_card_changed",
+            "card": card_name,
+            "change": change,
+        })
+        if change == "finished":
+            session._prune_queue_for_task(card_name)
+
+    _emit("done-me", "finished")
+    assert list(session._wait_queue) == [chat, other]
 
 
 # ── v2.0.28: bg tool output inlined into user_input content ────────────────

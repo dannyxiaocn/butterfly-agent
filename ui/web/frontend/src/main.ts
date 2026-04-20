@@ -242,6 +242,19 @@ export async function attachSession(id: string): Promise<void> {
         // Non-fatal — next event triggers another refresh.
       });
     }
+
+    // v2.0.30: Panel tab refresh is also on-event. Replaces the old
+    // 2 s setInterval in panel.ts. Panel.ts listens for the store
+    // `panelRefreshRequest` signal and pulls /panel + per-tid details
+    // only when the Panel tab is currently visible.
+    if (
+      event.type === 'panel_update' ||
+      event.type === 'tool_progress' ||
+      event.type === 'tool_finalize' ||
+      event.type === 'sub_agent_count'
+    ) {
+      store.emit('panelRefreshRequest');
+    }
   });
 }
 

@@ -945,21 +945,25 @@ def cmd_agent(args) -> int:
 # ── Default: `butterfly` (no subcommand) — boot server + web ──────────────────
 
 def _port_in_use(host: str, port: int) -> bool:
-    """True when ``host:port`` is already bound by another process.
+    """True when something is actively listening on ``host:port``.
 
-    Used to fail fast before `uvicorn.run` so the user gets a helpful
-    "already running — open http://…" message instead of a noisy
-    ``OSError: address already in use`` stack trace.
+    Uses ``connect()`` rather than ``bind()`` — without SO_REUSEADDR, a
+    fresh ``bind()`` is refused while the kernel still holds the port
+    in TIME_WAIT after a recently-stopped server, producing a false
+    positive the moment the user does ``butterfly server stop &&
+    butterfly`` (reported 2026-04-20). ``connect()`` only returns
+    success when a real listener accepts, so TIME_WAIT never leaks
+    through.
     """
     import socket
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
         s.settimeout(0.2)
         try:
-            s.bind((host, port))
-        except OSError:
+            s.connect((host, port))
             return True
-        return False
+        except (ConnectionRefusedError, socket.timeout, OSError):
+            return False
     finally:
         s.close()
 

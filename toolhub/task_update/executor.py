@@ -1,4 +1,13 @@
-"""task_update tool — update selected fields on an existing task card."""
+"""task_update tool — edit fields on an existing task card.
+
+v2.0.30: the script field switched from full-replace to edit semantics
+(``old_string`` + ``new_string``, optional ``replace_all``). This
+matches the ``edit`` tool exactly so an agent tuning a script makes the
+minimal textual change the UI can diff cleanly, rather than re-pasting
+the whole body on every tweak. Metadata fields (description,
+check_interval, progress, comments) remain full-replace — they're
+single-value strings / numbers where an edit would be overkill.
+"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -6,6 +15,7 @@ from typing import Any, Callable
 
 from butterfly.session_engine.task_cards import (
     load_card,
+    read_script,
     save_card,
     write_script,
 )
@@ -28,7 +38,9 @@ class TaskUpdateExecutor:
         name: str = "",
         description: Any = _UNSET,
         check_interval: Any = _UNSET,
-        script: Any = _UNSET,
+        old_string: Any = _UNSET,
+        new_string: Any = _UNSET,
+        replace_all: Any = False,
         progress: Any = _UNSET,
         comments: Any = _UNSET,
         **_: Any,
@@ -65,9 +77,44 @@ class TaskUpdateExecutor:
         if comments is not _UNSET:
             card.comments = comments or ""
             changed.append("comments")
-        if script is not _UNSET and script is not None:
-            write_script(self._tasks_dir, name, str(script))
-            changed.append("script")
+
+        # Script edit — mirrors the `edit` tool's uniqueness + replace_all
+        # rules. Either both present or both absent; lone old_string /
+        # lone new_string is a usage error.
+        script_edit_requested = (old_string is not _UNSET) or (new_string is not _UNSET)
+        if script_edit_requested:
+            if old_string is _UNSET or new_string is _UNSET:
+                return (
+                    "Error: pass both 'old_string' and 'new_string' to edit "
+                    "the task's script. Lone one-or-the-other is not allowed."
+                )
+            if not isinstance(old_string, str) or not isinstance(new_string, str):
+                return "Error: 'old_string' and 'new_string' must be strings."
+            if old_string == "":
+                return (
+                    "Error: old_string must be non-empty. task_update edits "
+                    "the bash script with exact-string replacement."
+                )
+            if old_string == new_string:
+                return "Error: old_string and new_string are identical; no change."
+            current = read_script(self._tasks_dir, name) or ""
+            count = current.count(old_string)
+            if count == 0:
+                return f"Error: old_string not found in script of task '{name}'."
+            if count > 1 and not replace_all:
+                return (
+                    f"Error: old_string appears {count} times in the script "
+                    f"of task '{name}'. Pass replace_all=true or supply more "
+                    f"context."
+                )
+            if replace_all:
+                updated = current.replace(old_string, new_string)
+                replacements = count
+            else:
+                updated = current.replace(old_string, new_string, 1)
+                replacements = 1
+            write_script(self._tasks_dir, name, updated)
+            changed.append(f"script ({replacements} {'replacement' if replacements == 1 else 'replacements'})")
 
         if not changed:
             return f"Task '{name}': no fields provided to update."

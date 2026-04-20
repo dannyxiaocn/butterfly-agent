@@ -40,7 +40,6 @@ export function createPanel(): HTMLElement {
   // Sub-agent panel cards expand to show the child session's last 5 events.
   // Cached so repeated open/close doesn't refetch.
   const subAgentChildEvents = new Map<string, Array<Record<string, unknown>>>();
-  let panelPollTimer: number | null = null;
 
   function ensureModelsCatalog(): Promise<ModelsCatalog | null> {
     if (modelsCatalog) return Promise.resolve(modelsCatalog);
@@ -101,11 +100,14 @@ export function createPanel(): HTMLElement {
       bindTasksTab();
     } else if (activeTab === 'panel') {
       bindPanelTab();
+      // First render of the Panel tab — pull fresh entries once so we
+      // don't show a stale list. Subsequent updates arrive via the
+      // `panelRefreshRequest` store event driven by SSE (v2.0.30 —
+      // replaces the old 2 s setInterval poll).
+      void refreshPanel();
     } else {
       bindConfigTab();
     }
-
-    updatePanelPolling();
   }
 
   function renderTasksTab(): string {
@@ -1149,18 +1151,6 @@ export function createPanel(): HTMLElement {
     }
   }
 
-  function updatePanelPolling() {
-    const shouldPoll = activeTab === 'panel' && !!store.currentSessionId;
-    if (shouldPoll && panelPollTimer == null) {
-      panelPollTimer = window.setInterval(refreshPanel, 2000);
-      // Fire an immediate refresh so the tab populates without waiting 2s.
-      refreshPanel();
-    } else if (!shouldPoll && panelPollTimer != null) {
-      window.clearInterval(panelPollTimer);
-      panelPollTimer = null;
-    }
-  }
-
   // ================= STORE WIRING =================
 
   store.on('tasks', () => {
@@ -1168,6 +1158,16 @@ export function createPanel(): HTMLElement {
   });
   store.on('panel', () => {
     if (activeTab === 'panel') render();
+  });
+  // v2.0.30 — on-event panel refresh. Main SSE handler emits this event
+  // whenever a panel-relevant signal (``panel_update``,
+  // ``tool_progress``, ``tool_finalize``, ``sub_agent_count``) lands on
+  // events.jsonl. Only fetches when the Panel tab is actually on
+  // screen so the background Tasks/Config tabs don't pay for noise.
+  store.on('panelRefreshRequest', () => {
+    if (activeTab === 'panel' && store.currentSessionId) {
+      void refreshPanel();
+    }
   });
   store.on('sessions', () => {
     // Synthetic sub-agent entries are derived from store.sessions —

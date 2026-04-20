@@ -399,6 +399,13 @@ class Session:
                     "card": card_name,
                     "change": change,
                 })
+                # v2.0.30 — task_finish retires the card; any queued
+                # wakeups for it are now stale. Drop them so the agent
+                # doesn't wake up seconds later from a card it just
+                # declared done. Other cards' queued items are
+                # untouched.
+                if change == "finished":
+                    self._prune_queue_for_task(card_name)
 
             loader = ToolLoader(
                 default_workdir=str(self.session_dir),
@@ -581,6 +588,17 @@ class Session:
             # poll itself is the only side-effect.
             card.mark_terminal()
             save_card(self.tasks_dir, card)
+            # v2.0.30 — mirror the task_finish tool's cleanup: emit a
+            # `task_card_changed` for the frontend's on-event refresh
+            # and drop any queued wakeups for this card. Without the
+            # prune step, a [start] TaskItem already enqueued before
+            # [done] arrived would still wake the agent.
+            self._append_event({
+                "type": "task_card_changed",
+                "card": card.name,
+                "change": "finished",
+            })
+            self._prune_queue_for_task(card.name)
         return None
 
     # ── External hooks (core/hook/<event>/main.sh) ─────────────────
@@ -693,6 +711,47 @@ class Session:
         """Create the inbox lock lazily inside the running event loop."""
         if self._inbox_lock is None:
             self._inbox_lock = asyncio.Lock()
+
+    def _prune_queue_for_task(self, card_name: str) -> int:
+        """Drop every queued ``TaskItem`` whose card matches ``card_name``.
+
+        Called when a card transitions to the sticky ``finished`` state —
+        via the ``task_finish`` tool OR a script's ``[done]`` tag. Any
+        already-enqueued wakeup for that card is now stale, so we
+        discard them instead of waking the agent into a card it just
+        declared done. Other tasks' queued items are untouched, and
+        ChatItems are never filtered regardless of content.
+
+        Runs synchronously without the inbox lock because both callers
+        (``_emit_task_change`` inside a tool executor, ``[done]`` from
+        ``_poll_card_script``) are already on the session's single
+        asyncio thread — no concurrent mutator can race us.
+        """
+        dropped = 0
+        reject = RuntimeError(
+            f"Task '{card_name}' finished; queued wakeup discarded."
+        )
+        for queue in (self._interrupt_queue, self._wait_queue):
+            kept: list = []
+            for item in queue:
+                if isinstance(item, TaskItem) and item.card.name == card_name:
+                    item.reject(reject)
+                    dropped += 1
+                else:
+                    kept.append(item)
+            queue[:] = kept
+        # ``_scheduled_task_names`` is a duplicate-suppression guard —
+        # dropping from it lets the next pending-scan re-enqueue if the
+        # card somehow flips back to pending (shouldn't happen post-
+        # terminal, but the guard is cheap to keep consistent).
+        self._scheduled_task_names.discard(card_name)
+        if dropped:
+            self._append_event({
+                "type": "task_queue_pruned",
+                "card": card_name,
+                "dropped": dropped,
+            })
+        return dropped
 
     async def _enqueue(self, item) -> None:
         """Route an item to the right queue and (re)start the consumer.

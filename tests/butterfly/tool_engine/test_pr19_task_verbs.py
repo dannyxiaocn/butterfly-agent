@@ -40,7 +40,11 @@ async def test_task_verbs_invoke_on_change_hook(tmp_path: Path) -> None:
 
     from toolhub.task_update.executor import TaskUpdateExecutor
     update = TaskUpdateExecutor(tasks_dir=tmp_path, on_change=on_change)
-    await update.execute(name="demo", script="echo [skip]")
+    # v2.0.30: script is edited via old_string/new_string, mirroring the
+    # `edit` tool. Initial script was "echo [start]" from the create call.
+    await update.execute(
+        name="demo", old_string="echo [start]", new_string="echo [skip]",
+    )
     assert calls[-1] == ("demo", "updated")
 
     pause = TaskPauseExecutor(tasks_dir=tmp_path, on_change=on_change)
@@ -164,3 +168,48 @@ async def test_task_create_missing_name(tmp_path: Path) -> None:
         name="", description="x", script="echo [start]"
     )
     assert out.startswith("Error:")
+
+
+@pytest.mark.asyncio
+async def test_task_update_script_uses_edit_semantics(tmp_path: Path) -> None:
+    """v2.0.30 — task_update changes the bash body via ``old_string`` +
+    ``new_string`` exactly the way the ``edit`` tool does. Tests the
+    happy path + the uniqueness guard + the mandatory pair rule."""
+    from toolhub.task_update.executor import TaskUpdateExecutor
+    from butterfly.session_engine.task_cards import read_script
+
+    await TaskCreateExecutor(tasks_dir=tmp_path).execute(
+        name="t1", description="", check_interval=60,
+        script="echo [skip]\n# placeholder\n",
+    )
+    update = TaskUpdateExecutor(tasks_dir=tmp_path)
+
+    # Happy path: single replacement.
+    out = await update.execute(
+        name="t1", old_string="[skip]", new_string="[start]",
+    )
+    assert "Updated task 't1'" in out
+    assert "echo [start]" in read_script(tmp_path, "t1")
+
+    # old_string not present → error.
+    out = await update.execute(
+        name="t1", old_string="does-not-exist", new_string="x",
+    )
+    assert out.startswith("Error:") and "not found" in out
+
+    # Lone old_string without new_string → usage error.
+    out = await update.execute(name="t1", old_string="foo")
+    assert out.startswith("Error:") and "both" in out
+
+    # Uniqueness guard: multiple matches without replace_all → error.
+    await update.execute(name="t1", old_string="# placeholder", new_string="# dup\n# dup")
+    out = await update.execute(name="t1", old_string="dup", new_string="triple")
+    assert out.startswith("Error:") and "2 times" in out
+
+    # replace_all=true → all matches replaced.
+    out = await update.execute(
+        name="t1", old_string="dup", new_string="triple", replace_all=True,
+    )
+    assert "Updated task 't1'" in out
+    assert "triple" in read_script(tmp_path, "t1")
+    assert "dup" not in read_script(tmp_path, "t1")

@@ -1394,23 +1394,39 @@ function renderDiffBodyForTool(name: string, input: Record<string, unknown>): st
     return `${header}${renderAddOnlyHtml(content)}`;
   }
   if (name === 'task_update') {
+    // v2.0.30: task_update now edits the script with exact-string
+    // replacement (old_string → new_string), matching the `edit` tool.
+    // Render as a real LCS diff so additions AND deletions are visible;
+    // fall back to "all added" blocks for metadata-only changes where
+    // we don't have a before/after pair.
     const taskName = String(input['name'] ?? '');
+    const oldStr = typeof input['old_string'] === 'string' ? (input['old_string'] as string) : '';
+    const newStr = typeof input['new_string'] === 'string' ? (input['new_string'] as string) : '';
+    const description = typeof input['description'] === 'string' ? (input['description'] as string) : '';
+    const progress = typeof input['progress'] === 'string' ? (input['progress'] as string) : '';
+    const comments = typeof input['comments'] === 'string' ? (input['comments'] as string) : '';
+    const hasScriptEdit = oldStr.length > 0 || newStr.length > 0;
+    const hasAnyField = hasScriptEdit || description || progress || comments;
+    if (!hasAnyField) {
+      // Only status / interval changes — fall back to the generic layout
+      // so the user still sees the input keys.
+      return null;
+    }
     const header = taskName
       ? `<div class="tool-diff-header">task: ${escapeHtml(taskName)}</div>`
       : '';
     const parts: string[] = [header];
-    const script = typeof input['script'] === 'string' ? (input['script'] as string) : '';
-    const description = typeof input['description'] === 'string' ? (input['description'] as string) : '';
-    if (script) {
-      parts.push(`<div class="tool-diff-subheader">script</div>${renderAddOnlyHtml(script)}`);
+    if (hasScriptEdit) {
+      parts.push(`<div class="tool-diff-subheader">script</div>${renderDiffHtml(lineDiff(oldStr, newStr))}`);
     }
     if (description) {
       parts.push(`<div class="tool-diff-subheader">description</div>${renderAddOnlyHtml(description)}`);
     }
-    if (!script && !description) {
-      // task_update with only status / interval changes — fall back to the
-      // generic layout so the user still sees the input keys.
-      return null;
+    if (progress) {
+      parts.push(`<div class="tool-diff-subheader">progress</div>${renderAddOnlyHtml(progress)}`);
+    }
+    if (comments) {
+      parts.push(`<div class="tool-diff-subheader">comments</div>${renderAddOnlyHtml(comments)}`);
     }
     return parts.join('');
   }

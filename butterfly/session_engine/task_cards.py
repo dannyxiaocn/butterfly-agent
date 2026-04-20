@@ -332,37 +332,42 @@ def clear_all_cards(tasks_dir: Path) -> None:
         save_card(tasks_dir, card)
 
 
-def pause_all_cards(tasks_dir: Path) -> int:
-    """Mark every active card (pending/working) as paused. Returns count.
+def pause_all_cards(tasks_dir: Path) -> list[str]:
+    """Mark every active card (pending/working) as paused. Returns the
+    names of the cards whose status actually flipped (v2.0.30 — was
+    previously an int count; callers now emit one ``task_card_changed``
+    per affected name to drive the web UI's on-event Tasks refresh).
 
     Paired with ``resume_all_paused_cards`` — used by ``stop_session`` so a
     stopped session also halts its scheduled wakeups. Without this, the
     runtime's pending-card scan would keep firing scripts even while the
     session sits stopped.
     """
-    count = 0
+    affected: list[str] = []
     for card in load_all_cards(tasks_dir):
         if card.status in ("pending", "working"):
             card.mark_paused()
             save_card(tasks_dir, card)
-            count += 1
-    return count
+            affected.append(card.name)
+    return affected
 
 
-def resume_all_paused_cards(tasks_dir: Path) -> int:
-    """Flip every paused card back to pending. Returns count.
+def resume_all_paused_cards(tasks_dir: Path) -> list[str]:
+    """Flip every paused card back to pending. Returns the names of the
+    cards whose status actually flipped (see ``pause_all_cards`` — v2.0.30
+    return-shape change).
 
     Symmetric to ``pause_all_cards`` — invoked by ``start_session`` when
     the user resumes. Cards that were ``finished`` stay finished; only
     ``paused`` is touched.
     """
-    count = 0
+    affected: list[str] = []
     for card in load_all_cards(tasks_dir):
         if card.status == "paused":
             card.mark_pending()
             save_card(tasks_dir, card)
-            count += 1
-    return count
+            affected.append(card.name)
+    return affected
 
 
 def ensure_card(
