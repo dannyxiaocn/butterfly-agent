@@ -23,6 +23,45 @@ async def test_task_create_requires_script(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_task_verbs_invoke_on_change_hook(tmp_path: Path) -> None:
+    """v2.0.30 — every task_* tool must invoke the ``on_change`` callback
+    after it successfully mutates a card. Session wires the callback to
+    emit a ``task_card_changed`` event on events.jsonl; without the hook,
+    the frontend Tasks tab would go stale until the next full refresh."""
+    calls: list[tuple[str, str]] = []
+    on_change = lambda name, change: calls.append((name, change))
+
+    create = TaskCreateExecutor(tasks_dir=tmp_path, on_change=on_change)
+    await create.execute(
+        name="demo", description="say hi", check_interval=60,
+        script="echo [start]",
+    )
+    assert calls[-1] == ("demo", "created")
+
+    from toolhub.task_update.executor import TaskUpdateExecutor
+    update = TaskUpdateExecutor(tasks_dir=tmp_path, on_change=on_change)
+    await update.execute(name="demo", script="echo [skip]")
+    assert calls[-1] == ("demo", "updated")
+
+    pause = TaskPauseExecutor(tasks_dir=tmp_path, on_change=on_change)
+    await pause.execute(name="demo")
+    assert calls[-1] == ("demo", "paused")
+
+    resume = TaskResumeExecutor(tasks_dir=tmp_path, on_change=on_change)
+    await resume.execute(name="demo")
+    assert calls[-1] == ("demo", "resumed")
+
+    finish = TaskFinishExecutor(tasks_dir=tmp_path, on_change=on_change)
+    await finish.execute(name="demo")
+    assert calls[-1] == ("demo", "finished")
+
+    # The callback should fire exactly five times total.
+    assert [c[1] for c in calls] == [
+        "created", "updated", "paused", "resumed", "finished",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_task_create_and_list_roundtrip(tmp_path: Path) -> None:
     create = TaskCreateExecutor(tasks_dir=tmp_path)
     out = await create.execute(

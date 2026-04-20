@@ -2,6 +2,8 @@ import { store } from '../store';
 import { api } from '../api';
 import type { DisplayEvent } from '../types';
 import { renderMarkdown, escapeHtml, formatTs } from '../markdown';
+import { highlightShell } from '../shellHighlight';
+import { lineDiff, renderDiffHtml, renderAddOnlyHtml } from '../diff';
 
 // v2.0.19: model_max tokens come from GET /api/hud's ``max_context_tokens``
 // field, which the backend sources from butterfly/llm_engine/models.yaml.
@@ -1288,16 +1290,10 @@ function renderToolEvent(event: DisplayEvent): string {
   const name = event.name ?? 'unknown';
   const input = event.input ?? {};
   const preview = toolArgPreview(name, input);
-  const expanded = toolArgExpanded(name, input);
 
   const argHtml = preview
     ? `<span class="tool-status-arg" title="${escapeHtml(preview)}">${escapeHtml(preview)}</span>`
     : '<span class="tool-status-arg"></span>';
-
-  const hasResult = typeof event.result === 'string';
-  const resultBlock = hasResult
-    ? renderToolResultBlock(event.result as string, event.result_truncated)
-    : '<em class="tool-body-empty">(pending)</em>';
 
   // History replay path: ipc.py stamps duration_ms onto the tool event so
   // the "✓ bash 2.4s …" pill survives reload (the live tool_done that would
@@ -1315,6 +1311,37 @@ function renderToolEvent(event: DisplayEvent): string {
   // would otherwise stack with the footer's padding and produce a visible
   // "chin" under the dashed divider.
   const footer = renderUsageFooter(event.usage);
+
+  // v2.0.30: edit / write / task_update collapse input + result into a
+  // single diff view. The raw result block adds no information to a diff
+  // (it's typically "Replaced N occurrences" or "Wrote K bytes") and was
+  // just noise; suppress it entirely for these tools so the cell body is
+  // solely the diff.
+  const diffHtml = renderDiffBodyForTool(name, input);
+  if (diffHtml !== null) {
+    return `
+      <details class="tool-details">
+        <summary class="tool-status-summary">
+          <span class="tool-status-icon">${icon}</span>
+          <span class="tool-status-name">${escapeHtml(name)}</span>
+          <span class="tool-status-duration">${escapeHtml(durationText)}</span>
+          ${argHtml}
+          <span class="msg-ts">${formatTs(event.ts)}</span>
+        </summary>
+        <div class="tool-body tool-body-diff-only">
+          ${diffHtml}
+        </div>
+        ${footer}
+      </details>
+    `;
+  }
+
+  const expanded = toolArgExpanded(name, input);
+  const hasResult = typeof event.result === 'string';
+  const resultBlock = hasResult
+    ? renderToolResultBlock(event.result as string, event.result_truncated)
+    : '<em class="tool-body-empty">(pending)</em>';
+
   return `
     <details class="tool-details">
       <summary class="tool-status-summary">
@@ -1337,6 +1364,57 @@ function renderToolEvent(event: DisplayEvent): string {
       ${footer}
     </details>
   `;
+}
+
+/** Return the inline diff HTML for a mutation tool, or null for any tool
+ *  that keeps the classic input + result layout. The HTML already
+ *  includes the file-path / task-name header so the caller just drops
+ *  it straight into ``.tool-body``.
+ *
+ *   - ``edit``        → old_string → new_string, real LCS diff.
+ *   - ``write``       → whole content rendered as added lines.
+ *   - ``task_update`` → script (and description if present) as added lines.
+ */
+function renderDiffBodyForTool(name: string, input: Record<string, unknown>): string | null {
+  if (name === 'edit') {
+    const path = String(input['file_path'] ?? input['path'] ?? '');
+    const oldStr = typeof input['old_string'] === 'string' ? (input['old_string'] as string) : '';
+    const newStr = typeof input['new_string'] === 'string' ? (input['new_string'] as string) : '';
+    const header = path
+      ? `<div class="tool-diff-header">${escapeHtml(path)}</div>`
+      : '';
+    return `${header}${renderDiffHtml(lineDiff(oldStr, newStr))}`;
+  }
+  if (name === 'write') {
+    const path = String(input['file_path'] ?? input['path'] ?? '');
+    const content = typeof input['content'] === 'string' ? (input['content'] as string) : '';
+    const header = path
+      ? `<div class="tool-diff-header">${escapeHtml(path)} <span class="tool-diff-badge">new file</span></div>`
+      : '<div class="tool-diff-header"><span class="tool-diff-badge">new file</span></div>';
+    return `${header}${renderAddOnlyHtml(content)}`;
+  }
+  if (name === 'task_update') {
+    const taskName = String(input['name'] ?? '');
+    const header = taskName
+      ? `<div class="tool-diff-header">task: ${escapeHtml(taskName)}</div>`
+      : '';
+    const parts: string[] = [header];
+    const script = typeof input['script'] === 'string' ? (input['script'] as string) : '';
+    const description = typeof input['description'] === 'string' ? (input['description'] as string) : '';
+    if (script) {
+      parts.push(`<div class="tool-diff-subheader">script</div>${renderAddOnlyHtml(script)}`);
+    }
+    if (description) {
+      parts.push(`<div class="tool-diff-subheader">description</div>${renderAddOnlyHtml(description)}`);
+    }
+    if (!script && !description) {
+      // task_update with only status / interval changes — fall back to the
+      // generic layout so the user still sees the input keys.
+      return null;
+    }
+    return parts.join('');
+  }
+  return null;
 }
 
 // v2.0.23 round-7: dim token footer for tool/agent cell bodies. A single
@@ -1443,12 +1521,20 @@ function toolArgPreview(name: string, input: Record<string, unknown>): string {
 function toolArgExpanded(name: string, input: Record<string, unknown>): string {
   if (name === 'bash' || name === 'shell') {
     const cmd = String(input['command'] ?? input['cmd'] ?? JSON.stringify(input));
-    return `<pre class="tool-pre">${escapeHtml(cmd)}</pre>`;
+    // Shell highlighting: the highlighter HTML-escapes its own output, so
+    // wrap the tokenised body in a <code> without double-escaping.
+    return `<pre class="tool-pre lang-bash"><code>${highlightShell(cmd)}</code></pre>`;
   }
   const entries = Object.entries(input);
   if (!entries.length) return '';
   const rows = entries
     .map(([k, v]) => {
+      // Special-case task_create / task_update `script` — render the bash
+      // body with syntax highlighting so the editor-side and tool-cell
+      // representations match.
+      if ((name === 'task_create' || name === 'task_update') && k === 'script' && typeof v === 'string') {
+        return `<div class="kv-row"><span class="kv-key">${escapeHtml(k)}</span><pre class="kv-val lang-bash"><code>${highlightShell(v)}</code></pre></div>`;
+      }
       const val = typeof v === 'string' ? v : JSON.stringify(v, null, 2);
       return `<div class="kv-row"><span class="kv-key">${escapeHtml(k)}</span><pre class="kv-val">${escapeHtml(val)}</pre></div>`;
     })

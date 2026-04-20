@@ -17,7 +17,7 @@ from inside a wakeup to do the same thing.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from butterfly.session_engine.task_cards import (
     TaskCard,
@@ -28,8 +28,13 @@ from butterfly.session_engine.task_cards import (
 
 
 class TaskCreateExecutor:
-    def __init__(self, tasks_dir: str | Path | None = None) -> None:
+    def __init__(
+        self,
+        tasks_dir: str | Path | None = None,
+        on_change: Callable[[str, str], None] | None = None,
+    ) -> None:
         self._tasks_dir = Path(tasks_dir) if tasks_dir else None
+        self._on_change = on_change
 
     async def execute(
         self,
@@ -66,6 +71,11 @@ class TaskCreateExecutor:
             write_script(self._tasks_dir, name, script)
         except ValueError as e:
             return f"Error: {e}"
+        if self._on_change is not None:
+            try:
+                self._on_change(name, "created")
+            except Exception:  # noqa: BLE001 — refresh hint, best-effort
+                pass
         return (
             f"Created task '{name}' (check_interval={interval:g}s). "
             f"Script: core/tasks/{name}.sh"

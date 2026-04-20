@@ -136,6 +136,36 @@ class WebUnitTests(unittest.TestCase):
             card = next(c for c in cards if c["name"] == "duty")
             self.assertEqual(card["description"], "check messages")
 
+    def test_put_tasks_emits_task_card_changed_event(self) -> None:
+        """v2.0.30 — web-side PUT /tasks must drop a ``task_card_changed``
+        line onto events.jsonl so the frontend's SSE-driven Tasks tab
+        refreshes on-event (replaces the old 15 s poll). Without this
+        event the UI would only update on the next full page load."""
+        with TemporaryDirectory() as td:
+            root = _make_session(Path(td))
+            app = create_app(root / "sessions", root / "_sessions")
+            with TestClient(app) as client:
+                resp = client.put(
+                    "/api/sessions/test-session/tasks",
+                    json={"name": "duty", "description": "check"},
+                )
+                self.assertEqual(resp.status_code, 200)
+                resp = client.put(
+                    "/api/sessions/test-session/tasks",
+                    json={"name": "duty", "description": "check v2"},
+                )
+                self.assertEqual(resp.status_code, 200)
+                resp = client.delete("/api/sessions/test-session/tasks/duty")
+                self.assertEqual(resp.status_code, 200)
+            events_path = root / "_sessions" / "test-session" / "events.jsonl"
+            lines = [json.loads(line) for line in events_path.read_text().splitlines() if line.strip()]
+            changed = [e for e in lines if e.get("type") == "task_card_changed"]
+            self.assertEqual(
+                [(e["card"], e["change"]) for e in changed],
+                [("duty", "created"), ("duty", "updated"), ("duty", "deleted")],
+                "put→put→delete must emit created, updated, deleted in order",
+            )
+
     def test_put_tasks_by_name_updates_existing_card_not_duplicates(self) -> None:
         """Saving a card by name overwrites it, does not create a second card."""
         with TemporaryDirectory() as td:

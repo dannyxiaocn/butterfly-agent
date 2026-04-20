@@ -73,13 +73,19 @@ def test_server_stop_kills_tracked_and_orphans(tmp_path, capsys):
     runtime's ``_cmd_stop``) AND sweep any orphan butterfly daemons
     surfaced by ``_scan_butterfly_daemons``. Without the orphan sweep,
     the reason this feature exists — cleaning up the zombie daemon that
-    inspired the 2026-04-17 bug report — is unresolved."""
+    inspired the 2026-04-17 bug report — is unresolved.
+
+    v2.0.30 also sweeps any foreground butterfly shell holding the
+    web-UI port via ``_scan_port_holders``; mocked to [] here so this
+    test still pins the daemon + orphan sweep in isolation.
+    """
     import signal
 
     with mock.patch.object(cli_main, "_DEFAULT_SYSTEM_BASE", tmp_path), \
          mock.patch("butterfly.runtime.server._is_server_running", return_value=12345), \
          mock.patch("butterfly.runtime.server._scan_butterfly_daemons",
                     return_value=[12345, 67890, 99999]), \
+         mock.patch.object(cli_main, "_scan_port_holders", return_value=[]), \
          mock.patch("butterfly.runtime.server._cmd_stop", return_value=0) as m_cmd_stop, \
          mock.patch.object(cli_main.os, "kill") as m_kill, \
          mock.patch.object(cli_main.time, "sleep", return_value=None):
@@ -106,10 +112,36 @@ def test_server_stop_kills_tracked_and_orphans(tmp_path, capsys):
     assert "99999" in out
 
 
+def test_server_stop_kills_foreground_web_port_holder(tmp_path, capsys):
+    """v2.0.30: the foreground ``butterfly`` (no-args) shell runs uvicorn
+    in-process and is never listed in server.pid; the orphan-daemon scan
+    can't see it. The ``butterfly server stop`` one-click must include
+    it, so port-hold detection feeds into the SIGTERM sweep."""
+    import signal
+
+    with mock.patch.object(cli_main, "_DEFAULT_SYSTEM_BASE", tmp_path), \
+         mock.patch("butterfly.runtime.server._is_server_running", return_value=None), \
+         mock.patch("butterfly.runtime.server._scan_butterfly_daemons", return_value=[]), \
+         mock.patch.object(cli_main, "_scan_port_holders", return_value=[42424]), \
+         mock.patch("butterfly.runtime.server._cmd_stop") as m_cmd_stop, \
+         mock.patch.object(cli_main.os, "kill") as m_kill, \
+         mock.patch.object(cli_main.time, "sleep", return_value=None):
+        cli_main._cmd_server_stop(None)
+    # No tracked daemon, so runtime._cmd_stop is never invoked.
+    m_cmd_stop.assert_not_called()
+    # The foreground web holder IS sent SIGTERM.
+    term_calls = [
+        c for c in m_kill.call_args_list
+        if c.args and c.args[1] == signal.SIGTERM
+    ]
+    assert [c.args[0] for c in term_calls] == [42424]
+
+
 def test_server_stop_prints_helpful_message_when_nothing_running(tmp_path, capsys):
     with mock.patch.object(cli_main, "_DEFAULT_SYSTEM_BASE", tmp_path), \
          mock.patch("butterfly.runtime.server._is_server_running", return_value=None), \
          mock.patch("butterfly.runtime.server._scan_butterfly_daemons", return_value=[]), \
+         mock.patch.object(cli_main, "_scan_port_holders", return_value=[]), \
          mock.patch("butterfly.runtime.server._cmd_stop") as m_cmd_stop, \
          mock.patch.object(cli_main.os, "kill") as m_kill, \
          mock.patch.object(cli_main.time, "sleep", return_value=None):

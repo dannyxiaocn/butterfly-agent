@@ -107,6 +107,10 @@ class ToolLoader:
         sessions_base: Path | None = None,
         system_sessions_base: Path | None = None,
         agent_base: Path | None = None,
+        # v2.0.30 — task CRUD tools emit a `task_card_changed` event via this
+        # callback so the web UI can refresh the Tasks tab on-event. Session
+        # provides one that appends to events.jsonl; None is a silent no-op.
+        on_task_change: "Callable[[str, str], None] | None" = None,
     ) -> None:
         self._default_workdir = default_workdir
         self._skills = list(skills or [])
@@ -122,6 +126,7 @@ class ToolLoader:
         self._sessions_base = sessions_base
         self._system_sessions_base = system_sessions_base
         self._agent_base = agent_base
+        self._on_task_change = on_task_change
 
     def _create_executor(self, tool_name: str) -> Callable | None:
         """Create an executor callable for a toolhub tool."""
@@ -239,7 +244,10 @@ class ToolLoader:
         elif tool_name == "task_create":
             executor_cls = getattr(mod, "TaskCreateExecutor", None)
             if executor_cls:
-                executor = executor_cls(tasks_dir=self._tasks_dir)
+                executor = executor_cls(
+                    tasks_dir=self._tasks_dir,
+                    on_change=self._on_task_change,
+                )
                 async def _impl(**kwargs: Any) -> str:
                     return await executor.execute(**kwargs)
                 return _impl
@@ -247,7 +255,10 @@ class ToolLoader:
         elif tool_name == "task_update":
             executor_cls = getattr(mod, "TaskUpdateExecutor", None)
             if executor_cls:
-                executor = executor_cls(tasks_dir=self._tasks_dir)
+                executor = executor_cls(
+                    tasks_dir=self._tasks_dir,
+                    on_change=self._on_task_change,
+                )
                 async def _impl(**kwargs: Any) -> str:
                     return await executor.execute(**kwargs)
                 return _impl
@@ -255,7 +266,10 @@ class ToolLoader:
         elif tool_name == "task_finish":
             executor_cls = getattr(mod, "TaskFinishExecutor", None)
             if executor_cls:
-                executor = executor_cls(tasks_dir=self._tasks_dir)
+                executor = executor_cls(
+                    tasks_dir=self._tasks_dir,
+                    on_change=self._on_task_change,
+                )
                 async def _impl(**kwargs: Any) -> str:
                     return await executor.execute(**kwargs)
                 return _impl
@@ -263,7 +277,10 @@ class ToolLoader:
         elif tool_name == "task_pause":
             executor_cls = getattr(mod, "TaskPauseExecutor", None)
             if executor_cls:
-                executor = executor_cls(tasks_dir=self._tasks_dir)
+                executor = executor_cls(
+                    tasks_dir=self._tasks_dir,
+                    on_change=self._on_task_change,
+                )
                 async def _impl(**kwargs: Any) -> str:
                     return await executor.execute(**kwargs)
                 return _impl
@@ -271,7 +288,10 @@ class ToolLoader:
         elif tool_name == "task_resume":
             executor_cls = getattr(mod, "TaskResumeExecutor", None)
             if executor_cls:
-                executor = executor_cls(tasks_dir=self._tasks_dir)
+                executor = executor_cls(
+                    tasks_dir=self._tasks_dir,
+                    on_change=self._on_task_change,
+                )
                 async def _impl(**kwargs: Any) -> str:
                     return await executor.execute(**kwargs)
                 return _impl

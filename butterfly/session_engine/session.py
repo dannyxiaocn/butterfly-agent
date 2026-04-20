@@ -390,6 +390,16 @@ class Session:
         # default_workdir: tools run from the session directory so agents use
         # short relative paths (core/tasks/) instead of full session paths.
         try:
+            def _emit_task_change(card_name: str, change: str) -> None:
+                # v2.0.30 — surface task CRUD from agent tools onto the
+                # events.jsonl stream so the frontend can refresh the
+                # Tasks tab on-event instead of polling.
+                self._append_event({
+                    "type": "task_card_changed",
+                    "card": card_name,
+                    "change": change,
+                })
+
             loader = ToolLoader(
                 default_workdir=str(self.session_dir),
                 skills=skills,
@@ -403,6 +413,7 @@ class Session:
                 sessions_base=self._base_dir,
                 system_sessions_base=self._system_base,
                 agent_base=self._base_dir.parent / "agenthub",
+                on_task_change=_emit_task_change,
             )
             # Load tools from tools.md (toolhub), fallback to legacy tool.md
             tools_md_path = self.core_dir / "tools.md"

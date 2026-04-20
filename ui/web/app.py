@@ -150,10 +150,16 @@ def create_app(
     from .weixin import WeixinBridge
     weixin = WeixinBridge(sessions_dir, system_sessions_dir)
 
+    # Shared shutdown flag. `shutdown_event.set()` unblocks every SSE
+    # generator's `wait_for(shutdown_event.wait(), timeout=poll_interval)`
+    # loop so Ctrl+C doesn't stall on an open browser tab (v2.0.30).
+    shutdown_event = asyncio.Event()
+
     @asynccontextmanager
     async def _lifespan(app):
         weixin.start()
         yield
+        shutdown_event.set()
         weixin.stop()
 
     app = FastAPI(title="Butterfly Web UI", docs_url=None, redoc_url=None, lifespan=_lifespan)
@@ -293,15 +299,40 @@ def create_app(
 
         async def generator() -> AsyncIterator[str]:
             seq = 0
-            async for event, _ctx, _evt in service_iter_events(
+            inner = service_iter_events(
                 session_id,
                 system_sessions_dir,
                 context_offset=context_since,
                 events_offset=events_since,
                 poll_interval=0.3,
-            ):
-                yield _sse_format(event, seq=seq, ctx=_ctx, evt=_evt)
-                seq += 1
+            ).__aiter__()
+            try:
+                while not shutdown_event.is_set():
+                    next_task = asyncio.create_task(inner.__anext__())
+                    stop_task = asyncio.create_task(shutdown_event.wait())
+                    done, _pending = await asyncio.wait(
+                        {next_task, stop_task},
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    if stop_task in done and next_task not in done:
+                        # Server is shutting down — cancel the pending event
+                        # fetch and bail out so graceful shutdown doesn't
+                        # stall on this streaming response.
+                        next_task.cancel()
+                        try:
+                            await next_task
+                        except (asyncio.CancelledError, StopAsyncIteration):
+                            pass
+                        return
+                    stop_task.cancel()
+                    try:
+                        event, _ctx, _evt = next_task.result()
+                    except StopAsyncIteration:
+                        return
+                    yield _sse_format(event, seq=seq, ctx=_ctx, evt=_evt)
+                    seq += 1
+            finally:
+                await inner.aclose()
 
         return StreamingResponse(
             generator(),
@@ -367,7 +398,11 @@ def create_app(
             if "status" in payload:
                 payload["status"] = _parse_task_status(payload.get("status"))
         try:
-            updated = service_upsert_task(session_id, sessions_dir, **payload)
+            updated = service_upsert_task(
+                session_id, sessions_dir,
+                system_sessions_dir=system_sessions_dir,
+                **payload,
+            )
         except FileExistsError as exc:
             raise HTTPException(409, f"Task '{exc.args[0]}' already exists; choose a different name")
         except ValueError as exc:
@@ -380,7 +415,10 @@ def create_app(
     async def remove_task(session_id: str, task_name: str):
         normalized = _normalize_task_name(task_name, "Task name")
         try:
-            deleted = service_delete_task(session_id, normalized, sessions_dir)
+            deleted = service_delete_task(
+                session_id, normalized, sessions_dir,
+                system_sessions_dir=system_sessions_dir,
+            )
         except ValueError as exc:
             _raise_session_error(exc, session_id)
         if not deleted:

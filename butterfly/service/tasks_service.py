@@ -6,6 +6,36 @@ from pathlib import Path
 from .sessions_service import _validate_session_id
 
 
+def _emit_task_card_changed(
+    session_id: str,
+    card_name: str,
+    change: str,
+    system_sessions_dir: Path | None = None,
+) -> None:
+    """Append a `task_card_changed` event to the session's events.jsonl.
+
+    Drives the frontend's on-event Tasks tab refresh (v2.0.30). Silent
+    no-op if ``system_sessions_dir`` is missing — we'd rather drop the
+    event than crash the API call that triggered it.
+    """
+    if system_sessions_dir is None:
+        return
+    system_dir = system_sessions_dir / session_id
+    if not system_dir.exists():
+        return
+    from butterfly.runtime.ipc import FileIPC
+    try:
+        FileIPC(system_dir).append_event({
+            "type": "task_card_changed",
+            "card": card_name,
+            "change": change,
+        })
+    except OSError:
+        # Non-fatal — the card itself is already persisted; the refresh
+        # event is just a performance hint.
+        pass
+
+
 def get_tasks(session_id: str, sessions_dir: Path) -> list[dict]:
     _validate_session_id(session_id)
     from butterfly.session_engine.task_cards import (
@@ -23,7 +53,12 @@ def get_tasks(session_id: str, sessions_dir: Path) -> list[dict]:
     return out
 
 
-def upsert_task(session_id: str, sessions_dir: Path, **task_fields) -> bool:
+def upsert_task(
+    session_id: str,
+    sessions_dir: Path,
+    system_sessions_dir: Path | None = None,
+    **task_fields,
+) -> bool:
     _validate_session_id(session_id)
     from butterfly.session_engine.task_cards import (
         TaskCard,
@@ -37,10 +72,13 @@ def upsert_task(session_id: str, sessions_dir: Path, **task_fields) -> bool:
         return False
     tasks_dir = session_dir / 'core' / 'tasks'
     tasks_dir.mkdir(parents=True, exist_ok=True)
+    card_name_for_event: str | None = None
+    change_kind: str = "updated"
     if 'name' in task_fields:
         name = task_fields['name']
         previous_name = task_fields.get('previous_name') or name
         existing = load_card(tasks_dir, previous_name)
+        change_kind = "created" if existing is None else "updated"
         check_interval = task_fields.get(
             'check_interval',
             existing.check_interval if existing else None,
@@ -68,15 +106,27 @@ def upsert_task(session_id: str, sessions_dir: Path, **task_fields) -> bool:
         save_card(tasks_dir, card)
         if 'script' in task_fields and task_fields['script'] is not None:
             write_script(tasks_dir, name, task_fields['script'])
+        card_name_for_event = name
     elif 'description' in task_fields:
         save_card(tasks_dir, TaskCard(name='task', description=task_fields['description']))
+        card_name_for_event = 'task'
+    if card_name_for_event is not None:
+        _emit_task_card_changed(session_id, card_name_for_event, change_kind, system_sessions_dir)
     return True
 
 
-def delete_task(session_id: str, task_name: str, sessions_dir: Path) -> bool:
+def delete_task(
+    session_id: str,
+    task_name: str,
+    sessions_dir: Path,
+    system_sessions_dir: Path | None = None,
+) -> bool:
     _validate_session_id(session_id)
     from butterfly.session_engine.task_cards import delete_card
     session_dir = sessions_dir / session_id
     if not session_dir.exists():
         return False
-    return delete_card(session_dir / 'core' / 'tasks', task_name)
+    deleted = delete_card(session_dir / 'core' / 'tasks', task_name)
+    if deleted:
+        _emit_task_card_changed(session_id, task_name, "deleted", system_sessions_dir)
+    return deleted
