@@ -241,12 +241,12 @@ class TestCancellationResetsStreamingState:
         provider = StreamingProvider("hello", pre_sleep=0.01, chunk_sleep=0.01)
         agent = Agent(provider=provider, task_prompt="do {task}")
         session = make_session(tmp_path, agent)
-        from butterfly.session_engine.task_cards import write_trigger_script
+        from butterfly.session_engine.task_cards import write_script
         save_card(
             session.tasks_dir,
             TaskCard(name="t", description="test", check_interval=600),
         )
-        write_trigger_script(session.tasks_dir, "t", "echo [start]")
+        write_script(session.tasks_dir, "t", "echo [start]")
 
         async def run():
             t = asyncio.create_task(session.tick())

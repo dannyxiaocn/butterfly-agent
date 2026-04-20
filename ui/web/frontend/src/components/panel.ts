@@ -158,13 +158,9 @@ export function createPanel(): HTMLElement {
            <div class="task-card-section-body">${escHtml(card.comments)}</div>
          </div>`
       : '';
-    const scripts: string[] = [];
-    if (card.trigger_script) scripts.push('trigger');
-    if (card.end_script) scripts.push('end');
-    const scriptsMeta = scripts.length
-      ? `<span class="task-window">scripts: ${escHtml(scripts.join(' + '))}</span>`
+    const windowMeta = card.script
+      ? `<span class="task-window">script</span>`
       : '';
-    const windowMeta = scriptsMeta;
 
     return `
       <details class="task-card" data-name="${escHtml(card.name)}">

@@ -356,14 +356,18 @@ Only `main.sh` is inspected — the agent owns ordering and conditional executio
 
 Observe-only baseline: exit codes are logged but do NOT block or mutate the pending agent work. A future release may add a blocking opt-in for `session_start` and `agent_loop_start` — TODO `blocking-hooks` tracks it. `agent_loop_end` should remain observe-only since the loop has already ended.
 
-## Bash-driven task cards (v2.0.27)
+## Bash-driven task cards (v2.0.29 — single script per card)
 
-Task cards drop all time fields (`start_at` / `end_at` / `interval` as trigger). A card is a tuple of JSON metadata + `<name>.trigger.sh` + optional `<name>.end.sh`. The runtime polls the scripts on the card's `check_interval` cadence via `session._poll_trigger_script` / `_poll_end_script`:
+Task cards drop all time fields (`start_at` / `end_at` / `interval` as trigger). A card is a tuple of JSON metadata + `<name>.sh`. The runtime polls the script on the card's `check_interval` cadence via `Session._poll_card_script`. The LAST non-empty line of stdout decides what happens:
 
-- `trigger.sh` last line `[start]` → enqueue `TaskItem(card, seed=<rest-of-line>)` into the wait queue. The seed is appended to the generated wakeup prompt as `Trigger reason: <seed>`.
-- `trigger.sh` last line `[skip]` → stamp `last_checked_at`, move on.
+- `[start]` → enqueue `TaskItem(card, seed="")` into the wait queue. `_do_tick` flips the card to `working`, fires `agent_loop_start`, runs the agent.
+- `[start] <message>` → same, with `<message>` carried as the wakeup `seed` (appended to the prompt as `Trigger reason: <seed>`).
+- `[skip]` → stamp `last_checked_at`, do nothing else.
+- `[done]` → call `card.mark_terminal()` directly. **No agent wakeup, no `agent_loop_start` hook, no `task_wakeup` context event.** This is the script's way to retire a card (deadline passed, file disappeared) without disturbing the agent. Functionally equivalent to the agent calling `task_finish` from inside a wakeup.
 - Non-zero exit / timeout / unparseable → fail-closed (`[skip]` + `task_check_error` event).
 
-All time logic lives inside the agent's bash (e.g. `[[ $(date +%H) -ge 9 ]] && echo [start] || echo [skip]`) — the runtime is stateless beyond cadence. Scripts run serially during the housekeeping tick; each has a 10 s timeout (`task_runner._CHECK_TIMEOUT_SEC`) so a misconfigured check never stalls the daemon.
+The single-tag triad (`[skip]` / `[start]` / `[done]`) is intentionally narrow — only one signal (`[start]`) wakes the agent. This is the answer to "is this poll a wakeup?" being unambiguous: `[skip]` is bookkeeping, `[done]` is bookkeeping, only `[start]` mutates the agent loop. The pre-v2.0.29 split into `trigger.sh` (`[start]`/`[skip]`) + `end.sh` (`[done]`/`[not_done]`) collapsed into this one script because the dual-script model conflated *who* polls (runtime, in both cases) with *when* it polls (only while pending — the working-state end-poll was a fragile mirror of the agent's own `task_finish`).
 
-Every run emits a `task_check` event carrying `card` (card name), `kind` (`trigger`/`end`), `tag`, truncated `stdout`/`stderr`, `exit_code`, `duration_ms` — the UI surfaces these in the panel so agents and operators can see why a card did (or did not) fire without re-running the script.
+All time logic lives inside the agent's bash (e.g. `[[ $(date +%H) -ge 9 ]] && echo [start] || echo [skip]`) — the runtime is stateless beyond cadence. Scripts run serially during the housekeeping tick; each has a 10 s timeout (`task_runner._CHECK_TIMEOUT_SEC`) so a misconfigured check never stalls the daemon. The script's process group is reaped via `os.killpg` on timeout (PR #45 review fix carried forward).
+
+Every run emits a `task_check` event carrying `card` (card name), `tag`, truncated `stdout`/`stderr`, `exit_code`, `duration_ms` — the UI surfaces these in the panel so agents and operators can see why a card did (or did not) fire without re-running the script. There is no `kind` field anymore; with one script per card the dispatch reads off `tag` alone.

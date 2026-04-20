@@ -23,11 +23,11 @@ class TaskFinishExecutor:
             return f"Error: {e}"
         if card is None:
             return f"Error: Task '{name}' not found."
-        # v2.0.27: mark_finished() returns the card to pending (trigger
-        # script decides whether to re-fire); mark_terminal() is the
-        # sticky "really done" transition. task_finish is the imperative
-        # "stop firing me" tool, so we call mark_terminal here — same
-        # thing the end_script [done] path does in Session.
+        # mark_finished() returns the card to pending (the script decides
+        # whether to re-fire); mark_terminal() is the sticky "really done"
+        # transition. task_finish is the imperative "stop firing me" tool,
+        # so we call mark_terminal here — same effect as the script
+        # emitting [done] (handled in Session._poll_card_script).
         card.mark_terminal()
         save_card(self._tasks_dir, card)
         return f"Task '{name}' marked finished."

@@ -1,4 +1,4 @@
-"""Tests for butterfly.session_engine.task_runner (trigger / end script execution)."""
+"""Tests for butterfly.session_engine.task_runner (single-script execution)."""
 from __future__ import annotations
 
 import pytest
@@ -12,7 +12,7 @@ def _write(path, body: str) -> None:
 
 @pytest.mark.asyncio
 async def test_run_script_start(tmp_path):
-    script = tmp_path / "t.trigger.sh"
+    script = tmp_path / "t.sh"
     _write(script, "echo [start]")
     result = await run_script(script, cwd=tmp_path)
     assert result.tag == "[start]"
@@ -22,7 +22,7 @@ async def test_run_script_start(tmp_path):
 
 @pytest.mark.asyncio
 async def test_run_script_skip(tmp_path):
-    script = tmp_path / "t.trigger.sh"
+    script = tmp_path / "t.sh"
     _write(script, "echo debug; echo [skip]")
     result = await run_script(script, cwd=tmp_path)
     assert result.tag == "[skip]"
@@ -30,7 +30,7 @@ async def test_run_script_skip(tmp_path):
 
 @pytest.mark.asyncio
 async def test_run_script_unparseable(tmp_path):
-    script = tmp_path / "t.trigger.sh"
+    script = tmp_path / "t.sh"
     _write(script, "echo hello world")
     result = await run_script(script, cwd=tmp_path)
     assert result.tag is None
@@ -39,7 +39,7 @@ async def test_run_script_unparseable(tmp_path):
 
 @pytest.mark.asyncio
 async def test_run_script_non_zero_exit_fail_closed(tmp_path):
-    script = tmp_path / "t.trigger.sh"
+    script = tmp_path / "t.sh"
     _write(script, "echo [start]; exit 7")
     result = await run_script(script, cwd=tmp_path)
     # tag is unreachable because exit_code != 0
@@ -51,7 +51,7 @@ async def test_run_script_non_zero_exit_fail_closed(tmp_path):
 async def test_run_script_timeout(tmp_path, monkeypatch):
     import butterfly.session_engine.task_runner as tr
     monkeypatch.setattr(tr, "_CHECK_TIMEOUT_SEC", 0.5)
-    script = tmp_path / "t.trigger.sh"
+    script = tmp_path / "t.sh"
     _write(script, "sleep 5")
     result = await run_script(script, cwd=tmp_path)
     assert result.timed_out is True
@@ -59,7 +59,7 @@ async def test_run_script_timeout(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_run_script_carries_message(tmp_path):
-    script = tmp_path / "t.trigger.sh"
+    script = tmp_path / "t.sh"
     _write(script, 'echo "[start] build ready"')
     result = await run_script(script, cwd=tmp_path)
     assert result.tag == "[start]"
@@ -67,11 +67,22 @@ async def test_run_script_carries_message(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_run_script_end_marker(tmp_path):
-    script = tmp_path / "t.end.sh"
+async def test_run_script_done_marker(tmp_path):
+    """v2.0.29: [done] is now a script-level finalisation tag — same parser
+    handles it; the dispatcher decides what to do with it."""
+    script = tmp_path / "t.sh"
     _write(script, "echo [done]")
     result = await run_script(script, cwd=tmp_path)
     assert result.tag == "[done]"
+
+
+@pytest.mark.asyncio
+async def test_run_script_done_with_message(tmp_path):
+    script = tmp_path / "t.sh"
+    _write(script, 'echo "[done] deadline passed"')
+    result = await run_script(script, cwd=tmp_path)
+    assert result.tag == "[done]"
+    assert result.message == "deadline passed"
 
 
 @pytest.mark.asyncio
@@ -90,7 +101,7 @@ async def test_timeout_kills_descendants(tmp_path, monkeypatch):
     import butterfly.session_engine.task_runner as tr
     monkeypatch.setattr(tr, "_CHECK_TIMEOUT_SEC", 0.5)
     sentinel = tmp_path / "child.pid"
-    script = tmp_path / "t.trigger.sh"
+    script = tmp_path / "t.sh"
     # Background a long sleep; write its PID, then hang so the
     # foreground bash gets SIGKILL'd on timeout. If killpg works the
     # backgrounded sleep dies with it.

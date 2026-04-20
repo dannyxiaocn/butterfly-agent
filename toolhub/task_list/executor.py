@@ -5,9 +5,8 @@ from pathlib import Path
 from typing import Any
 
 from butterfly.session_engine.task_cards import (
-    end_script_path,
     load_all_cards,
-    trigger_script_path,
+    script_path,
 )
 
 
@@ -26,15 +25,10 @@ class TaskListExecutor:
             return "No task cards found." if not status else f"No task cards with status '{status}'."
         lines = []
         for c in cards:
-            scripts = []
-            if trigger_script_path(self._tasks_dir, c.name).is_file():
-                scripts.append("trigger")
-            if end_script_path(self._tasks_dir, c.name).is_file():
-                scripts.append("end")
-            scripts_str = ",".join(scripts) if scripts else "-"
+            has_script = "yes" if script_path(self._tasks_dir, c.name).is_file() else "no"
             last = c.last_finished_at or c.last_started_at or "never"
             lines.append(
                 f"{c.name} [{c.status}] check_interval={c.check_interval:g}s "
-                f"scripts={scripts_str} last={last}"
+                f"script={has_script} last={last}"
             )
         return "\n".join(lines)

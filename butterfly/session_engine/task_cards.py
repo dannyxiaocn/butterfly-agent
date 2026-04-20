@@ -1,38 +1,44 @@
-"""Task card system — bash-driven trigger/end (v2.0.27).
+"""Task card system — single bash script per card (v2.0.29).
 
 Each card has two parts:
 
-    core/tasks/<name>.json          status + metadata
-    core/tasks/<name>.trigger.sh    bash check run every ``check_interval``
-                                    seconds. Last line must be one of:
-                                      [start]            — activate the agent
-                                      [start] <message>  — activate with <message>
-                                                            appended as the seed
-                                      [skip]             — do nothing, recheck
-                                                            next interval
-    core/tasks/<name>.end.sh        optional; polled while status == working.
-                                    Last line:
-                                      [done]             — mark card finished
-                                      [not_done]         — keep running
+    core/tasks/<name>.json    status + metadata
+    core/tasks/<name>.sh      bash check polled every ``check_interval``
+                              seconds while status == ``pending``. Last
+                              line of stdout decides what happens:
 
-Unknown output / non-zero exit → treated as ``[skip]`` for trigger and
-``[not_done]`` for end, logged as a ``task_check_error`` via the runtime.
+                                  [skip]            — do nothing, recheck
+                                                        next interval
+                                  [start]           — wake the agent
+                                  [start] <message> — wake with <message>
+                                                        as the seed input
+                                  [done]            — mark card finished;
+                                                        never poll again
+
+Unknown output / non-zero exit → fail-closed (treated as ``[skip]`` and
+logged via ``task_check_error``).
+
+v2.0.29 collapsed the prior trigger.sh / end.sh pair into one script.
+``[done]`` is now a script-level signal: when the LAST line of a poll
+output is ``[done]`` the runtime calls ``mark_terminal()`` directly —
+the agent is NOT woken up, and no ``agent_loop_start`` hook fires.
+``[start]`` and ``[done]`` are mutually exclusive on a single poll.
 
 Status values
 -------------
-    pending   waiting for the next trigger_script check
+    pending   waiting for the next script check
     working   agent is currently running the card's wakeup
-    finished  card completed (one-shot agent ``task_finish`` tool or ``[done]``)
+    finished  card terminal — script returned ``[done]`` or the agent
+              called ``task_finish``
     paused    user-initiated pause; won't fire until explicitly resumed
 
 Time semantics
 --------------
 No ``start_at`` / ``end_at`` / ``interval`` fields — all time gating lives
-inside the trigger_script. ``check_interval`` is purely "how often do we
-RE-RUN the check script"; its last_checked_at tracks the last run so the
+inside the script. ``check_interval`` is purely "how often do we
+RE-RUN the check script"; ``last_checked_at`` tracks the last run so the
 runtime can skip cards whose interval hasn't elapsed yet. For a card that
-wants to fire every N seconds, the trigger script is literally ``echo [start]``
-(or empty — the polling cadence does the work).
+wants to fire every N seconds, the script is literally ``echo [start]``.
 """
 from __future__ import annotations
 
@@ -42,19 +48,20 @@ from datetime import datetime
 from pathlib import Path
 
 
-# Sentinel prefixes emitted by trigger / end scripts (must be the last line
-# of stdout). Anything after the tag on the same line is carried as a
-# "reason" — trigger can use it as the agent's seed input.
-_TRIGGER_FIRE = "[start]"
-_TRIGGER_SKIP = "[skip]"
-_END_DONE = "[done]"
-_END_NOT_DONE = "[not_done]"
+# Sentinel prefixes emitted by the script (must be the last line of stdout).
+# Anything after ``[start]`` on the same line is carried as a "reason" and
+# becomes the agent's seed input.
+_FIRE = "[start]"
+_SKIP = "[skip]"
+_DONE = "[done]"
+
+_TAGS = (_FIRE, _SKIP, _DONE)
 
 
 @dataclass
 class ScriptResult:
-    """Outcome of running a trigger/end script."""
-    tag: str | None             # one of: [start] / [skip] / [done] / [not_done] / None (unparseable)
+    """Outcome of running a task script."""
+    tag: str | None             # one of: [start] / [skip] / [done] / None (unparseable)
     message: str                # text after the tag on the same line (may be empty)
     stdout: str                 # full captured stdout (may be truncated upstream)
     stderr: str
@@ -63,45 +70,30 @@ class ScriptResult:
     timed_out: bool = False
 
 
-def parse_trigger_output(stdout: str, exit_code: int | None) -> tuple[str, str] | None:
-    """Parse last-line of trigger_script stdout.
+def parse_script_output(stdout: str, exit_code: int | None) -> tuple[str, str] | None:
+    """Parse last-line of script stdout.
 
-    Returns (tag, message) where tag ∈ {"[start]", "[skip]"} on clean
-    output. Returns ``None`` if the script exited non-zero OR the last
-    non-empty line does not begin with a recognised tag — callers treat
-    both as fail-closed ``skip`` and emit an error event.
+    Returns ``(tag, message)`` where tag ∈ {``[start]``, ``[skip]``,
+    ``[done]``} on clean output. Returns ``None`` when the script exited
+    non-zero OR the last non-empty line does not begin with a recognised
+    tag — callers treat both as fail-closed ``[skip]`` and emit an error
+    event.
     """
     if exit_code not in (0, None):
         return None
     tag, msg = _last_line_tag(stdout)
-    if tag in (_TRIGGER_FIRE, _TRIGGER_SKIP):
-        return tag, msg
-    return None
-
-
-def parse_end_output(stdout: str, exit_code: int | None) -> tuple[str, str] | None:
-    """Parse last-line of end_script stdout.
-
-    Returns (tag, message) where tag ∈ {"[done]", "[not_done]"} on clean
-    output. Returns ``None`` on fail-closed (script error / bad output) —
-    end_script errors are conservative: no spurious ``mark_finished``.
-    """
-    if exit_code not in (0, None):
-        return None
-    tag, msg = _last_line_tag(stdout)
-    if tag in (_END_DONE, _END_NOT_DONE):
+    if tag in _TAGS:
         return tag, msg
     return None
 
 
 def _last_line_tag(stdout: str) -> tuple[str | None, str]:
-    """Return (tag, message) from the last non-empty line of stdout.
+    """Return ``(tag, message)`` from the last non-empty line of stdout.
 
     Tag is None when the line doesn't start with a recognised marker.
     """
     if not stdout:
         return None, ""
-    # iterate in reverse to find the last non-empty line
     last_line = ""
     for line in reversed(stdout.splitlines()):
         s = line.strip()
@@ -110,7 +102,7 @@ def _last_line_tag(stdout: str) -> tuple[str | None, str]:
             break
     if not last_line:
         return None, ""
-    for tag in (_TRIGGER_FIRE, _TRIGGER_SKIP, _END_DONE, _END_NOT_DONE):
+    for tag in _TAGS:
         if last_line == tag:
             return tag, ""
         if last_line.startswith(tag + " "):
@@ -129,7 +121,7 @@ class TaskCard:
     name: str
     description: str = ""
     status: str = "pending"             # pending | working | finished | paused
-    check_interval: float = _DEFAULT_CHECK_INTERVAL  # seconds between trigger runs
+    check_interval: float = _DEFAULT_CHECK_INTERVAL  # seconds between script runs
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
     last_checked_at: str | None = None
     last_started_at: str | None = None
@@ -138,32 +130,14 @@ class TaskCard:
     progress: str = ""
 
     def needs_check(self, now: datetime | None = None) -> bool:
-        """True when the trigger_script is due to be polled.
+        """True when the script is due to be polled.
 
-        Cards in ``working`` / ``finished`` / ``paused`` never check the
-        TRIGGER script (end_script is handled separately). For ``pending``
-        cards: fire the very first check immediately on first sight, then
-        throttle to one check per ``check_interval`` seconds.
+        Cards in ``working`` / ``finished`` / ``paused`` are never polled.
+        For ``pending`` cards: fire the very first check immediately on
+        first sight, then throttle to one check per ``check_interval``
+        seconds.
         """
         if self.status != "pending":
-            return False
-        if self.last_checked_at is None:
-            return True
-        current = now or datetime.now()
-        try:
-            last = datetime.fromisoformat(self.last_checked_at)
-        except (ValueError, TypeError):
-            return True
-        return (current - last).total_seconds() >= float(self.check_interval or 0)
-
-    def end_check_due(self, now: datetime | None = None) -> bool:
-        """Same cadence as ``needs_check`` but for the end_script.
-
-        Only relevant while status == ``working``. Reuses the same
-        ``last_checked_at`` bookkeeping so the trigger + end checks share a
-        single cadence (they're mutually exclusive by status anyway).
-        """
-        if self.status != "working":
             return False
         if self.last_checked_at is None:
             return True
@@ -183,13 +157,12 @@ class TaskCard:
         self.last_started_at = datetime.now().isoformat()
 
     def mark_finished(self) -> None:
-        """Mark task as finished after execution.
+        """Mark task as finished after agent execution.
 
-        Cards return to ``pending`` so the trigger_script keeps polling —
-        the agent's trigger script decides whether to fire again. A truly
-        one-shot card is expressed by a trigger script that emits
-        ``[start]`` once and ``[skip]`` forever after (e.g. gating on a
-        file or marker the card itself touches on completion).
+        Cards return to ``pending`` so the script keeps polling — the
+        agent's script decides whether to fire again. A truly one-shot
+        card is expressed by a script that emits ``[start]`` once and
+        ``[done]`` (or ``[skip]``) forever after.
         """
         self.last_finished_at = datetime.now().isoformat()
         self.status = "pending"
@@ -259,12 +232,8 @@ def _card_path(tasks_dir: Path, name: str) -> Path:
     return tasks_dir / f"{safe_name}.json"
 
 
-def trigger_script_path(tasks_dir: Path, name: str) -> Path:
-    return tasks_dir / f"{name}.trigger.sh"
-
-
-def end_script_path(tasks_dir: Path, name: str) -> Path:
-    return tasks_dir / f"{name}.end.sh"
+def script_path(tasks_dir: Path, name: str) -> Path:
+    return tasks_dir / f"{name}.sh"
 
 
 def save_card(tasks_dir: Path, card: TaskCard) -> Path:
@@ -278,15 +247,15 @@ def save_card(tasks_dir: Path, card: TaskCard) -> Path:
     return path
 
 
-def write_trigger_script(tasks_dir: Path, name: str, body: str) -> Path:
-    """Write ``body`` to ``<name>.trigger.sh`` (mode 0644). Body stored
-    verbatim — the agent owns the script content. Empty body is allowed
-    (equivalent to ``echo [start]`` for the degenerate "always fire" case)
-    and is normalised to that one-liner so the parser sees a valid tag.
+def write_script(tasks_dir: Path, name: str, body: str) -> Path:
+    """Write ``body`` to ``<name>.sh`` (mode 0644). Body stored verbatim —
+    the agent owns the script content. Empty body is normalised to
+    ``echo [start]`` so the parser sees a valid tag (degenerate
+    "always fire" case).
     """
     tasks_dir.mkdir(parents=True, exist_ok=True)
-    path = trigger_script_path(tasks_dir, name)
-    text = (body or "").strip() or f"echo {_TRIGGER_FIRE}"
+    path = script_path(tasks_dir, name)
+    text = (body or "").strip() or f"echo {_FIRE}"
     if not text.startswith("#!"):
         text = "#!/bin/bash\n" + text
     if not text.endswith("\n"):
@@ -295,38 +264,9 @@ def write_trigger_script(tasks_dir: Path, name: str, body: str) -> Path:
     return path
 
 
-def write_end_script(tasks_dir: Path, name: str, body: str | None) -> Path | None:
-    """Write ``body`` to ``<name>.end.sh``. ``None`` removes any existing
-    end script (so updating a card to drop its end condition is explicit).
-    """
-    path = end_script_path(tasks_dir, name)
-    if body is None or not body.strip():
-        if path.exists():
-            path.unlink()
-        return None
-    tasks_dir.mkdir(parents=True, exist_ok=True)
-    text = body.strip()
-    if not text.startswith("#!"):
-        text = "#!/bin/bash\n" + text
-    if not text.endswith("\n"):
-        text += "\n"
-    path.write_text(text, encoding="utf-8")
-    return path
-
-
-def read_trigger_script(tasks_dir: Path, name: str) -> str | None:
-    """Return trigger.sh body (including shebang) or None when absent."""
-    path = trigger_script_path(tasks_dir, name)
-    if not path.is_file():
-        return None
-    try:
-        return path.read_text(encoding="utf-8")
-    except OSError:
-        return None
-
-
-def read_end_script(tasks_dir: Path, name: str) -> str | None:
-    path = end_script_path(tasks_dir, name)
+def read_script(tasks_dir: Path, name: str) -> str | None:
+    """Return the script body (including shebang) or None when absent."""
+    path = script_path(tasks_dir, name)
     if not path.is_file():
         return None
     try:
@@ -348,14 +288,14 @@ def load_card(tasks_dir: Path, name: str) -> TaskCard | None:
 
 
 def delete_card(tasks_dir: Path, name: str) -> bool:
-    """Delete a card's JSON and any trigger/end scripts beside it."""
+    """Delete a card's JSON and any script beside it."""
     path = _card_path(tasks_dir, name)
     existed = path.exists()
     if existed:
         path.unlink()
-    for side in (trigger_script_path(tasks_dir, name), end_script_path(tasks_dir, name)):
-        if side.exists():
-            side.unlink()
+    side = script_path(tasks_dir, name)
+    if side.exists():
+        side.unlink()
     return existed
 
 
@@ -376,17 +316,8 @@ def load_all_cards(tasks_dir: Path) -> list[TaskCard]:
 
 
 def cards_needing_check(tasks_dir: Path, now: datetime | None = None) -> list[TaskCard]:
-    """Return pending cards whose trigger_script should be polled now."""
+    """Return pending cards whose script should be polled now."""
     return [c for c in load_all_cards(tasks_dir) if c.needs_check(now)]
-
-
-def cards_with_end_check_due(tasks_dir: Path, now: datetime | None = None) -> list[TaskCard]:
-    """Return working cards whose end_script should be polled now."""
-    out: list[TaskCard] = []
-    for c in load_all_cards(tasks_dir):
-        if c.end_check_due(now) and end_script_path(tasks_dir, c.name).is_file():
-            out.append(c)
-    return out
 
 
 def has_pending_cards(tasks_dir: Path) -> bool:
@@ -406,8 +337,8 @@ def pause_all_cards(tasks_dir: Path) -> int:
 
     Paired with ``resume_all_paused_cards`` — used by ``stop_session`` so a
     stopped session also halts its scheduled wakeups. Without this, the
-    runtime's pending-card scan would keep firing trigger_scripts even
-    while the session sits stopped.
+    runtime's pending-card scan would keep firing scripts even while the
+    session sits stopped.
     """
     count = 0
     for card in load_all_cards(tasks_dir):
@@ -440,13 +371,12 @@ def ensure_card(
     *,
     check_interval: float | None = None,
     description: str = "",
-    trigger_script: str | None = None,
-    end_script: str | None = None,
+    script: str | None = None,
 ) -> TaskCard:
-    """Ensure a task card (+scripts) exists. Idempotent.
+    """Ensure a task card (+script) exists. Idempotent.
 
-    Returns the existing card unchanged if one is on disk. The trigger
-    script defaults to ``echo [start]`` (unconditional fire every
+    Returns the existing card unchanged if one is on disk. The script
+    defaults to ``echo [start]`` (unconditional fire every
     ``check_interval`` seconds) when not supplied — matches the most
     common "recurring" use case without forcing the caller to write bash.
     """
@@ -461,8 +391,6 @@ def ensure_card(
         status="pending",
     )
     save_card(tasks_dir, card)
-    if not trigger_script_path(tasks_dir, name).exists():
-        write_trigger_script(tasks_dir, name, trigger_script or f"echo {_TRIGGER_FIRE}")
-    if end_script is not None:
-        write_end_script(tasks_dir, name, end_script)
+    if not script_path(tasks_dir, name).exists():
+        write_script(tasks_dir, name, script or f"echo {_FIRE}")
     return card

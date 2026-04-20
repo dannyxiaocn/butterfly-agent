@@ -90,13 +90,12 @@ Each agent is fully self-contained — no inheritance chain:
 | `default` | Standard session, no autonomous tasks |
 | `persistent` | Has recurring task card (e.g. duty) with configured interval |
 
-## Task Card System (v2.0.27 bash-driven)
+## Task Card System (v2.0.29 — single script per card)
 
-Each task has three artefacts under `core/tasks/`:
+Each task has two artefacts under `core/tasks/`:
 
 - `<name>.json` — status + metadata
-- `<name>.trigger.sh` — bash check polled every `check_interval` seconds
-- `<name>.end.sh` *(optional)* — bash check polled while `status == working`
+- `<name>.sh` — bash check polled every `check_interval` seconds while `status == pending`
 
 JSON schema:
 
@@ -119,33 +118,38 @@ JSON schema:
 
 | Status | Meaning |
 |--------|---------|
-| `pending` | Waiting for next trigger_script check |
+| `pending` | Waiting for the next script check |
 | `working` | Agent is currently running the card's wakeup |
-| `finished` | Completed (via `task_finish` tool or end_script `[done]`) |
+| `finished` | Card terminal — script returned `[done]` or the agent called `task_finish` |
 | `paused` | User-initiated pause; won't fire until explicitly resumed |
 
 ### Script contract
 
-Last non-empty line of stdout must match:
+Last non-empty line of stdout decides what the runtime does:
 
-| Script | Token | Meaning |
-|--------|-------|---------|
-| `trigger.sh` | `[start]` | Activate the agent now |
-| `trigger.sh` | `[start] <message>` | Activate; `<message>` becomes the seed input |
-| `trigger.sh` | `[skip]` | Not yet, check again next `check_interval` |
-| `end.sh` | `[done]` | Mark card finished |
-| `end.sh` | `[not_done]` | Keep running |
+| Tag | Meaning |
+|-----|---------|
+| `[skip]` | Not yet — stamp `last_checked_at`, do nothing else |
+| `[start]` | Wake the agent now |
+| `[start] <message>` | Wake the agent; `<message>` becomes the seed (appended to the prompt as `Trigger reason: <message>`) |
+| `[done]` | Mark the card terminal — **no agent wakeup, no `agent_loop_start` hook**. Same effect as `task_finish`. |
 
-Non-zero exit / timeout / unrecognised output → treated as `[skip]` / `[not_done]` (fail-closed) and emitted as `task_check_error` on `events.jsonl`. Every run (success or fail) emits a `task_check` event carrying `stdout`, `stderr`, `exit_code`, `duration_ms`.
+Non-zero exit / timeout / unrecognised output → fail-closed (treated as `[skip]`) and emitted as a `task_check_error` event. Every run (success or fail) emits a `task_check` event carrying `tag`, `stdout`, `stderr`, `exit_code`, `duration_ms`. There is no `kind` field — one script means one dispatch path.
 
 ### Scheduling
 
 The daemon's housekeeping tick (`_TASK_POLL_INTERVAL = 500 ms`) walks `core/tasks/` and:
 
-1. For each `status=pending` card whose `needs_check(now)` is true (first check or `now - last_checked_at >= check_interval`), run `trigger.sh`. On `[start]` enqueue a `TaskItem(card, seed=<msg>)` into the wait queue; on `[skip]` / error, just stamp `last_checked_at` and move on.
-2. For each `status=working` card whose `end_check_due(now)` is true *and* has an `end.sh` on disk, run it. On `[done]` call `mark_terminal()` (the currently running chat finishes naturally). Otherwise noop.
+1. For each `status=pending` card whose `needs_check(now)` is true (first check or `now - last_checked_at >= check_interval`), run `<name>.sh`. Then dispatch on `tag`:
+   - `[start]` → enqueue `TaskItem(card, seed=<msg>)` into the wait queue
+   - `[skip]` / fail-closed → stamp `last_checked_at` and move on
+   - `[done]` → call `card.mark_terminal()` in place — the agent is **not** woken up
 
-Trigger scripts have a 10 s hard timeout (see `task_runner._CHECK_TIMEOUT_SEC`). All time logic (daily windows, cron-like gates, file presence, etc.) lives inside the agent-authored script — the runtime only tracks cadence.
+Cards in `working` / `finished` / `paused` are never polled. Scripts run serially and have a 10 s hard timeout (`task_runner._CHECK_TIMEOUT_SEC`); the timeout path SIGKILLs the whole process group via `os.killpg` so backgrounded children of the script (`sleep 100 &`, etc.) are reaped. All time logic (daily windows, cron-like gates, file presence) lives inside the agent-authored script — the runtime only tracks cadence.
+
+### Wakeup invariant
+
+The runtime emits **at most one `task_wakeup` context event and one `agent_loop_start` external hook per `[start]` poll**. `[skip]` and `[done]` are silent on those channels — they only generate `task_check` (and possibly `task_check_error`) on `events.jsonl`. This is what makes the question "did this poll wake the agent?" answerable from a single field (`task_check.tag == "[start]"`).
 
 ## Important Behaviors
 

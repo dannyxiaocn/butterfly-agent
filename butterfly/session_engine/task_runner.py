@@ -1,9 +1,9 @@
-"""Execute task card trigger/end scripts.
+"""Execute task card scripts.
 
 Separated from ``task_cards.py`` so the pure dataclass / file-ops layer
-stays dependency-free. ``run_check`` handles the async subprocess, timeout,
-stdout capture, and last-line parsing; the caller decides what to do with
-the result (enqueue, mark_finished, emit error event, etc.).
+stays dependency-free. ``run_script`` handles the async subprocess,
+timeout, stdout capture, and last-line parsing; the caller decides what
+to do with the result (enqueue, mark_terminal, emit error event, etc.).
 """
 from __future__ import annotations
 
@@ -15,8 +15,7 @@ from pathlib import Path
 
 from butterfly.session_engine.task_cards import (
     ScriptResult,
-    parse_end_output,
-    parse_trigger_output,
+    parse_script_output,
 )
 
 _CHECK_TIMEOUT_SEC = 10.0
@@ -45,11 +44,12 @@ def _kill_process_group(proc: asyncio.subprocess.Process) -> None:
 
 
 async def run_script(script: Path, *, cwd: Path) -> ScriptResult:
-    """Run a trigger/end script and capture its result.
+    """Run a task script and capture its result.
 
-    Parsing the tag is left to the caller (``parse_trigger_output`` /
-    ``parse_end_output``) since the two scripts share the plumbing but
-    accept different markers.
+    The single-script model (v2.0.29) makes the parser unconditional —
+    one tag set covers every poll. ``parse_script_output`` returns
+    ``None`` on fail-closed conditions; the caller decides what to do
+    (skip, enqueue, mark_terminal).
     """
     started = time.monotonic()
     stdout_text = ""
@@ -86,14 +86,7 @@ async def run_script(script: Path, *, cwd: Path) -> ScriptResult:
         stderr_text = "bash not found"
 
     duration_ms = int((time.monotonic() - started) * 1000)
-    # The outer caller parses tag/message after selecting trigger vs end
-    # semantics. We still fill them here using a union-style parse so the
-    # ScriptResult remains self-sufficient — callers can inspect either
-    # marker set without re-walking stdout.
-    parsed = (
-        parse_trigger_output(stdout_text, exit_code)
-        or parse_end_output(stdout_text, exit_code)
-    )
+    parsed = parse_script_output(stdout_text, exit_code)
     tag, message = (parsed if parsed is not None else (None, ""))
     return ScriptResult(
         tag=tag,

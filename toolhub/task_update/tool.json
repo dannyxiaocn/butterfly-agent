@@ -1,6 +1,6 @@
 {
   "name": "task_update",
-  "description": "Update fields on an existing task card. Only the fields you pass will change. Pass `trigger_script` / `end_script` to overwrite the bash snippets on disk.",
+  "description": "Update fields on an existing task card. Only the fields you pass will change. Pass `script` to overwrite the bash body on disk.",
   "input_schema": {
     "type": "object",
     "properties": {
@@ -15,15 +15,11 @@
       "check_interval": {
         "type": ["number", "null"],
         "exclusiveMinimum": 0,
-        "description": "New cadence in seconds for polling trigger_script / end_script (must be > 0)."
+        "description": "New cadence in seconds between script runs (must be > 0)."
       },
-      "trigger_script": {
+      "script": {
         "type": "string",
-        "description": "New bash body for core/tasks/<name>.trigger.sh. Last line must be `[start]`, `[start] <message>`, or `[skip]`."
-      },
-      "end_script": {
-        "type": ["string", "null"],
-        "description": "New bash body for core/tasks/<name>.end.sh (last line `[done]`/`[not_done]`). Pass null / empty string to delete the end script."
+        "description": "New bash body for core/tasks/<name>.sh. Last line must be `[skip]`, `[start]`, `[start] <message>`, or `[done]`."
       },
       "progress": {
         "type": "string",
