@@ -1084,3 +1084,196 @@ async def test_task_cancel_respects_on_disk_paused_status(tmp_path):
     assert disk.status == "paused", (
         f"race guard failed: expected paused, got {disk.status}"
     )
+
+
+# ── v2.0.28: bg tool output inlined into user_input content ────────────────
+
+
+def test_drain_background_inlines_bash_output(tmp_path):
+    """A completed bg bash task must inline the tail of ``output_file`` into
+    the user_input written to context.jsonl. Prior to v2.0.28 the message
+    only carried a ``tool_output(task_id=...)`` hint, forcing the agent to
+    burn a round-trip tool call just to read the result."""
+    import time
+
+    agent = Agent(provider=RecordingProvider([]))
+    session = make_session(tmp_path, agent, session_id="bg-inline")
+
+    output_file = tmp_path / "bg_output.txt"
+    output_file.write_text("hello from background\nline two\n", encoding="utf-8")
+
+    now = time.time()
+    entry = PanelEntry(
+        tid="bg_inline1",
+        type="tool",
+        tool_name="bash",
+        input={"command": "echo hello"},
+        status=STATUS_COMPLETED,
+        created_at=now,
+        started_at=now,
+        finished_at=now,
+        exit_code=0,
+        output_bytes=output_file.stat().st_size,
+        output_file=str(output_file),
+    )
+    session._bg_manager._emit_event(
+        BackgroundEvent(tid="bg_inline1", kind="completed", entry=entry)
+    )
+    session._drain_background_events()
+
+    ctx = read_jsonl(session.system_dir / "context.jsonl")
+    user_inputs = [e for e in ctx if e.get("type") == "user_input"]
+    assert len(user_inputs) == 1
+    msg = user_inputs[0]["content"]
+    assert "Background task bg_inline1" in msg
+    assert "hello from background" in msg
+    assert "line two" in msg
+    # Small payload → no truncation marker, no tool_output hint.
+    assert "truncated" not in msg
+    assert "tool_output" not in msg
+
+
+def test_drain_background_truncates_large_output(tmp_path):
+    """Bg bash output larger than the 8KB cap must be truncated with a
+    pointer back to ``tool_output`` for the full file."""
+    import time
+
+    agent = Agent(provider=RecordingProvider([]))
+    session = make_session(tmp_path, agent, session_id="bg-trunc")
+
+    output_file = tmp_path / "big_output.txt"
+    big = "A" * 20_000
+    output_file.write_text(big, encoding="utf-8")
+
+    now = time.time()
+    entry = PanelEntry(
+        tid="bg_big1",
+        type="tool",
+        tool_name="bash",
+        input={"command": "yes"},
+        status=STATUS_COMPLETED,
+        created_at=now,
+        started_at=now,
+        finished_at=now,
+        exit_code=0,
+        output_bytes=output_file.stat().st_size,
+        output_file=str(output_file),
+    )
+    session._bg_manager._emit_event(
+        BackgroundEvent(tid="bg_big1", kind="completed", entry=entry)
+    )
+    session._drain_background_events()
+
+    ctx = read_jsonl(session.system_dir / "context.jsonl")
+    user_inputs = [e for e in ctx if e.get("type") == "user_input"]
+    assert len(user_inputs) == 1
+    msg = user_inputs[0]["content"]
+    assert "truncated at 8000B" in msg
+    assert 'tool_output(task_id="bg_big1")' in msg
+    # Body was inlined up to cap, not the full 20k.
+    assert msg.count("A") == 8000
+
+
+# ── v2.0.28: tick-cancel mirrors chat-cancel for thinking placeholder ──
+
+
+@pytest.mark.asyncio
+async def test_tick_cancel_mid_thinking_persists_placeholder(tmp_path):
+    """A TaskCard tick cancelled mid-thought must write an interrupted
+    turn with ``thinking_blocks`` just like ``_do_chat`` does, so reload
+    renders "Thinking interrupted" for tick-driven cancels too. Prior to
+    this fix ``_do_tick``'s CancelledError branch only rolled back
+    history + fired the external hook; the placeholder vanished.
+    """
+
+    class ThinkingThenHangProvider(Provider):
+        async def complete(
+            self,
+            messages,
+            tools,
+            system_prompt,
+            model,
+            *,
+            on_text_chunk=None,
+            cache_system_prefix="",
+            cache_last_human_turn=False,
+            thinking=False,
+            thinking_budget=8000,
+            thinking_effort="high",
+            on_thinking_start=None,
+            on_thinking_end=None,
+        ):
+            if on_thinking_start is not None:
+                on_thinking_start()
+            # Hang until cancelled — simulates provider mid-thought.
+            await asyncio.Event().wait()
+            return ("", [], TokenUsage())
+
+    agent = Agent(provider=ThinkingThenHangProvider())
+    session = make_session(tmp_path, agent, session_id="tick-thinking")
+    card = TaskCard(name="wakeup", description="think about things", status="pending")
+
+    tick_task = asyncio.create_task(session._do_tick(card))
+    # Yield enough for provider to enter ``complete`` and fire thinking_start.
+    for _ in range(20):
+        await asyncio.sleep(0.02)
+        if session._pending_thinking_attributor is not None:
+            break
+    tick_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await tick_task
+
+    turns = [
+        e for e in read_jsonl(session.system_dir / "context.jsonl")
+        if e.get("type") == "turn"
+    ]
+    assert len(turns) == 1, f"expected one interrupted turn, got {turns}"
+    t = turns[0]
+    assert t.get("interrupted") is True
+    assert t.get("messages") == []
+    blocks = t.get("thinking_blocks") or []
+    assert len(blocks) == 1
+    assert blocks[0].get("interrupted") is True
+
+
+@pytest.mark.asyncio
+async def test_tick_cancel_without_thinking_writes_no_blank_turn(tmp_path):
+    """When a tick is cancelled before any thinking_start, the partial-
+    turn write must NOT fire (otherwise context.jsonl fills with empty
+    ``messages=[]`` turns on every vanilla cancel)."""
+
+    class HangProvider(Provider):
+        async def complete(
+            self,
+            messages,
+            tools,
+            system_prompt,
+            model,
+            *,
+            on_text_chunk=None,
+            cache_system_prefix="",
+            cache_last_human_turn=False,
+            thinking=False,
+            thinking_budget=8000,
+            thinking_effort="high",
+            on_thinking_start=None,
+            on_thinking_end=None,
+        ):
+            await asyncio.Event().wait()
+            return ("", [], TokenUsage())
+
+    agent = Agent(provider=HangProvider())
+    session = make_session(tmp_path, agent, session_id="tick-nothink")
+    card = TaskCard(name="silent", description="do nothing", status="pending")
+
+    tick_task = asyncio.create_task(session._do_tick(card))
+    await asyncio.sleep(0.05)
+    tick_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await tick_task
+
+    ctx = read_jsonl(session.system_dir / "context.jsonl")
+    # task_wakeup marker is written early in _do_tick — that's expected.
+    # What we're asserting: NO turn entry (interrupted or otherwise).
+    turns = [e for e in ctx if e.get("type") == "turn"]
+    assert turns == []
