@@ -983,6 +983,112 @@ def test_drain_background_truncates_large_output(tmp_path):
     assert msg.count("A") == 8000
 
 
+# ── v2.0.27 round-2: tick-cancel mirrors chat-cancel for thinking placeholder ──
+
+
+@pytest.mark.asyncio
+async def test_tick_cancel_mid_thinking_persists_placeholder(tmp_path):
+    """A TaskCard tick cancelled mid-thought must write an interrupted
+    turn with ``thinking_blocks`` just like ``_do_chat`` does, so reload
+    renders "Thinking interrupted" for tick-driven cancels too. Prior to
+    this fix ``_do_tick``'s CancelledError branch only rolled back
+    history and raised — the placeholder vanished.
+    """
+    from butterfly.session_engine.task_cards import TaskCard
+
+    class ThinkingThenHangProvider(Provider):
+        async def complete(
+            self,
+            messages,
+            tools,
+            system_prompt,
+            model,
+            *,
+            on_text_chunk=None,
+            cache_system_prefix="",
+            cache_last_human_turn=False,
+            thinking=False,
+            thinking_budget=8000,
+            thinking_effort="high",
+            on_thinking_start=None,
+            on_thinking_end=None,
+        ):
+            if on_thinking_start is not None:
+                on_thinking_start()
+            # Hang until cancelled — simulates provider mid-thought.
+            await asyncio.Event().wait()
+            return ("", [], TokenUsage())
+
+    agent = Agent(provider=ThinkingThenHangProvider())
+    session = make_session(tmp_path, agent, session_id="tick-thinking")
+    card = TaskCard(name="wakeup", description="think about things", interval=None)
+
+    tick_task = asyncio.create_task(session._do_tick(card))
+    # Yield enough for provider to enter ``complete`` and fire thinking_start.
+    for _ in range(20):
+        await asyncio.sleep(0.02)
+        if session._pending_thinking_attributor is not None:
+            break
+    tick_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await tick_task
+
+    turns = [
+        e for e in read_jsonl(session.system_dir / "context.jsonl")
+        if e.get("type") == "turn"
+    ]
+    assert len(turns) == 1, f"expected one interrupted turn, got {turns}"
+    t = turns[0]
+    assert t.get("interrupted") is True
+    assert t.get("messages") == []
+    blocks = t.get("thinking_blocks") or []
+    assert len(blocks) == 1
+    assert blocks[0].get("interrupted") is True
+
+
+@pytest.mark.asyncio
+async def test_tick_cancel_without_thinking_writes_no_blank_turn(tmp_path):
+    """When a tick is cancelled before any thinking_start, the partial-
+    turn write must NOT fire (otherwise context.jsonl fills with empty
+    ``messages=[]`` turns on every vanilla cancel)."""
+    from butterfly.session_engine.task_cards import TaskCard
+
+    class HangProvider(Provider):
+        async def complete(
+            self,
+            messages,
+            tools,
+            system_prompt,
+            model,
+            *,
+            on_text_chunk=None,
+            cache_system_prefix="",
+            cache_last_human_turn=False,
+            thinking=False,
+            thinking_budget=8000,
+            thinking_effort="high",
+            on_thinking_start=None,
+            on_thinking_end=None,
+        ):
+            await asyncio.Event().wait()
+            return ("", [], TokenUsage())
+
+    agent = Agent(provider=HangProvider())
+    session = make_session(tmp_path, agent, session_id="tick-nothink")
+    card = TaskCard(name="silent", description="do nothing", interval=None)
+
+    tick_task = asyncio.create_task(session._do_tick(card))
+    await asyncio.sleep(0.05)
+    tick_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await tick_task
+
+    ctx_path = session.system_dir / "context.jsonl"
+    if ctx_path.exists():
+        turns = [e for e in read_jsonl(ctx_path) if e.get("type") == "turn"]
+        assert turns == []
+
+
 # ── v2.0.26: two-queue drain priority + Stop/Start task-card pause ──────────
 
 

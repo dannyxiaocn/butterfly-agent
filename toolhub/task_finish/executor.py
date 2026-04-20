@@ -1,7 +1,6 @@
 """task_finish tool — mark a task card as finished."""
 from __future__ import annotations
 
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -24,14 +23,10 @@ class TaskFinishExecutor:
             return f"Error: {e}"
         if card is None:
             return f"Error: Task '{name}' not found."
-        # v2.0.27: manual terminate must force status=finished regardless of
-        # ``interval``. ``TaskCard.mark_finished()`` sets recurring cards
-        # back to "pending" (so the dispatcher's next poll re-schedules
-        # them for the next interval) — that semantic is for the normal
-        # "tick completed" path in ``_do_tick``, not for the agent-invoked
-        # terminate verb. Calling ``mark_finished`` here used to leave
-        # recurring tasks looping forever.
-        card.status = "finished"
-        card.last_finished_at = datetime.now().isoformat()
+        # v2.0.27: route through ``TaskCard.terminate()`` so recurring tasks
+        # actually terminate (prior code used ``mark_finished`` which flips
+        # recurring cards back to "pending" for the next interval — that's
+        # the tick-complete path, not the manual-terminate path).
+        card.terminate()
         save_card(self._tasks_dir, card)
         return f"Task '{name}' marked finished."

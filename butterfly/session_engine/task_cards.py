@@ -149,6 +149,22 @@ class TaskCard:
         """Return task to pending state (e.g. after error recovery)."""
         self.status = "pending"
 
+    def terminate(self) -> None:
+        """Force terminal state regardless of recurrence.
+
+        Distinct from ``mark_finished()``: that one flips recurring cards
+        back to ``pending`` so the dispatcher re-schedules them for the
+        next interval (it models "this tick completed", not "this task is
+        done forever"). ``terminate()`` is the agent-invoked decision to
+        stop, so status jumps straight to ``finished`` for both one-shot
+        and recurring cards.
+
+        Intentionally does not stamp ``last_finished_at`` — a manual stop
+        isn't a completion record. ``is_due()`` short-circuits on
+        ``status != "pending"`` so the absent timestamp is inert.
+        """
+        self.status = "finished"
+
     def mark_paused(self) -> None:
         """User-initiated pause. Task won't fire until explicitly resumed."""
         self.status = "paused"

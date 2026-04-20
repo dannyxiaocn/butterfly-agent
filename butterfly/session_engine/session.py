@@ -38,6 +38,13 @@ SESSIONS_DIR = Path(__file__).parent.parent.parent / "sessions"
 _SYSTEM_SESSIONS_DIR = Path(__file__).parent.parent.parent / "_sessions"
 SESSION_FINISHED = "SESSION_FINISHED"
 
+# Shared cap for the "tail of a tool / background output" inlined into the
+# chat transcript (agent context.jsonl), the tool_finalize payload shipped
+# over SSE, and the tool_done callback's result field. Three sites used to
+# declare their own ``= 8000`` literal; keeping one constant prevents a
+# silent size-drift if the cap is ever retuned.
+_TOOL_OUTPUT_INLINE_CAP = 8000
+
 # Background-spawn placeholder pattern. Agent.py returns this exact prefix
 # from ``_execute_tools`` when a tool was routed to BackgroundTaskManager.spawn:
 #
@@ -873,6 +880,24 @@ class Session:
             self._agent._history = history_snapshot
             self._set_model_status("idle", triggered_by)
             on_chunk.flush()
+            # v2.0.27: mirror ``_do_chat``'s partial-turn write so a tick
+            # cancelled mid-thought still surfaces "Thinking interrupted"
+            # on reload. Tick prompts don't textually merge across runs
+            # (the re-scheduled tick emits a fresh ``task_wakeup``), so
+            # ``messages`` stays empty and only the thinking_blocks ride
+            # along for the UI. No write when thinking never started —
+            # keeps context.jsonl free of blank turns after a vanilla
+            # cancel.
+            _tick_thinking_blocks = get_thinking_blocks()
+            if _tick_thinking_blocks:
+                self._append_context({
+                    "type": "turn",
+                    "triggered_by": triggered_by,
+                    "trigger_ts": trigger_ts,
+                    "interrupted": True,
+                    "messages": [],
+                    "thinking_blocks": _tick_thinking_blocks,
+                })
             raise
         except BaseException:
             card.mark_pending()
@@ -1385,11 +1410,10 @@ class Session:
                     # v2.0.27: inline the output file directly into the
                     # notification so the agent doesn't have to round-trip
                     # a ``tool_output`` call just to read the result. Cap
-                    # matches the ``tool_finalize`` payload below (8KB) so
-                    # a huge dump doesn't blow out the context window; the
-                    # full file is still fetchable via ``tool_output`` for
-                    # the overflow case.
-                    _BG_INLINE_MAX = 8000
+                    # matches the ``tool_finalize`` payload below (see
+                    # ``_TOOL_OUTPUT_INLINE_CAP``) so a huge dump doesn't
+                    # blow out the context window; the full file is still
+                    # fetchable via ``tool_output`` for the overflow case.
                     output_text = ""
                     if entry.output_file:
                         try:
@@ -1401,24 +1425,31 @@ class Session:
                                     output_text = _f.read()
                         except OSError:
                             output_text = ""
-                    header = (
+                    base = (
                         f"Background task {entry.tid} ({entry.tool_name}) completed "
-                        f"with exit {entry.exit_code}{duration}. "
-                        f"{entry.output_bytes}B output"
+                        f"with exit {entry.exit_code}{duration}"
                     )
                     if output_text:
-                        truncated = len(output_text) > _BG_INLINE_MAX
-                        body = output_text[:_BG_INLINE_MAX]
-                        msg = f"{header}:\n\n{body}"
+                        truncated = len(output_text) > _TOOL_OUTPUT_INLINE_CAP
+                        body = output_text[:_TOOL_OUTPUT_INLINE_CAP]
+                        # Body speaks for itself — dropping the redundant
+                        # "NB output" suffix that used to precede a body of
+                        # exactly N bytes. When truncated, keep the byte
+                        # count so the agent can tell how much was elided.
                         if truncated:
-                            msg += (
-                                f"\n\n[truncated at {_BG_INLINE_MAX}B; "
-                                f'full output: tool_output(task_id="{entry.tid}")]'
+                            msg = (
+                                f"{base}. {entry.output_bytes}B output "
+                                f"(truncated at {_TOOL_OUTPUT_INLINE_CAP}B):\n\n"
+                                f"{body}\n\n"
+                                f'[full output: tool_output(task_id="{entry.tid}")]'
                             )
+                        else:
+                            msg = f"{base}:\n\n{body}"
                     else:
                         msg = (
-                            f"{header}.\n"
-                            f'Fetch full output: tool_output(task_id="{entry.tid}").'
+                            f"{base}. {entry.output_bytes}B output "
+                            f"(empty or unreadable). "
+                            f'Fetch via tool_output(task_id="{entry.tid}").'
                         )
             elif evt.kind == "stalled":
                 msg = (
@@ -1524,7 +1555,6 @@ class Session:
                 # Cap the payload so a huge bash dump doesn't bloat SSE; the
                 # full output is still fetchable via tool_output(task_id=...).
                 final_result: str | None = None
-                _RESULT_MAX = 8000
                 if is_sub_agent:
                     rt = (entry.meta or {}).get("result_text")
                     if isinstance(rt, str) and rt:
@@ -1546,8 +1576,8 @@ class Session:
                     "exit_code": entry.exit_code,
                 }
                 if final_result is not None:
-                    truncated = len(final_result) > _RESULT_MAX
-                    payload["result"] = final_result[:_RESULT_MAX]
+                    truncated = len(final_result) > _TOOL_OUTPUT_INLINE_CAP
+                    payload["result"] = final_result[:_TOOL_OUTPUT_INLINE_CAP]
                     if truncated:
                         payload["result_truncated"] = True
                 self._append_event(payload)
@@ -1641,14 +1671,14 @@ class Session:
             # Cap the result text we ship through events.jsonl so huge tool
             # outputs (bash screenfuls, file reads) don't bloat the SSE
             # stream. Full output is still available via the Panel tab.
-            _MAX = 8000
+            # Shared cap (see ``_TOOL_OUTPUT_INLINE_CAP`` at module top).
             result_str = result if isinstance(result, str) else str(result)
-            truncated = len(result_str) > _MAX
+            truncated = len(result_str) > _TOOL_OUTPUT_INLINE_CAP
             payload = {
                 "type": "tool_done",
                 "name": name,
                 "result_len": len(result_str),
-                "result": result_str[:_MAX],
+                "result": result_str[:_TOOL_OUTPUT_INLINE_CAP],
                 # v2.0.20: persisted so history replay can pair a reloaded
                 # tool_use block back to its wall-clock duration_ms below.
                 "tool_use_id": tool_use_id,

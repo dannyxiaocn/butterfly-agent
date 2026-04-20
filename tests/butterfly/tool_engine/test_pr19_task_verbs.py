@@ -97,6 +97,12 @@ async def test_task_finish_recurring_becomes_terminal(tmp_path: Path) -> None:
     sets recurring cards back to ``pending`` (for the normal tick-complete
     path), so calling it from the agent-invoked terminate verb left the
     task looping forever.
+
+    Also pins the review-round-2 refactor: the executor routes through
+    ``TaskCard.terminate()`` rather than poking status/last_finished_at
+    directly, and ``terminate()`` intentionally leaves ``last_finished_at``
+    unstamped — manual termination is a stop decision, not a completion
+    record.
     """
     from butterfly.session_engine.task_cards import load_card, load_due_cards
 
@@ -108,9 +114,44 @@ async def test_task_finish_recurring_becomes_terminal(tmp_path: Path) -> None:
     card = load_card(tmp_path, "loop")
     assert card is not None
     assert card.status == "finished"
-    # is_due() now returns False, and load_due_cards excludes it entirely.
+    # Manual terminate does not synthesise a completion timestamp.
+    assert card.last_finished_at is None
+    # is_due() short-circuits on status != pending regardless of timestamps.
     assert card.is_due() is False
     assert all(c.name != "loop" for c in load_due_cards(tmp_path))
+
+
+@pytest.mark.asyncio
+async def test_taskcard_terminate_distinct_from_mark_finished(tmp_path: Path) -> None:
+    """Pin the ``terminate()`` vs ``mark_finished()`` semantic divide.
+
+    ``mark_finished`` models "this tick completed" — recurring cards go
+    back to pending + ``last_finished_at`` is stamped. ``terminate`` is
+    the agent-invoked stop decision — status jumps straight to finished,
+    no timestamp. Confusing the two was the root bug of PR #44 review.
+    """
+    from butterfly.session_engine.task_cards import TaskCard
+
+    recurring_tick = TaskCard(name="r1", description="x", interval=60)
+    recurring_tick.mark_finished()
+    assert recurring_tick.status == "pending"
+    assert recurring_tick.last_finished_at is not None
+
+    recurring_manual = TaskCard(name="r2", description="x", interval=60)
+    recurring_manual.terminate()
+    assert recurring_manual.status == "finished"
+    assert recurring_manual.last_finished_at is None
+
+    # One-shot: both paths land on "finished", but only mark_finished stamps.
+    oneshot_tick = TaskCard(name="o1", description="x", interval=None)
+    oneshot_tick.mark_finished()
+    assert oneshot_tick.status == "finished"
+    assert oneshot_tick.last_finished_at is not None
+
+    oneshot_manual = TaskCard(name="o2", description="x", interval=None)
+    oneshot_manual.terminate()
+    assert oneshot_manual.status == "finished"
+    assert oneshot_manual.last_finished_at is None
 
 
 @pytest.mark.asyncio
