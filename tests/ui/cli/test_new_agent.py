@@ -41,3 +41,36 @@ def test_create_agent_blank_creates_empty_files(tmp_path):
     assert (created / "prompts" / "system.md").exists()
     assert (created / "prompts" / "task.md").exists()
     assert (created / "prompts" / "env.md").exists()
+
+
+def test_blank_agent_carries_commented_duty_hint(tmp_path):
+    created = create_agent("solo", tmp_path, None)
+    text = (created / "config.yaml").read_text()
+    assert "# duty:" in text, (
+        "blank template must expose the duty feature as a commented stanza so "
+        "operators discover it without having to read docs"
+    )
+    manifest = yaml.safe_load(text)
+    assert "duty" not in manifest, "commented hint must not load as an active key"
+
+
+def test_create_agent_blank_with_duty_writes_active_block(tmp_path):
+    duty = {"interval": 1800.0, "description": "half-hourly"}
+    created = create_agent("watcher", tmp_path, None, duty=duty)
+    manifest = yaml.safe_load((created / "config.yaml").read_text())
+    assert manifest["duty"] == {"interval": 1800.0, "description": "half-hourly"}
+
+
+def test_create_agent_init_from_with_duty_writes_active_block(tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "config.yaml").write_text("agent: src\nmodel: gpt-4\n", encoding="utf-8")
+    (src / "prompts").mkdir()
+    (src / "prompts" / "system.md").write_text("sys", encoding="utf-8")
+
+    duty = {"interval": 7200.0, "description": "every 2h"}
+    created = create_agent("child", tmp_path, "src", duty=duty)
+    manifest = yaml.safe_load((created / "config.yaml").read_text())
+    assert manifest["duty"] == {"interval": 7200.0, "description": "every 2h"}
+    assert manifest["agent"] == "child"
+    assert manifest["init_from"] == "src"

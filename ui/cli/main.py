@@ -856,11 +856,19 @@ def _add_agent_parser(subparsers) -> None:
         help="Scaffold a new agent directory.",
         description=(
             "Scaffold a new agent directory.\n\n"
+            "An agent with a **duty** is one that wakes itself up on a\n"
+            "recurring cadence. Setting --duty-interval seeds a `duty` card\n"
+            "under core/tasks/ on every new session: `duty.sh` is polled\n"
+            "every N seconds and emits [start] / [skip] / [done] to gate\n"
+            "its own wakeup. Default script is `echo [start]` (fires every\n"
+            "cycle); the agent edits duty.sh to add preconditions.\n\n"
             "Examples:\n"
             "  butterfly agent new                          # interactive\n"
             "  butterfly agent new -n my-agent\n"
             "  butterfly agent new -n my-agent --init-from agent\n"
             "  butterfly agent new -n my-agent --blank\n"
+            "  butterfly agent new -n watcher --blank \\\n"
+            "      --duty-interval 3600 --duty-description 'hourly check'\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -871,13 +879,24 @@ def _add_agent_parser(subparsers) -> None:
                       help="Create a blank agent with empty files")
     anew.add_argument("--agent-dir", default="agenthub", metavar="DIR",
                       help="Base directory for agents (default: agenthub/)")
+    anew.add_argument("--duty-interval", type=float, metavar="SECONDS",
+                      help=(
+                          "Give the agent a recurring duty: each new session "
+                          "gets a core/tasks/duty.sh polled every N seconds. "
+                          "The script emits [start] (wake), [skip] (wait), "
+                          "or [done] (retire)."
+                      ))
+    anew.add_argument("--duty-description", metavar="TEXT", default="",
+                      help="Human-readable description stored alongside the duty card.")
 
     p.set_defaults(func=cmd_agent)
 
 
 def cmd_agent(args) -> int:
     if args.agent_cmd == "new":
-        from ui.cli.new_agent import _ask_name, _ask_init_from, create_agent
+        from ui.cli.new_agent import (
+            _ask_duty, _ask_init_from, _ask_name, create_agent,
+        )
         agent_dir = Path(args.agent_dir)
         name = args.name or _ask_name()
         init_from_arg = getattr(args, "init_from", None)
@@ -890,14 +909,34 @@ def cmd_agent(args) -> int:
             init_from = "agent"
         else:
             init_from = _ask_init_from(agent_dir)
+
+        duty: dict | None = None
+        duty_interval = getattr(args, "duty_interval", None)
+        duty_description = getattr(args, "duty_description", "") or ""
+        if duty_interval is not None:
+            if duty_interval <= 0:
+                print("Error: --duty-interval must be positive.", file=sys.stderr)
+                return 1
+            duty = {
+                "interval": float(duty_interval),
+                "description": duty_description,
+            }
+        elif not args.name:
+            duty = _ask_duty()
+
         try:
-            created = create_agent(name, agent_dir, init_from)
+            created = create_agent(name, agent_dir, init_from, duty=duty)
         except ValueError as exc:
             print(f"Error: {exc}", file=sys.stderr)
             return 1
         print(f"Created: {created}/")
         if init_from:
             print(f"  (initialized from '{init_from}')")
+        if duty:
+            print(
+                f"  duty: wakes every {duty['interval']:g}s via "
+                f"core/tasks/duty.sh (edit to gate with [skip])"
+            )
         return 0
 
     return 0
