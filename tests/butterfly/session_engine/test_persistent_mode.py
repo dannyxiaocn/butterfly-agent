@@ -92,11 +92,11 @@ async def test_tick_fires_due_task_card(tmp_path):
         system_base=tmp_path / "_sessions",
     )
 
-    from butterfly.session_engine.task_cards import write_trigger_script
+    from butterfly.session_engine.task_cards import write_script
     save_card(session.tasks_dir, TaskCard(
         name="check", description="Check state", check_interval=600,
     ))
-    write_trigger_script(session.tasks_dir, "check", "echo [start]")
+    write_script(session.tasks_dir, "check", "echo [start]")
 
     result = await session.tick()
     assert result is not None
@@ -123,9 +123,9 @@ async def test_tick_writes_triggered_by_task(tmp_path):
         system_base=tmp_path / "_sessions",
     )
 
-    from butterfly.session_engine.task_cards import write_trigger_script
+    from butterfly.session_engine.task_cards import write_script
     save_card(session.tasks_dir, TaskCard(name="duty", description="Do stuff", check_interval=600))
-    write_trigger_script(session.tasks_dir, "duty", "echo [start]")
+    write_script(session.tasks_dir, "duty", "echo [start]")
 
     result = await session.tick()
     assert result is not None

@@ -1,4 +1,4 @@
-"""Tests for butterfly.session_engine.task_cards (v2.0.27 bash-driven)."""
+"""Tests for butterfly.session_engine.task_cards (v2.0.29 single-script)."""
 from __future__ import annotations
 
 import json
@@ -12,18 +12,14 @@ from butterfly.session_engine.task_cards import (
     cards_needing_check,
     clear_all_cards,
     ensure_card,
-    end_script_path,
     has_pending_cards,
     load_all_cards,
     load_card,
-    parse_end_output,
-    parse_trigger_output,
-    read_end_script,
-    read_trigger_script,
+    parse_script_output,
+    read_script,
     save_card,
-    trigger_script_path,
-    write_end_script,
-    write_trigger_script,
+    script_path,
+    write_script,
 )
 
 
@@ -50,11 +46,11 @@ class TaskCardsUnitTests(unittest.TestCase):
         self.assertEqual(loaded.description, "customized")
         self.assertEqual(loaded.check_interval, 60)
 
-    def test_ensure_card_writes_default_trigger(self) -> None:
+    def test_ensure_card_writes_default_script(self) -> None:
         with TemporaryDirectory() as td:
             tasks_dir = Path(td)
             ensure_card(tasks_dir, name="duty", check_interval=60)
-            body = read_trigger_script(tasks_dir, "duty") or ""
+            body = read_script(tasks_dir, "duty") or ""
         self.assertIn("echo [start]", body)
 
 
@@ -88,13 +84,6 @@ def test_needs_check_skips_non_pending(tmp_path):
         assert card.needs_check() is False
 
 
-def test_end_check_only_while_working(tmp_path):
-    pending = TaskCard(name="t", status="pending")
-    assert pending.end_check_due() is False
-    working = TaskCard(name="t", status="working")
-    assert working.end_check_due() is True
-
-
 # ── mark_* transitions ──────────────────────────────────────────────────
 
 
@@ -106,7 +95,7 @@ def test_mark_working():
 
 
 def test_mark_finished_returns_pending():
-    """v2.0.27: mark_finished → pending (trigger script decides re-fire)."""
+    """v2.0.27+: mark_finished → pending (script decides re-fire)."""
     card = TaskCard(name="test", description="x", check_interval=600)
     card.mark_finished()
     assert card.status == "pending"
@@ -202,60 +191,63 @@ def test_clear_all_cards_marks_finished(tmp_path):
 # ── Script IO ───────────────────────────────────────────────────────────
 
 
-def test_write_trigger_script_prepends_shebang(tmp_path):
-    path = write_trigger_script(tmp_path, "t", "echo [start]")
+def test_write_script_prepends_shebang(tmp_path):
+    path = write_script(tmp_path, "t", "echo [start]")
     body = path.read_text()
     assert body.startswith("#!/bin/bash")
     assert "echo [start]" in body
 
 
-def test_write_trigger_script_empty_body_defaults_to_fire(tmp_path):
-    write_trigger_script(tmp_path, "t", "")
-    body = read_trigger_script(tmp_path, "t") or ""
+def test_write_script_empty_body_defaults_to_fire(tmp_path):
+    write_script(tmp_path, "t", "")
+    body = read_script(tmp_path, "t") or ""
     assert "echo [start]" in body
 
 
-def test_write_end_script_none_removes_file(tmp_path):
-    write_end_script(tmp_path, "t", "echo [done]")
-    assert end_script_path(tmp_path, "t").exists()
-    write_end_script(tmp_path, "t", None)
-    assert not end_script_path(tmp_path, "t").exists()
+def test_delete_card_removes_script(tmp_path):
+    from butterfly.session_engine.task_cards import delete_card
+    save_card(tmp_path, TaskCard(name="t", description="x"))
+    write_script(tmp_path, "t", "echo [start]")
+    assert script_path(tmp_path, "t").exists()
+    assert delete_card(tmp_path, "t") is True
+    assert not script_path(tmp_path, "t").exists()
 
 
 # ── Parse helpers ───────────────────────────────────────────────────────
 
 
-def test_parse_trigger_start(tmp_path):
-    assert parse_trigger_output("[start]\n", 0) == ("[start]", "")
+def test_parse_start(tmp_path):
+    assert parse_script_output("[start]\n", 0) == ("[start]", "")
 
 
-def test_parse_trigger_start_with_message(tmp_path):
-    assert parse_trigger_output("debug info\n[start] build ready\n", 0) == (
+def test_parse_start_with_message(tmp_path):
+    assert parse_script_output("debug info\n[start] build ready\n", 0) == (
         "[start]",
         "build ready",
     )
 
 
-def test_parse_trigger_skip(tmp_path):
-    assert parse_trigger_output("[skip]\n", 0) == ("[skip]", "")
+def test_parse_skip(tmp_path):
+    assert parse_script_output("[skip]\n", 0) == ("[skip]", "")
 
 
-def test_parse_trigger_unknown_line_returns_none():
-    assert parse_trigger_output("hello\n", 0) is None
+def test_parse_done(tmp_path):
+    """v2.0.29: [done] is now a script-level finalisation tag."""
+    assert parse_script_output("[done]\n", 0) == ("[done]", "")
 
 
-def test_parse_trigger_non_zero_exit_is_fail_closed():
-    assert parse_trigger_output("[start]\n", 1) is None
+def test_parse_done_with_message():
+    assert parse_script_output("[done] deadline passed\n", 0) == ("[done]", "deadline passed")
 
 
-def test_parse_end_done(tmp_path):
-    assert parse_end_output("[done]\n", 0) == ("[done]", "")
+def test_parse_unknown_line_returns_none():
+    assert parse_script_output("hello\n", 0) is None
 
 
-def test_parse_end_not_done():
-    assert parse_end_output("[not_done]\n", 0) == ("[not_done]", "")
+def test_parse_non_zero_exit_is_fail_closed():
+    assert parse_script_output("[start]\n", 1) is None
 
 
-def test_parse_end_doesnt_accept_trigger_tags():
-    """end script should not interpret [start] as done."""
-    assert parse_end_output("[start]\n", 0) is None
+def test_parse_rejects_legacy_not_done():
+    """v2.0.29 dropped [not_done] (it was the end-script counterpart of [skip])."""
+    assert parse_script_output("[not_done]\n", 0) is None

@@ -139,9 +139,9 @@ class TestTickFlush:
                       task_prompt="do stuff\n{task}")
         session = make_session(tmp_path, agent)
         # Write a task card so tick() actually runs
-        from butterfly.session_engine.task_cards import write_trigger_script
+        from butterfly.session_engine.task_cards import write_script
         save_card(session.tasks_dir, TaskCard(name="test", description="test task", check_interval=600))
-        write_trigger_script(session.tasks_dir, "test", "echo [start]")
+        write_script(session.tasks_dir, "test", "echo [start]")
         asyncio.run(session.tick())
         events = [e for e in read_events(session) if e["type"] == "partial_text"]
         assert len(events) >= 1

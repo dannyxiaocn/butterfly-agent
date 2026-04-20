@@ -7,8 +7,7 @@ from typing import Any
 from butterfly.session_engine.task_cards import (
     load_card,
     save_card,
-    write_end_script,
-    write_trigger_script,
+    write_script,
 )
 
 
@@ -24,8 +23,7 @@ class TaskUpdateExecutor:
         name: str = "",
         description: Any = _UNSET,
         check_interval: Any = _UNSET,
-        trigger_script: Any = _UNSET,
-        end_script: Any = _UNSET,
+        script: Any = _UNSET,
         progress: Any = _UNSET,
         comments: Any = _UNSET,
         **_: Any,
@@ -62,12 +60,9 @@ class TaskUpdateExecutor:
         if comments is not _UNSET:
             card.comments = comments or ""
             changed.append("comments")
-        if trigger_script is not _UNSET and trigger_script is not None:
-            write_trigger_script(self._tasks_dir, name, str(trigger_script))
-            changed.append("trigger_script")
-        if end_script is not _UNSET:
-            write_end_script(self._tasks_dir, name, end_script)
-            changed.append("end_script")
+        if script is not _UNSET and script is not None:
+            write_script(self._tasks_dir, name, str(script))
+            changed.append("script")
 
         if not changed:
             return f"Task '{name}': no fields provided to update."

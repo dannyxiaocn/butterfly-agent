@@ -77,8 +77,9 @@ export interface TaskCard {
   created_at: string;
   comments: string;
   progress: string;
-  trigger_script?: string | null;
-  end_script?: string | null;
+  // v2.0.29 — single bash script per card. Last line of stdout decides
+  // dispatch: [skip] / [start] / [start] <msg> / [done].
+  script?: string | null;
 }
 
 export interface ModelCatalogEntry {

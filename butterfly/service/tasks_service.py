@@ -10,8 +10,7 @@ def get_tasks(session_id: str, sessions_dir: Path) -> list[dict]:
     _validate_session_id(session_id)
     from butterfly.session_engine.task_cards import (
         load_all_cards,
-        read_end_script,
-        read_trigger_script,
+        read_script,
     )
     session_dir = sessions_dir / session_id
     tasks_dir = session_dir / 'core' / 'tasks'
@@ -19,8 +18,7 @@ def get_tasks(session_id: str, sessions_dir: Path) -> list[dict]:
     out: list[dict] = []
     for c in cards:
         d = c.to_dict()
-        d['trigger_script'] = read_trigger_script(tasks_dir, c.name)
-        d['end_script'] = read_end_script(tasks_dir, c.name)
+        d['script'] = read_script(tasks_dir, c.name)
         out.append(d)
     return out
 
@@ -32,8 +30,7 @@ def upsert_task(session_id: str, sessions_dir: Path, **task_fields) -> bool:
         delete_card,
         load_card,
         save_card,
-        write_end_script,
-        write_trigger_script,
+        write_script,
     )
     session_dir = sessions_dir / session_id
     if not session_dir.exists():
@@ -69,10 +66,8 @@ def upsert_task(session_id: str, sessions_dir: Path, **task_fields) -> bool:
                 raise FileExistsError(name)
             delete_card(tasks_dir, previous_name)
         save_card(tasks_dir, card)
-        if 'trigger_script' in task_fields and task_fields['trigger_script'] is not None:
-            write_trigger_script(tasks_dir, name, task_fields['trigger_script'])
-        if 'end_script' in task_fields:
-            write_end_script(tasks_dir, name, task_fields['end_script'])
+        if 'script' in task_fields and task_fields['script'] is not None:
+            write_script(tasks_dir, name, task_fields['script'])
     elif 'description' in task_fields:
         save_card(tasks_dir, TaskCard(name='task', description=task_fields['description']))
     return True

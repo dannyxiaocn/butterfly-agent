@@ -1,8 +1,8 @@
-"""End-to-end coverage for the v2.0.27 bash-driven task card flow.
+"""End-to-end coverage for the v2.0.29 single-script task card flow.
 
-Exercises Session._poll_trigger_script / _poll_end_script in isolation
-(no LLM) so we cover: [start] → seed propagation, [skip] → no fire,
-non-zero exit → fail-closed, [done] → mark_terminal.
+Exercises ``Session._poll_card_script`` in isolation (no LLM) so we cover
+[start] → seed propagation, [skip] → no fire, non-zero exit → fail-closed,
+[done] → mark_terminal-without-wakeup.
 """
 from __future__ import annotations
 
@@ -16,8 +16,7 @@ from butterfly.session_engine.task_cards import (
     TaskCard,
     load_card,
     save_card,
-    write_end_script,
-    write_trigger_script,
+    write_script,
 )
 
 
@@ -39,70 +38,78 @@ def _make_session(tmp_path: Path) -> Session:
 
 
 @pytest.mark.asyncio
-async def test_poll_trigger_start_returns_seed(tmp_path):
+async def test_poll_start_returns_seed(tmp_path):
     session = _make_session(tmp_path)
     card = TaskCard(name="build", description="watch build", check_interval=30)
     save_card(session.tasks_dir, card)
-    write_trigger_script(session.tasks_dir, "build", 'echo "[start] build ready"')
-    seed = await session._poll_trigger_script(card)
+    write_script(session.tasks_dir, "build", 'echo "[start] build ready"')
+    seed = await session._poll_card_script(card)
     assert seed == "build ready"
     # last_checked_at should have been stamped + persisted
     refreshed = load_card(session.tasks_dir, "build")
     assert refreshed is not None
     assert refreshed.last_checked_at is not None
+    # Card stays pending — wakeup transition is _do_tick's job.
+    assert refreshed.status == "pending"
 
 
 @pytest.mark.asyncio
-async def test_poll_trigger_skip_returns_none(tmp_path):
+async def test_poll_skip_returns_none(tmp_path):
     session = _make_session(tmp_path)
     card = TaskCard(name="idle", check_interval=30)
     save_card(session.tasks_dir, card)
-    write_trigger_script(session.tasks_dir, "idle", "echo [skip]")
-    seed = await session._poll_trigger_script(card)
+    write_script(session.tasks_dir, "idle", "echo [skip]")
+    seed = await session._poll_card_script(card)
     assert seed is None
 
 
 @pytest.mark.asyncio
-async def test_poll_trigger_fail_closed_on_non_zero(tmp_path):
+async def test_poll_fail_closed_on_non_zero(tmp_path):
     session = _make_session(tmp_path)
     card = TaskCard(name="broken", check_interval=30)
     save_card(session.tasks_dir, card)
-    write_trigger_script(session.tasks_dir, "broken", "echo [start]; exit 1")
-    seed = await session._poll_trigger_script(card)
+    write_script(session.tasks_dir, "broken", "echo [start]; exit 1")
+    seed = await session._poll_card_script(card)
     assert seed is None
     # A task_check_error must have been emitted.
     events = [
         line for line in session._events_path.read_text(encoding="utf-8").splitlines()
         if "task_check_error" in line
     ]
-    assert events, "non-zero trigger exit must emit task_check_error"
+    assert events, "non-zero exit must emit task_check_error"
 
 
 @pytest.mark.asyncio
-async def test_poll_end_done_flag(tmp_path):
+async def test_poll_done_marks_terminal_without_wakeup(tmp_path):
+    """v2.0.29 invariant: [done] retires a card silently — no agent wakeup,
+    no agent_loop_start hook, no task_wakeup context event."""
     session = _make_session(tmp_path)
-    card = TaskCard(name="watch", status="working", check_interval=30)
+    card = TaskCard(name="retire", check_interval=30)
     save_card(session.tasks_dir, card)
-    write_end_script(session.tasks_dir, "watch", "echo [done]")
-    assert await session._poll_end_script(card) is True
+    write_script(session.tasks_dir, "retire", "echo [done]")
+    seed = await session._poll_card_script(card)
+    assert seed is None
+    # Card should be terminal on disk.
+    refreshed = load_card(session.tasks_dir, "retire")
+    assert refreshed is not None
+    assert refreshed.status == "finished"
+    # Sanity: no task_wakeup / agent_loop_start side effect was written.
+    text = session._events_path.read_text(encoding="utf-8")
+    assert "task_wakeup" not in text
+    assert "agent_loop_start" not in text
 
 
 @pytest.mark.asyncio
-async def test_poll_end_missing_script_is_noop(tmp_path):
+async def test_poll_done_with_message_still_silent(tmp_path):
     session = _make_session(tmp_path)
-    card = TaskCard(name="endless", status="working", check_interval=30)
+    card = TaskCard(name="retire", check_interval=30)
     save_card(session.tasks_dir, card)
-    # no end.sh on disk
-    assert await session._poll_end_script(card) is False
-
-
-@pytest.mark.asyncio
-async def test_poll_end_not_done(tmp_path):
-    session = _make_session(tmp_path)
-    card = TaskCard(name="patient", status="working", check_interval=30)
-    save_card(session.tasks_dir, card)
-    write_end_script(session.tasks_dir, "patient", "echo [not_done]")
-    assert await session._poll_end_script(card) is False
+    write_script(session.tasks_dir, "retire", 'echo "[done] deadline passed"')
+    seed = await session._poll_card_script(card)
+    assert seed is None
+    refreshed = load_card(session.tasks_dir, "retire")
+    assert refreshed is not None
+    assert refreshed.status == "finished"
 
 
 @pytest.mark.asyncio
@@ -110,8 +117,8 @@ async def test_task_check_event_captures_output(tmp_path):
     session = _make_session(tmp_path)
     card = TaskCard(name="chatty", check_interval=30)
     save_card(session.tasks_dir, card)
-    write_trigger_script(session.tasks_dir, "chatty", "echo debug info; echo [start]")
-    await session._poll_trigger_script(card)
+    write_script(session.tasks_dir, "chatty", "echo debug info; echo [start]")
+    await session._poll_card_script(card)
     events = [
         line for line in session._events_path.read_text(encoding="utf-8").splitlines()
         if '"type": "task_check"' in line

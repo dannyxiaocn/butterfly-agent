@@ -1,6 +1,6 @@
 {
   "name": "task_create",
-  "description": "Create a bash-driven task card. The runtime polls `trigger_script` every `check_interval` seconds; the LAST line of stdout must be `[start]`, `[start] <message>`, or `[skip]`. On `[start]` the agent is activated; the optional `<message>` becomes the seed input. Optional `end_script` is polled while the agent is running and must end with `[done]` (mark card finished) or `[not_done]`. Non-zero exit or unrecognised output is treated as `[skip]` / `[not_done]` (fail-closed) and logged as an error.\n\nExamples — just the trigger_script body:\n  * Every hour: `echo [start]` (check_interval=3600)\n  * After 9am daily: `[[ $(date +%H) -ge 9 ]] && echo [start] || echo [skip]`\n  * When a build flag appears: `[[ -f build/done.flag ]] && echo [start] \"build ready\" || echo [skip]`\n  * One-shot at epoch: `(( $(date +%s) >= 1735689600 )) && echo [start] || echo [skip]`\n\nScripts land on disk at core/tasks/<name>.trigger.sh and core/tasks/<name>.end.sh; the agent can bash-edit them directly after creation. Agents also have `task_finish` to end cards imperatively.",
+  "description": "Create a bash-driven task card. The runtime polls `script` every `check_interval` seconds while the card is pending. The LAST line of stdout decides what happens:\n\n  * `[skip]`             — not yet; check again next interval\n  * `[start]`            — wake the agent now\n  * `[start] <message>`  — wake the agent; `<message>` becomes the seed input shown in the wakeup\n  * `[done]`             — mark the card finished WITHOUT waking the agent (script-level finalisation; same effect as the agent calling `task_finish` from inside a wakeup)\n\nNon-zero exit / unrecognised output is fail-closed (treated as `[skip]` and logged as `task_check_error`).\n\nExamples — just the `script` body:\n  * Every hour: `echo [start]` (check_interval=3600)\n  * After 9am daily: `[[ $(date +%H) -ge 9 ]] && echo [start] || echo [skip]`\n  * When a build flag appears: `[[ -f build/done.flag ]] && echo \"[start] build ready\" || echo [skip]`\n  * Self-retiring after a deadline: `(( $(date +%s) >= 1735689600 )) && echo [done] || echo [start]`\n\nThe script lands on disk at core/tasks/<name>.sh; you can edit it later with bash or via `task_update`.",
   "input_schema": {
     "type": "object",
     "properties": {
@@ -15,17 +15,13 @@
       "check_interval": {
         "type": ["number", "null"],
         "exclusiveMinimum": 0,
-        "description": "Seconds between trigger_script runs. Defaults to 3600 (1h). Also applied to end_script polling while the card is active."
+        "description": "Seconds between script runs. Defaults to 3600 (1h)."
       },
-      "trigger_script": {
+      "script": {
         "type": "string",
-        "description": "Bash snippet (body only — shebang is prepended). Last line of stdout MUST be `[start]`, `[start] <message>`, or `[skip]`."
-      },
-      "end_script": {
-        "type": ["string", "null"],
-        "description": "Optional bash snippet polled while status=working. Last line must be `[done]` (card finishes) or `[not_done]`."
+        "description": "Bash snippet (body only — shebang is prepended). Last line of stdout MUST be `[skip]`, `[start]`, `[start] <message>`, or `[done]`."
       }
     },
-    "required": ["name", "description", "trigger_script"]
+    "required": ["name", "description", "script"]
   }
 }

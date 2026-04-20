@@ -1,5 +1,5 @@
 """Smoke coverage for the task_* verb tools (task_create / _finish / _pause /
-_resume / _list / _update) after the v2.0.27 bash-driven rewrite.
+_resume / _list / _update) after the v2.0.29 single-script rewrite.
 """
 from __future__ import annotations
 
@@ -15,11 +15,11 @@ from toolhub.task_resume.executor import TaskResumeExecutor
 
 
 @pytest.mark.asyncio
-async def test_task_create_requires_trigger_script(tmp_path: Path) -> None:
+async def test_task_create_requires_script(tmp_path: Path) -> None:
     out = await TaskCreateExecutor(tasks_dir=tmp_path).execute(
         name="demo", description="say hi", check_interval=60
     )
-    assert out.startswith("Error:") and "trigger_script" in out
+    assert out.startswith("Error:") and "script" in out
 
 
 @pytest.mark.asyncio
@@ -29,7 +29,7 @@ async def test_task_create_and_list_roundtrip(tmp_path: Path) -> None:
         name="demo",
         description="say hi",
         check_interval=60,
-        trigger_script="echo [start]",
+        script="echo [start]",
     )
     assert "Created task 'demo'" in out
     # Duplicate is rejected.
@@ -37,14 +37,14 @@ async def test_task_create_and_list_roundtrip(tmp_path: Path) -> None:
         name="demo",
         description="again",
         check_interval=60,
-        trigger_script="echo [start]",
+        script="echo [start]",
     )
     assert dup.startswith("Error:") and "already exists" in dup
 
     listed = await TaskListExecutor(tasks_dir=tmp_path).execute()
     assert "demo" in listed
     assert "60s" in listed
-    assert "trigger" in listed
+    assert "script=yes" in listed
 
 
 @pytest.mark.asyncio
@@ -53,25 +53,25 @@ async def test_task_create_writes_script_on_disk(tmp_path: Path) -> None:
         name="build",
         description="watch build",
         check_interval=30,
-        trigger_script='[[ -f /tmp/flag ]] && echo "[start] flag ready" || echo [skip]',
+        script='[[ -f /tmp/flag ]] && echo "[start] flag ready" || echo [skip]',
     )
-    body = (tmp_path / "build.trigger.sh").read_text(encoding="utf-8")
+    body = (tmp_path / "build.sh").read_text(encoding="utf-8")
     assert body.startswith("#!/bin/bash")
     assert "echo [skip]" in body
 
 
 @pytest.mark.asyncio
-async def test_task_create_with_end_script(tmp_path: Path) -> None:
-    await TaskCreateExecutor(tasks_dir=tmp_path).execute(
-        name="withend",
-        description="has end",
+async def test_task_create_supports_done_tag(tmp_path: Path) -> None:
+    """v2.0.29: [done] is now a script-level retire signal — same script."""
+    out = await TaskCreateExecutor(tasks_dir=tmp_path).execute(
+        name="oneshot",
+        description="self-retiring",
         check_interval=30,
-        trigger_script="echo [start]",
-        end_script="echo [not_done]",
+        script='(( $(date +%s) >= 0 )) && echo [done] || echo [start]',
     )
-    assert (tmp_path / "withend.end.sh").is_file()
-    listed = await TaskListExecutor(tasks_dir=tmp_path).execute()
-    assert "trigger,end" in listed or "end" in listed
+    assert "Created task 'oneshot'" in out
+    body = (tmp_path / "oneshot.sh").read_text(encoding="utf-8")
+    assert "[done]" in body
 
 
 @pytest.mark.asyncio
@@ -80,7 +80,7 @@ async def test_task_pause_resume_roundtrip(tmp_path: Path) -> None:
         name="t1",
         description="work",
         check_interval=10,
-        trigger_script="echo [start]",
+        script="echo [start]",
     )
     pr = await TaskPauseExecutor(tasks_dir=tmp_path).execute(name="t1")
     assert "paused" in pr.lower() or "t1" in pr
@@ -101,14 +101,13 @@ async def test_task_finish_marks_finished(tmp_path: Path) -> None:
         name="once",
         description="do once",
         check_interval=60,
-        trigger_script="echo [start]",
+        script="echo [start]",
     )
     out = await TaskFinishExecutor(tasks_dir=tmp_path).execute(name="once")
     assert "finished" in out.lower()
     # Reviewer pin (PR #45): task_finish must leave the card in the
     # sticky "finished" state, NOT the recurring "pending" state that
-    # TaskCard.mark_finished() uses. Asserting status on disk catches the
-    # bug where the executor calls mark_finished() instead of mark_terminal().
+    # TaskCard.mark_finished() uses.
     card = load_card(tmp_path, "once")
     assert card is not None
     assert card.status == "finished"
@@ -123,6 +122,6 @@ async def test_task_missing_name(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_task_create_missing_name(tmp_path: Path) -> None:
     out = await TaskCreateExecutor(tasks_dir=tmp_path).execute(
-        name="", description="x", trigger_script="echo [start]"
+        name="", description="x", script="echo [start]"
     )
     assert out.startswith("Error:")

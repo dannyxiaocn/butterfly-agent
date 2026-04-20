@@ -24,9 +24,8 @@ from butterfly.session_engine.pending_inputs import (
 from butterfly.session_engine.external_hooks import run_hooks
 from butterfly.session_engine.session_config import read_config, ensure_config
 from butterfly.session_engine.task_cards import (
-    TaskCard, cards_needing_check, cards_with_end_check_due, clear_all_cards,
-    end_script_path, load_card, parse_end_output, parse_trigger_output,
-    save_card, trigger_script_path,
+    TaskCard, cards_needing_check, clear_all_cards,
+    load_card, parse_script_output, save_card, script_path,
 )
 from butterfly.session_engine.task_runner import run_script
 from butterfly.llm_engine.registry import provider_name, resolve_provider
@@ -512,32 +511,36 @@ class Session:
                 return f"{header}\n\n---\n\n{args}" if args else header
         return message
 
-    # ── Task-card trigger/end script polling (v2.0.27) ─────────────
+    # ── Task-card script polling (v2.0.29) ────────────────────────
 
-    async def _poll_trigger_script(self, card: TaskCard) -> str | None:
-        """Run ``<name>.trigger.sh`` and return a seed on ``[start]``.
+    async def _poll_card_script(self, card: TaskCard) -> str | None:
+        """Run ``<name>.sh`` and dispatch on its output.
 
-        Returns ``None`` when the card should NOT fire this pass (``[skip]``,
-        missing script, non-zero exit, unparseable output, timeout). A
-        ``task_check`` event is written to ``events.jsonl`` so the panel can
-        display task_id + script output. An error outcome is additionally
-        reported as ``task_check_error`` so the UI can flag it distinctly.
+        Returns the wakeup seed on ``[start]`` (empty string when no
+        message followed the tag) — the caller enqueues a ``TaskItem``
+        with that seed.
 
-        Side effect: the card's ``last_checked_at`` is stamped and persisted
-        after every run, fire or skip — the polling cadence must not loop
-        hot on a misconfigured script.
+        Returns ``None`` for every other outcome:
+          * ``[skip]`` — keep polling
+          * ``[done]`` — mark the card terminal here, no wakeup, no hook
+          * fail-closed (non-zero exit / timeout / unparseable) — same as
+            ``[skip]`` plus a ``task_check_error`` event
+
+        A ``task_check`` event is always written so the panel sees every
+        poll. ``mark_terminal()`` on ``[done]`` is the *only* status
+        change made by this method — the wakeup transition
+        (``mark_working``) lives inside ``_do_tick``.
         """
-        script = trigger_script_path(self.tasks_dir, card.name)
+        script = script_path(self.tasks_dir, card.name)
         if not script.is_file():
             return None
         result = await run_script(script, cwd=self.session_dir)
         card.mark_checked()
         save_card(self.tasks_dir, card)
-        parsed = parse_trigger_output(result.stdout, result.exit_code)
+        parsed = parse_script_output(result.stdout, result.exit_code)
         event: dict = {
             "type": "task_check",
             "card": card.name,
-            "kind": "trigger",
             "tag": parsed[0] if parsed else None,
             "stdout": result.stdout[-_TASK_STDOUT_CAP:],
             "stderr": result.stderr[-_TASK_STDOUT_CAP:],
@@ -551,7 +554,6 @@ class Session:
             self._append_event({
                 "type": "task_check_error",
                 "card": card.name,
-                "kind": "trigger",
                 "reason": "timed_out" if result.timed_out else (
                     "non_zero_exit" if result.exit_code not in (0, None) else "unparseable"
                 ),
@@ -560,41 +562,15 @@ class Session:
         tag, message = parsed
         if tag == "[start]":
             return message or ""
+        if tag == "[done]":
+            # Script-level finalisation. We do NOT wake the agent — the
+            # whole point of [done] (vs the agent's task_finish tool) is
+            # that the *script* is declaring "this card has nothing more
+            # to do". No agent_loop_start hook fires either; the script
+            # poll itself is the only side-effect.
+            card.mark_terminal()
+            save_card(self.tasks_dir, card)
         return None
-
-    async def _poll_end_script(self, card: TaskCard) -> bool:
-        """Run ``<name>.end.sh`` and return True iff the card should end."""
-        script = end_script_path(self.tasks_dir, card.name)
-        if not script.is_file():
-            return False
-        result = await run_script(script, cwd=self.session_dir)
-        card.mark_checked()
-        save_card(self.tasks_dir, card)
-        parsed = parse_end_output(result.stdout, result.exit_code)
-        event: dict = {
-            "type": "task_check",
-            "card": card.name,
-            "kind": "end",
-            "tag": parsed[0] if parsed else None,
-            "stdout": result.stdout[-_TASK_STDOUT_CAP:],
-            "stderr": result.stderr[-_TASK_STDOUT_CAP:],
-            "exit_code": result.exit_code,
-            "duration_ms": result.duration_ms,
-        }
-        if result.timed_out:
-            event["timed_out"] = True
-        self._append_event(event)
-        if parsed is None:
-            self._append_event({
-                "type": "task_check_error",
-                "card": card.name,
-                "kind": "end",
-                "reason": "timed_out" if result.timed_out else (
-                    "non_zero_exit" if result.exit_code not in (0, None) else "unparseable"
-                ),
-            })
-            return False
-        return parsed[0] == "[done]"
 
     # ── External hooks (core/hook/<event>/main.sh) ─────────────────
 
@@ -677,17 +653,17 @@ class Session:
         and resets the card to ``pending``.
 
         When ``card`` is omitted we run the FIRST pending card's
-        trigger_script inline. If it emits ``[start]`` the card (plus the
-        trigger's optional seed message) is dispatched; otherwise nothing
+        script inline. If it emits ``[start]`` the card (plus the
+        script's optional seed message) is dispatched; otherwise nothing
         happens and the method returns ``None``. Tests use the explicit
         ``card`` + ``seed`` form to skip the script entirely.
         """
         if card is None:
-            # Walk pending cards; the first one whose trigger_script fires
+            # Walk pending cards; the first one whose script fires
             # wins this tick. This mirrors the daemon-loop behaviour when
             # ``tick()`` is invoked manually in tests / CLI one-shot.
             for candidate in cards_needing_check(self.tasks_dir):
-                fired_seed = await self._poll_trigger_script(candidate)
+                fired_seed = await self._poll_card_script(candidate)
                 if fired_seed is not None:
                     card = candidate
                     seed = fired_seed
@@ -1353,27 +1329,29 @@ class Session:
                             except Exception:
                                 pass
 
-                    # Task card scheduling (v2.0.27) — for each pending
-                    # card whose check interval has elapsed, run its
-                    # trigger.sh; on [start], enqueue a TaskItem. For each
-                    # working card with an end.sh due for check, run it
-                    # and mark_terminal on [done]. Scripts run serially so
-                    # one slow check doesn't starve the next poll — the
-                    # check cadence is minutes (default 1h), and a bad
-                    # script has a 10s cap via task_runner.
+                    # Task card scheduling (v2.0.29 — single script per
+                    # card). For each pending card whose check interval
+                    # has elapsed, run its <name>.sh and act on the last
+                    # output line:
+                    #   [start]            → enqueue a TaskItem (wakes the
+                    #                        agent; agent_loop_start hook
+                    #                        fires inside _do_tick)
+                    #   [start] <message>  → same, with <message> as seed
+                    #   [skip]             → no-op, recheck next interval
+                    #   [done]             → _poll_card_script marks the
+                    #                        card terminal in place; no
+                    #                        wakeup, no hook
+                    # Scripts run serially so one slow check doesn't
+                    # starve the next poll. Bad scripts hit a 10 s cap
+                    # in task_runner.
                     if not self.is_stopped():
                         for card in cards_needing_check(self.tasks_dir):
                             if card.name in self._scheduled_task_names:
                                 continue
-                            seed = await self._poll_trigger_script(card)
+                            seed = await self._poll_card_script(card)
                             if seed is None:
                                 continue
                             await self._enqueue(TaskItem(card=card, seed=seed))
-                        for card in cards_with_end_check_due(self.tasks_dir):
-                            done = await self._poll_end_script(card)
-                            if done:
-                                card.mark_terminal()
-                                save_card(self.tasks_dir, card)
 
                     next_housekeeping_at = now + self._TASK_POLL_INTERVAL
 
