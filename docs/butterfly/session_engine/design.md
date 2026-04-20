@@ -366,4 +366,4 @@ Task cards drop all time fields (`start_at` / `end_at` / `interval` as trigger).
 
 All time logic lives inside the agent's bash (e.g. `[[ $(date +%H) -ge 9 ]] && echo [start] || echo [skip]`) — the runtime is stateless beyond cadence. Scripts run serially during the housekeeping tick; each has a 10 s timeout (`task_runner._CHECK_TIMEOUT_SEC`) so a misconfigured check never stalls the daemon.
 
-Every run emits a `task_check` event carrying `card_name`, `kind` (`trigger`/`end`), `tag`, truncated `stdout`/`stderr`, `exit_code`, `duration_ms` — the UI surfaces these in the panel so agents and operators can see why a card did (or did not) fire without re-running the script.
+Every run emits a `task_check` event carrying `card` (card name), `kind` (`trigger`/`end`), `tag`, truncated `stdout`/`stderr`, `exit_code`, `duration_ms` — the UI surfaces these in the panel so agents and operators can see why a card did (or did not) fire without re-running the script.

@@ -8,6 +8,8 @@ the result (enqueue, mark_finished, emit error event, etc.).
 from __future__ import annotations
 
 import asyncio
+import os
+import signal
 import time
 from pathlib import Path
 
@@ -19,6 +21,27 @@ from butterfly.session_engine.task_cards import (
 
 _CHECK_TIMEOUT_SEC = 10.0
 _OUTPUT_CAP = 4000  # bytes retained from each stream
+
+
+def _kill_process_group(proc: asyncio.subprocess.Process) -> None:
+    """SIGKILL the subprocess and everything it spawned.
+
+    We launch the script via ``start_new_session=True`` so the bash
+    invocation lives in its own process group. A plain ``proc.kill()``
+    only targets the direct bash PID — any helper commands it backgrounded
+    (``sleep 100 &``, child scripts, etc.) would be left as orphans
+    reparented to init. Using ``os.killpg`` on the group reaps them too.
+    Race-safe: ``ProcessLookupError`` means the process already exited
+    cleanly before we fired the signal.
+    """
+    try:
+        pgid = os.getpgid(proc.pid)
+    except ProcessLookupError:
+        return
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
 
 
 async def run_script(script: Path, *, cwd: Path) -> ScriptResult:
@@ -40,6 +63,7 @@ async def run_script(script: Path, *, cwd: Path) -> ScriptResult:
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            start_new_session=True,
         )
         try:
             out, err = await asyncio.wait_for(
@@ -51,10 +75,7 @@ async def run_script(script: Path, *, cwd: Path) -> ScriptResult:
             stderr_text = err.decode("utf-8", errors="replace")[-_OUTPUT_CAP:]
         except asyncio.TimeoutError:
             timed_out = True
-            try:
-                proc.kill()
-            except ProcessLookupError:
-                pass
+            _kill_process_group(proc)
             try:
                 out, err = await proc.communicate()
                 stdout_text = out.decode("utf-8", errors="replace")[-_OUTPUT_CAP:]

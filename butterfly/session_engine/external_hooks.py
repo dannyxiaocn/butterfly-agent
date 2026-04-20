@@ -37,6 +37,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import signal
 import time
 from pathlib import Path
 from typing import Any, Awaitable, Callable
@@ -94,6 +96,11 @@ async def run_hooks(
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            # start_new_session puts bash in its own process group so
+            # os.killpg can reap every helper it spawned if we timeout.
+            # A plain proc.kill() would leave backgrounded children (e.g.
+            # `sleep 100 &`) as orphans reparented to init.
+            start_new_session=True,
         )
         try:
             out, err = await asyncio.wait_for(
@@ -106,7 +113,8 @@ async def run_hooks(
         except asyncio.TimeoutError:
             timed_out = True
             try:
-                proc.kill()
+                pgid = os.getpgid(proc.pid)
+                os.killpg(pgid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
             try:

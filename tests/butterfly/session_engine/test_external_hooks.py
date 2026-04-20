@@ -126,3 +126,52 @@ async def test_cwd_is_session_root(tmp_path):
 
 def test_valid_events_exposes_only_three():
     assert VALID_EVENTS == frozenset({"session_start", "agent_loop_start", "agent_loop_end"})
+
+
+@pytest.mark.asyncio
+async def test_hook_timeout_kills_descendants(tmp_path, monkeypatch):
+    """Reviewer pin (PR #45): main.sh timeout must reap the whole process group.
+
+    Without ``start_new_session=True`` + ``killpg``, a backgrounded child
+    of main.sh would keep running after we SIGKILL bash. This test backgrounds
+    a 10 s sleep, records its PID, then hangs bash so it hits the timeout.
+    The sleep must be gone when we come back.
+    """
+    import os
+    import signal as _signal
+    import asyncio as _asyncio
+
+    import butterfly.session_engine.external_hooks as eh
+    monkeypatch.setattr(eh, "_HOOK_TIMEOUT_SEC", 0.5)
+    hook_dir = tmp_path / "hook"
+    sentinel = tmp_path / "child.pid"
+    _prep(
+        hook_dir,
+        "agent_loop_start",
+        f'sleep 10 & echo $! > "{sentinel}"; wait',
+    )
+    events: list[dict] = []
+    await run_hooks(
+        "agent_loop_start",
+        {},
+        hook_dir=hook_dir,
+        session_id="sess",
+        cwd=tmp_path,
+        emit_event=events.append,
+    )
+    assert events[0].get("timed_out") is True
+    assert sentinel.exists(), "test harness failed to capture child PID"
+    child_pid = int(sentinel.read_text().strip())
+    for _ in range(20):
+        try:
+            os.kill(child_pid, 0)
+        except ProcessLookupError:
+            return
+        await _asyncio.sleep(0.05)
+    try:
+        os.kill(child_pid, _signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    raise AssertionError(
+        f"hook descendant PID {child_pid} survived main.sh timeout — killpg did not reach it"
+    )
