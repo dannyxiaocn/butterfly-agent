@@ -96,6 +96,7 @@ async def test_task_pause_resume_roundtrip(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_task_finish_marks_finished(tmp_path: Path) -> None:
+    from butterfly.session_engine.task_cards import load_card
     await TaskCreateExecutor(tasks_dir=tmp_path).execute(
         name="once",
         description="do once",
@@ -104,6 +105,13 @@ async def test_task_finish_marks_finished(tmp_path: Path) -> None:
     )
     out = await TaskFinishExecutor(tasks_dir=tmp_path).execute(name="once")
     assert "finished" in out.lower()
+    # Reviewer pin (PR #45): task_finish must leave the card in the
+    # sticky "finished" state, NOT the recurring "pending" state that
+    # TaskCard.mark_finished() uses. Asserting status on disk catches the
+    # bug where the executor calls mark_finished() instead of mark_terminal().
+    card = load_card(tmp_path, "once")
+    assert card is not None
+    assert card.status == "finished"
 
 
 @pytest.mark.asyncio
