@@ -1121,6 +1121,41 @@ def test_prune_queue_for_task_drops_matching_task_items(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_do_tick_preserves_terminal_status_set_during_tick(tmp_path):
+    """v2.0.30 — when ``task_finish`` (or a script ``[done]`` mid-run)
+    flips a card to ``finished`` on disk DURING a tick, the tick's
+    happy-path ``mark_finished()`` must NOT roll the card back to
+    ``pending``. Without the disk re-read guard, the next housekeeping
+    scan would re-poll the script and queue another wakeup, defeating
+    the point of task_finish.
+    """
+    from butterfly.session_engine.task_cards import TaskCard, save_card, load_card
+
+    agent = Agent(provider=RecordingProvider([("done", [])]))
+    session = make_session(tmp_path, agent, session_id="terminal-tick")
+
+    # Card starts pending; the in-memory copy passed to _do_tick still
+    # reads "working" (mark_working was called at the top of the tick).
+    # Simulate that the tool body (task_finish) wrote "finished" to disk
+    # while the in-memory item is stale.
+    card = TaskCard(name="oneshot", description="", status="working")
+    save_card(session.tasks_dir, card)
+    # Stamp "finished" on disk to mimic task_finish having just landed.
+    on_disk = load_card(session.tasks_dir, "oneshot")
+    on_disk.mark_terminal()
+    save_card(session.tasks_dir, on_disk)
+
+    # Drive the tick directly so we hit the post-run mark_finished branch.
+    item = TaskItem(card=card)
+    await session._dispatch_one(item)
+
+    final = load_card(session.tasks_dir, "oneshot")
+    assert final.status == "finished", (
+        "tick must respect the disk-side terminal status, not roll it back to pending"
+    )
+
+
+@pytest.mark.asyncio
 async def test_task_finish_callback_prunes_queue(tmp_path):
     """End-to-end: invoking the ``on_task_change`` callback with
     ``change="finished"`` (mirroring what the ``task_finish`` tool does

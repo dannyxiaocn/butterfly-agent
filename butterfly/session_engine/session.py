@@ -1138,8 +1138,22 @@ class Session:
             self._agent._history = history_snapshot
             self._append_event({"type": "task_finished", "card": card.name, "ts": trigger_ts})
         else:
-            card.mark_finished()
-            save_card(self.tasks_dir, card)
+            # v2.0.30 — re-read the card from disk before flipping back to
+            # pending. If the agent called ``task_finish`` during this
+            # tick (or the script emitted ``[done]`` mid-run), the on-disk
+            # status is already ``finished`` and ``mark_finished()`` would
+            # silently undo that — rolling the card back to pending so
+            # the next housekeeping scan re-fires the script and queues
+            # a fresh wakeup. The terminal-status check leaves any sticky
+            # transition the agent made standing.
+            disk = load_card(self.tasks_dir, card.name)
+            if disk is not None and disk.status == "finished":
+                card = disk
+                # No save needed — the disk copy IS the canonical state.
+                self._prune_queue_for_task(card.name)
+            else:
+                card.mark_finished()
+                save_card(self.tasks_dir, card)
 
             new_msgs = self._agent._history[old_len:]
             if new_msgs and new_msgs[0].role == "user":
