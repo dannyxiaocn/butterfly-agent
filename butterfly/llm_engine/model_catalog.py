@@ -31,6 +31,18 @@ class ModelSpec:
     max_context_tokens: int
     exposes_reasoning_tokens: bool
     default: bool
+    # Optional Anthropic-specific thinking/cache knobs. All default to None so
+    # YAML entries that omit them (every non-Anthropic provider today) keep
+    # parsing cleanly. Provider code is expected to apply its own defaults
+    # when it sees ``None`` — the catalog deliberately does not invent values
+    # here so "absent in YAML" and "explicitly null" are indistinguishable.
+    thinking_mode: str | None = None
+    thinking_effort: str | None = None
+    thinking_display: str | None = None
+    thinking_budget_tokens: int | None = None
+    interleaved_thinking_beta: bool | None = None
+    cache_strategy: str | None = None
+    cache_ttl: str | None = None
 
 
 # ``by_model[model_name] = ModelSpec`` for direct lookup.
@@ -59,6 +71,13 @@ def _load() -> tuple[dict[str, ModelSpec], dict[str, list[ModelSpec]]]:
             name = model_entry.get("name")
             if not name:
                 continue
+            # Optional fields — ``.get(..., None)`` so a missing key and an
+            # explicit ``null`` both land as ``None``. Numeric / bool coercion
+            # is only applied when a value is present; otherwise the frozen
+            # dataclass field stays None and the provider code decides what
+            # its own default should be.
+            thinking_budget = model_entry.get("thinking_budget_tokens")
+            interleaved_beta = model_entry.get("interleaved_thinking_beta")
             spec = ModelSpec(
                 model=name,
                 provider=provider_key,
@@ -69,6 +88,17 @@ def _load() -> tuple[dict[str, ModelSpec], dict[str, list[ModelSpec]]]:
                     model_entry.get("exposes_reasoning_tokens", False)
                 ),
                 default=bool(model_entry.get("default", False)),
+                thinking_mode=model_entry.get("thinking_mode"),
+                thinking_effort=model_entry.get("thinking_effort"),
+                thinking_display=model_entry.get("thinking_display"),
+                thinking_budget_tokens=(
+                    int(thinking_budget) if thinking_budget is not None else None
+                ),
+                interleaved_thinking_beta=(
+                    bool(interleaved_beta) if interleaved_beta is not None else None
+                ),
+                cache_strategy=model_entry.get("cache_strategy"),
+                cache_ttl=model_entry.get("cache_ttl"),
             )
             specs.append(spec)
             # When the same model name appears under multiple providers the

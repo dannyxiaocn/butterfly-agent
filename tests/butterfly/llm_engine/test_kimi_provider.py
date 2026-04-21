@@ -221,7 +221,7 @@ async def test_kimi_thinking_enabled_uses_extra_body_not_betas():
         messages=[Message(role="user", content="hi")],
         tools=[],
         system_prompt="sys",
-        model="kimi-k2",
+        model="kimi-for-coding",
         thinking=True,
         thinking_budget=5000,
     )
@@ -243,7 +243,7 @@ async def test_kimi_thinking_disabled_omits_extra_body():
         messages=[Message(role="user", content="hi")],
         tools=[],
         system_prompt="sys",
-        model="kimi-k2",
+        model="kimi-for-coding",
         thinking=False,
     )
 
@@ -289,7 +289,7 @@ async def test_kimi_thinking_stream_routes_to_regular_messages():
         messages=[Message(role="user", content="hi")],
         tools=[],
         system_prompt="sys",
-        model="kimi-k2",
+        model="kimi-for-coding",
         thinking=True,
         thinking_budget=4000,
         on_text_chunk=chunks.append,
@@ -343,7 +343,7 @@ async def test_kimi_thinking_stream_routes_to_thinking_hooks_not_text_chunks():
         messages=[Message(role="user", content="hi")],
         tools=[],
         system_prompt="sys",
-        model="kimi-k2",
+        model="kimi-for-coding",
         thinking=True,
         on_text_chunk=chunks.append,
         on_thinking_start=lambda: thinking_starts.append(None),
@@ -370,7 +370,7 @@ async def test_kimi_system_prompt_plain_string():
         messages=[Message(role="user", content="hi")],
         tools=[],
         system_prompt="You are helpful.",
-        model="kimi-k2",
+        model="kimi-for-coding",
     )
 
     assert captured[0]["system"] == "You are helpful."
@@ -386,7 +386,7 @@ async def test_kimi_cache_prefix_concatenated_not_block_list():
         messages=[Message(role="user", content="hi")],
         tools=[],
         system_prompt="dynamic",
-        model="kimi-k2",
+        model="kimi-for-coding",
         cache_system_prefix="static",
     )
 
@@ -405,7 +405,7 @@ async def test_kimi_cache_prefix_empty_dynamic():
         messages=[Message(role="user", content="hi")],
         tools=[],
         system_prompt="",
-        model="kimi-k2",
+        model="kimi-for-coding",
         cache_system_prefix="static only",
     )
 
@@ -428,7 +428,7 @@ async def test_kimi_messages_plain():
         ],
         tools=[],
         system_prompt="sys",
-        model="kimi-k2",
+        model="kimi-for-coding",
     )
 
     api_msgs = captured[0]["messages"]
@@ -450,7 +450,7 @@ async def test_kimi_messages_no_cache_control_even_when_requested():
         ],
         tools=[],
         system_prompt="sys",
-        model="kimi-k2",
+        model="kimi-for-coding",
         cache_last_human_turn=True,
     )
 
@@ -476,7 +476,7 @@ async def test_kimi_messages_list_content_preserved_for_assistant():
         ],
         tools=[],
         system_prompt="sys",
-        model="kimi-k2",
+        model="kimi-for-coding",
     )
 
     api_msgs = captured[0]["messages"]
@@ -500,7 +500,7 @@ async def test_kimi_tools_passed_to_api():
         messages=[Message(role="user", content="search")],
         tools=[_dummy_tool()],
         system_prompt="sys",
-        model="kimi-k2",
+        model="kimi-for-coding",
     )
 
     assert "tools" in captured[0]
@@ -519,7 +519,7 @@ async def test_kimi_no_tools_key_when_empty():
         messages=[Message(role="user", content="hi")],
         tools=[],
         system_prompt="sys",
-        model="kimi-k2",
+        model="kimi-for-coding",
     )
 
     assert "tools" not in captured[0]
@@ -549,7 +549,7 @@ async def test_kimi_collects_tool_calls_from_response():
         messages=[Message(role="user", content="hi")],
         tools=[],
         system_prompt="sys",
-        model="kimi-k2",
+        model="kimi-for-coding",
     )
 
     assert text == ""
@@ -584,7 +584,7 @@ async def test_kimi_collects_multiple_tool_calls_from_response():
         messages=[Message(role="user", content="hi")],
         tools=[],
         system_prompt="sys",
-        model="kimi-k2",
+        model="kimi-for-coding",
     )
 
     assert text == ""
@@ -618,7 +618,7 @@ async def test_kimi_usage_extraction_standard():
         messages=[Message(role="user", content="hi")],
         tools=[],
         system_prompt="sys",
-        model="kimi-k2",
+        model="kimi-for-coding",
     )
 
     assert isinstance(usage, TokenUsage)
@@ -652,7 +652,7 @@ async def test_kimi_usage_extraction_with_reasoning_tokens():
         messages=[Message(role="user", content="hi")],
         tools=[],
         system_prompt="sys",
-        model="kimi-k2",
+        model="kimi-for-coding",
     )
 
     assert usage.reasoning_tokens == 15
@@ -674,7 +674,7 @@ async def test_kimi_usage_extraction_missing_fields_returns_zeros():
         messages=[Message(role="user", content="hi")],
         tools=[],
         system_prompt="sys",
-        model="kimi-k2",
+        model="kimi-for-coding",
     )
 
     assert usage.input_tokens == 0
@@ -700,7 +700,7 @@ async def test_kimi_usage_extraction_no_usage_returns_empty():
         messages=[Message(role="user", content="hi")],
         tools=[],
         system_prompt="sys",
-        model="kimi-k2",
+        model="kimi-for-coding",
     )
 
     assert usage == TokenUsage()
@@ -719,10 +719,10 @@ async def test_kimi_model_param_passed_to_api():
         messages=[Message(role="user", content="hi")],
         tools=[],
         system_prompt="sys",
-        model="kimi-k2-0711-preview",
+        model="kimi-for-coding",
     )
 
-    assert captured[0]["model"] == "kimi-k2-0711-preview"
+    assert captured[0]["model"] == "kimi-for-coding"
 
 
 @pytest.mark.asyncio

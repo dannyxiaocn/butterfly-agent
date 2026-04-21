@@ -155,7 +155,7 @@ async def test_kimi_thinking_enabled_uses_extra_body_not_betas():
         messages=[],
         tools=[],
         system_prompt="sys",
-        model="kimi-k2",
+        model="kimi-for-coding",
         thinking=True,
         thinking_budget=9000,
     )
@@ -177,7 +177,7 @@ async def test_kimi_thinking_disabled_omits_extra_body():
         messages=[],
         tools=[],
         system_prompt="sys",
-        model="kimi-k2",
+        model="kimi-for-coding",
     )
 
     call = provider._client.messages.calls[0]

@@ -425,3 +425,81 @@ manager.
 `TYPE_SUB_AGENT` when `tool_name == "sub_agent"`, else `TYPE_PENDING_TOOL`.
 This lets the UI render the two card types differently without runners
 having to know about panel taxonomy.
+
+---
+
+## 14. Provider-native built-in tools (v2.0.31)
+
+A second tool kind shipped in v2.0.31: **provider-native built-in tools**.
+Butterfly declares them to the provider at request time but never runs
+them locally — the provider executes them server-side (currently Codex /
+OpenAI Responses only). Function tools (the default) and built-in tools
+share the `Tool` object type; what differs is how providers handle them.
+
+### When to use each
+
+| Kind | When | Examples |
+|---|---|---|
+| Function tool | Butterfly owns the executor; works on every provider. | `bash`, `read`, `task_create`, `web_search_brave` (API-key local executor). |
+| Provider-native built-in | Leverage the provider's server-side capability without running it locally. Works only on providers that understand the specific tool type (Codex / OpenAI Responses today). | `web_search`, `file_search`, `code_interpreter`. |
+
+Prefer a function tool unless the provider-native one offers a
+capability you can't get locally (e.g. provider-side `web_search` gives
+the server access to fresh indexed results the model is tuned against;
+`code_interpreter` gives server-side sandboxed Python without Butterfly
+having to stand up its own sandbox).
+
+### `builtin_dict` plumbing
+
+`butterfly/core/tool.py::Tool` accepts `builtin_dict: dict | None` at
+construction. When set, `to_builtin_dict()` returns a copy and
+`is_builtin` is True. Providers that support built-in tools call
+`to_builtin_dict()` first when formatting their `tools=[]` list — a
+non-None return is spliced verbatim (as `{"type": "web_search"}`, etc.),
+NOT wrapped as `type: "function"`.
+
+### `execute()` behavior
+
+Direct invocation raises `NotImplementedError` with a descriptive
+message. This is intentional: the LLM must understand that the
+provider, not Butterfly, runs the tool — surfacing a clear error early
+catches config mistakes (e.g. enabling `web_search` against a Kimi
+provider, which doesn't understand it).
+
+### Registration pattern in toolhub
+
+A provider-native built-in tool entry under `toolhub/<name>/` follows
+the same shape as a function tool plus two conventions:
+
+1. **`tool.json`** — identical to function tools. `input_schema` can be
+   empty (`{"type": "object", "properties": {}, "required": []}`) since
+   the agent doesn't supply parameters for provider-native calls.
+2. **`executor.py`** — declare a module-level class attr `builtin_dict`
+   on the executor class, holding the raw provider spec:
+   ```python
+   class WebSearchExecutor:
+       builtin_dict = {"type": "web_search"}
+
+       async def execute(self, **_) -> str:
+           raise NotImplementedError("provider-native built-in tool — ...")
+   ```
+3. **Loader dispatch** — `butterfly/tool_engine/loader.py::_create_executor`
+   gains a dispatch arm matching the tool name, instantiating the
+   executor class. `load_from_toolhub` then calls `_load_builtin_dict`
+   to read the class attr (best-effort — absent ⇒ `None` ⇒ regular
+   function tool).
+
+Three stubs ship: `toolhub/web_search/`, `toolhub/file_search/`,
+`toolhub/code_interpreter/`. `image_generation` and `computer_use` are
+parsed + replayed by the provider but have no toolhub stub — adding
+them is hand-editing `tool.json` + `executor.py` in the same pattern.
+
+### UI surface
+
+Not wired in v2.0.31. The provider exposes `consume_builtin_tool_events()`
+to drain progress events (`web_search.searching`,
+`code_interpreter_call.code.delta`, etc.); callers that want to render
+the intermediate states need to poll the drain themselves. A future
+release will emit `tool_progress` events from these drains so the
+chat UI renders live progress the same way it does for background
+bash / sub_agent today.

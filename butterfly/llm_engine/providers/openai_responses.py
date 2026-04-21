@@ -10,8 +10,10 @@ Completions) instead.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import os
+import re
 import uuid
 from typing import TYPE_CHECKING, Any, Callable, ClassVar
 
@@ -34,6 +36,53 @@ if TYPE_CHECKING:
 
 
 _VALID_EFFORTS = {"none", "minimal", "low", "medium", "high", "xhigh"}
+# Per-event idle watchdog: if the SDK stream has no new event for this many
+# seconds, treat it as stalled and raise. Tests monkey-patch this down.
+_CHUNK_IDLE_TIMEOUT = 45.0
+
+# Provider-native built-in tool ``type`` names (Responses API). Same set the
+# Codex provider uses — see ``providers/codex.py`` for the full rationale.
+_BUILTIN_TOOL_TYPES: frozenset[str] = frozenset({
+    "web_search",
+    "file_search",
+    "code_interpreter",
+    "image_generation",
+    "mcp",
+    "computer_use_preview",
+})
+
+# ``item.type`` strings for built-in tool calls on ``output_item.done``.
+_BUILTIN_ITEM_TYPES: frozenset[str] = frozenset({
+    "web_search_call",
+    "file_search_call",
+    "code_interpreter_call",
+    "image_generation_call",
+    "mcp_call",
+    "mcp_list_tools",
+    "computer_call",
+})
+
+_BUILTIN_EVENT_RE = re.compile(
+    r"^response\.(?P<tool>web_search_call|file_search_call|code_interpreter_call|"
+    r"image_generation_call|mcp_call|mcp_list_tools|computer_call)\.(?P<phase>.+)$"
+)
+_MCP_ARGS_ETYPE = "response.mcp_call_arguments.delta"
+
+
+def _classify_builtin_event(etype: str) -> tuple[str, str] | None:
+    if etype == _MCP_ARGS_ETYPE:
+        return "mcp_call", "arguments_delta"
+    m = _BUILTIN_EVENT_RE.match(etype)
+    if not m:
+        return None
+    tool = m.group("tool")
+    raw_phase = m.group("phase")
+    phase_map = {
+        "code.delta": "code_delta",
+        "code.done": "code_done",
+    }
+    phase = phase_map.get(raw_phase, raw_phase)
+    return tool, phase
 
 
 class OpenAIResponsesProvider(Provider):
@@ -73,11 +122,26 @@ class OpenAIResponsesProvider(Provider):
         self.max_tokens = max_tokens
         self._conversation_id = str(uuid.uuid4())
         self._pending_reasoning: list[dict[str, Any]] = []
+        # Built-in tool captures — see :class:`CodexProvider` for semantics.
+        self._pending_builtin_items: list[dict[str, Any]] = []
+        self._pending_builtin_progress: list[dict[str, Any]] = []
 
     def consume_extra_blocks(self) -> list[dict]:
-        blocks = self._pending_reasoning
+        """Drain reasoning + captured built-in-tool items for round-trip replay."""
+        blocks = self._pending_reasoning + self._pending_builtin_items
         self._pending_reasoning = []
+        self._pending_builtin_items = []
         return blocks
+
+    def consume_builtin_tool_events(self) -> list[dict]:
+        """Drain captured built-in-tool progress events from the last stream.
+
+        See :py:meth:`CodexProvider.consume_builtin_tool_events` for the
+        event schema.
+        """
+        events = self._pending_builtin_progress
+        self._pending_builtin_progress = []
+        return events
 
     async def aclose(self) -> None:
         close = getattr(self._client, "close", None)
@@ -119,7 +183,7 @@ class OpenAIResponsesProvider(Provider):
             "prompt_cache_key": self._conversation_id,
         }
         if tools:
-            kwargs["tools"] = [_tool_to_responses(t) for t in tools]
+            kwargs["tools"] = [_format_tool_for_request(t) for t in tools]
         # effort=="none" means the caller explicitly wants no reasoning block —
         # sending reasoning={"effort":"none"} would either 400 or still bill
         # reasoning tokens depending on the model, so we just omit the field.
@@ -160,8 +224,15 @@ class OpenAIResponsesProvider(Provider):
         # list so back-to-back non-stream calls without
         # ``consume_extra_blocks()`` don't accumulate stale reasoning items.
         captured: list[dict[str, Any]] = []
-        text, tool_calls, usage = _parse_response_object(response, pending=captured)
+        captured_builtin: list[dict[str, Any]] = []
+        text, tool_calls, usage = _parse_response_object(
+            response, pending=captured, pending_builtin=captured_builtin
+        )
         self._pending_reasoning = captured
+        self._pending_builtin_items = captured_builtin
+        # Non-stream path has no streaming progress visibility — leave the
+        # progress queue empty.
+        self._pending_builtin_progress = []
         # Non-stream path has no delta visibility; synthesize a start+end pair
         # per reasoning item so the UI still renders a "Thought for …" pill.
         for item in captured:
@@ -190,6 +261,10 @@ class OpenAIResponsesProvider(Provider):
         tc_map: dict[str, dict[str, str]] = {}
         current_tc_id: str | None = None
         reasoning_items: list[dict[str, Any]] = []
+        # Built-in tool capture state — see CodexProvider for semantics.
+        builtin_items: list[dict[str, Any]] = []
+        builtin_progress: list[dict[str, Any]] = []
+        code_deltas: dict[str | None, list[str]] = {}
         usage = TokenUsage()
         thinking_parts: list[str] = []
         thinking_active = False
@@ -220,7 +295,19 @@ class OpenAIResponsesProvider(Provider):
                     pass
 
         async with self._client.responses.stream(**kwargs) as stream:
-            async for event in stream:
+            event_iter = stream.__aiter__()
+            while True:
+                try:
+                    event = await asyncio.wait_for(
+                        event_iter.__anext__(), timeout=_CHUNK_IDLE_TIMEOUT
+                    )
+                except StopAsyncIteration:
+                    break
+                except asyncio.TimeoutError as exc:
+                    raise ProviderTimeoutError(
+                        f"OpenAI Responses SSE stalled — no event for {_CHUNK_IDLE_TIMEOUT}s",
+                        provider="openai-responses",
+                    ) from exc
                 etype = getattr(event, "type", "") or ""
 
                 if etype == "response.output_text.delta":
@@ -275,11 +362,46 @@ class OpenAIResponsesProvider(Provider):
                         if not thinking_active:
                             _start_thinking()
                         _end_thinking()
+                    elif itype in _BUILTIN_ITEM_TYPES:
+                        captured_item = dict(item)
+                        captured_item.setdefault("type", itype)
+                        if itype == "code_interpreter_call":
+                            iid = item.get("id")
+                            assembled = "".join(code_deltas.pop(iid, []))
+                            if assembled and not captured_item.get("code"):
+                                captured_item["code"] = assembled
+                        builtin_items.append(captured_item)
 
                 elif etype == "response.incomplete":
                     _raise_incomplete(_event_response_as_dict(event))
                 elif etype in ("response.failed", "error"):
                     _raise_stream_error_event(_event_response_as_dict(event), event)
+
+                elif (classified := _classify_builtin_event(etype)) is not None:
+                    tool_type, phase = classified
+                    if tool_type == "code_interpreter_call" and phase == "code_delta":
+                        delta = getattr(event, "delta", "") or ""
+                        if not delta:
+                            # Some SDK versions carry the code on ``code`` instead.
+                            delta = getattr(event, "code", "") or ""
+                        if delta:
+                            iid = getattr(event, "item_id", None)
+                            code_deltas.setdefault(iid, []).append(delta)
+                    dump = getattr(event, "model_dump", None)
+                    if callable(dump):
+                        payload = dump(exclude_none=True)
+                    else:
+                        payload = {
+                            k: v
+                            for k, v in vars(event).items()
+                            if not k.startswith("_")
+                        }
+                    payload.pop("type", None)
+                    builtin_progress.append({
+                        "tool_type": tool_type,
+                        "phase": phase,
+                        "payload": payload,
+                    })
 
             final = await stream.get_final_response()
             usage = _extract_usage_from_obj(getattr(final, "usage", None))
@@ -291,6 +413,8 @@ class OpenAIResponsesProvider(Provider):
             _end_thinking()
 
         self._pending_reasoning = reasoning_items
+        self._pending_builtin_items = builtin_items
+        self._pending_builtin_progress = builtin_progress
         text = "".join(text_parts)
         tool_calls = [
             ToolCall(id=call_id, name=tc["name"], input=_parse_json_args(tc["args"]))
@@ -315,6 +439,31 @@ def _tool_to_responses(tool: "Tool") -> dict[str, Any]:
         "parameters": api.get("input_schema", {"type": "object", "properties": {}}),
         "strict": False,
     }
+
+
+def _format_tool_for_request(tool: "Tool | dict[str, Any]") -> dict[str, Any]:
+    """Shape a single ``tools=[]`` entry for the Responses API.
+
+    Mirrors the same-named helper in ``codex.py``. Dicts with a known
+    built-in ``type`` (``web_search``, ``file_search``, etc.) pass through
+    verbatim. :class:`Tool` objects that expose a non-empty
+    :py:meth:`~butterfly.core.tool.Tool.to_builtin_dict` return value are
+    spliced using that dict; everything else is wrapped as
+    ``type: "function"``.
+    """
+    if isinstance(tool, dict):
+        ttype = tool.get("type", "")
+        if ttype in _BUILTIN_TOOL_TYPES:
+            return dict(tool)
+        return dict(tool)
+
+    builtin = getattr(tool, "to_builtin_dict", None)
+    if callable(builtin):
+        spec = builtin()
+        if spec:
+            return dict(spec)
+
+    return _tool_to_responses(tool)
 
 
 def _convert_messages(messages: list["Message"]) -> list[dict[str, Any]]:
@@ -389,6 +538,18 @@ def _convert_assistant(msg: "Message") -> list[dict[str, Any]]:
                 "name": block.get("name", ""),
                 "arguments": json.dumps(block.get("input", {})),
             })
+        elif btype in _BUILTIN_ITEM_TYPES:
+            # Provider-native built-in tool call captured on an earlier turn
+            # (``web_search_call``, ``file_search_call``, etc.). Replay
+            # verbatim — server validates ``id`` + item state — same pattern
+            # as ``reasoning`` above.
+            flush_text()
+            item = {
+                k: v
+                for k, v in block.items()
+                if v is not None and not k.startswith("_")
+            }
+            result.append(item)
 
     flush_text()
     return result
@@ -476,9 +637,16 @@ def _capture_reasoning(item: dict[str, Any]) -> dict[str, Any]:
 
 
 def _parse_response_object(
-    response: Any, *, pending: list[dict[str, Any]]
+    response: Any,
+    *,
+    pending: list[dict[str, Any]],
+    pending_builtin: list[dict[str, Any]] | None = None,
 ) -> tuple[str, list[ToolCall], TokenUsage]:
-    """Parse a Responses API non-streaming response object."""
+    """Parse a Responses API non-streaming response object.
+
+    ``pending`` receives reasoning items; ``pending_builtin`` (optional)
+    receives captured built-in tool items for round-trip replay.
+    """
     text_parts: list[str] = []
     tool_calls: list[ToolCall] = []
 
@@ -497,6 +665,10 @@ def _parse_response_object(
             ))
         elif itype == "reasoning":
             pending.append(_capture_reasoning(idict))
+        elif itype in _BUILTIN_ITEM_TYPES and pending_builtin is not None:
+            captured = dict(idict)
+            captured.setdefault("type", itype)
+            pending_builtin.append(captured)
 
     usage = _extract_usage_from_obj(getattr(response, "usage", None))
     return "".join(text_parts), tool_calls, usage

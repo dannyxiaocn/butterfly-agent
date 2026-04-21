@@ -159,14 +159,18 @@ def test_kimi_login_dashboard_url_in_output(monkeypatch, tmp_path, capsys):
 
 
 def test_kimi_login_no_key_no_env_prompts_and_cancels(monkeypatch, tmp_path, capsys):
-    """When no key arg and no env var, prompts user; EOFError → rc=1."""
+    """With --api-key forcing the legacy getpass path, Ctrl-C at the prompt → rc=1.
+
+    (v2.0.31: default with-no-key path is now OAuth; legacy getpass-paste is
+    only reached via ``--api-key``.)
+    """
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv(login_mod._KIMI_ENV_KEY, raising=False)
     # Simulate user pressing Ctrl-C at the prompt.
     monkeypatch.setattr("getpass.getpass", lambda _: (_ for _ in ()).throw(KeyboardInterrupt()))
 
     env_file = tmp_path / ".env"
-    args = _make_kimi_args(key=None, no_verify=True, env_file=str(env_file))
+    args = _make_kimi_args(key=None, no_verify=True, env_file=str(env_file), api_key=True)
     rc = login_mod.cmd_kimi(args)
     assert rc == 1
     assert not env_file.exists(), ".env must not be written on cancelled login"

@@ -147,7 +147,7 @@ async def test_kimi_openai_thinking_enabled_injects_extra_body():
         messages=[Message(role="user", content="hi")],
         tools=[],
         system_prompt="sys",
-        model="kimi-k2",
+        model="kimi-for-coding",
         thinking=True,
     )
 
@@ -167,7 +167,7 @@ async def test_kimi_openai_thinking_disabled_omits_extra_body():
         messages=[Message(role="user", content="hi")],
         tools=[],
         system_prompt="sys",
-        model="kimi-k2",
+        model="kimi-for-coding",
     )
 
     call = captured[0]
@@ -261,7 +261,7 @@ async def test_kimi_openai_complete_returns_usage_via_override():
         messages=[Message(role="user", content="hi")],
         tools=[],
         system_prompt="sys",
-        model="kimi-k2",
+        model="kimi-for-coding",
     )
     assert text == "hi"
     assert tool_calls == []
@@ -323,7 +323,7 @@ async def test_kimi_openai_streaming_reads_usage_from_chunk_top_level():
         messages=[Message(role="user", content="hi")],
         tools=[],
         system_prompt="sys",
-        model="kimi-k2",
+        model="kimi-for-coding",
         on_text_chunk=out.append,
     )
     assert text == "hi"
@@ -368,7 +368,7 @@ async def test_kimi_openai_streaming_reads_usage_from_choice_when_chunk_usage_ab
         messages=[Message(role="user", content="hi")],
         tools=[],
         system_prompt="sys",
-        model="kimi-k2",
+        model="kimi-for-coding",
         on_text_chunk=out.append,
     )
     assert text == "ok"
@@ -513,7 +513,7 @@ async def test_stream_captures_reasoning_content_into_pending_slot():
         messages=[Message(role="user", content="hi")],
         tools=[],
         system_prompt="sys",
-        model="kimi-k2-turbo-preview",
+        model="kimi-for-coding",
         thinking=True,
         on_text_chunk=lambda _: None,
     )
@@ -540,7 +540,7 @@ async def test_stream_fires_thinking_hooks_on_reasoning_then_content():
         messages=[Message(role="user", content="x")],
         tools=[],
         system_prompt="sys",
-        model="kimi-k2",
+        model="kimi-for-coding",
         thinking=True,
         on_text_chunk=lambda _: None,
         on_thinking_start=lambda: events.append(("start", "")),
@@ -568,7 +568,7 @@ async def test_stream_fires_thinking_end_on_reasoning_only_stream():
         messages=[Message(role="user", content="x")],
         tools=[],
         system_prompt="sys",
-        model="kimi-k2",
+        model="kimi-for-coding",
         thinking=True,
         on_text_chunk=lambda _: None,
         on_thinking_start=lambda: events.append(("start", "")),
@@ -636,7 +636,7 @@ async def test_non_stream_captures_message_reasoning_content():
         messages=[Message(role="user", content="x")],
         tools=[],
         system_prompt="sys",
-        model="kimi-k2",
+        model="kimi-for-coding",
         thinking=True,
     )
 
@@ -798,7 +798,7 @@ async def test_stream_interleaved_reasoning_after_content_still_captured():
         messages=[Message(role="user", content="x")],
         tools=[],
         system_prompt="sys",
-        model="kimi-k2",
+        model="kimi-for-coding",
         thinking=True,
         on_text_chunk=lambda _: None,
         on_thinking_start=lambda: events.append(("start", "")),
@@ -826,7 +826,7 @@ async def test_stream_clears_pending_when_no_reasoning_in_current_call():
     ])
     await provider.complete(
         messages=[Message(role="user", content="x")],
-        tools=[], system_prompt="sys", model="kimi-k2",
+        tools=[], system_prompt="sys", model="kimi-for-coding",
         thinking=True, on_text_chunk=lambda _: None,
     )
     assert provider._pending_reasoning_content == "stale"
@@ -837,7 +837,7 @@ async def test_stream_clears_pending_when_no_reasoning_in_current_call():
     provider._client = _fake_stream_client([_chunk(content="b")])
     await provider.complete(
         messages=[Message(role="user", content="x")],
-        tools=[], system_prompt="sys", model="kimi-k2",
+        tools=[], system_prompt="sys", model="kimi-for-coding",
         on_text_chunk=lambda _: None,
     )
     assert provider._pending_reasoning_content == ""

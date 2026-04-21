@@ -224,6 +224,8 @@ def test_parse_retry_after(text, expected):
 def test_consume_extra_blocks_drains_pending_reasoning():
     p = CodexProvider.__new__(CodexProvider)
     p._pending_reasoning = [{"type": "reasoning", "id": "rs_1"}]
+    p._pending_builtin_items = []
+    p._pending_builtin_progress = []
     first = p.consume_extra_blocks()
     second = p.consume_extra_blocks()
     assert first == [{"type": "reasoning", "id": "rs_1"}]
@@ -296,7 +298,7 @@ async def test_parse_sse_stream_text_and_tool_call():
     ]
 
     streamed: list[str] = []
-    text, tool_calls, usage, reasoning_items = await _parse_sse_stream(
+    text, tool_calls, usage, reasoning_items, _bi, _bp = await _parse_sse_stream(
         _FakeSSEResponse(chunks), streamed.append
     )
 
@@ -330,7 +332,7 @@ async def test_parse_sse_stream_captures_reasoning_items():
         _sse_event({"type": "response.completed", "response": {"usage": {}}}),
     ]
 
-    text, tool_calls, usage, reasoning_items = await _parse_sse_stream(
+    text, tool_calls, usage, reasoning_items, _bi, _bp = await _parse_sse_stream(
         _FakeSSEResponse(chunks), None
     )
 
@@ -364,7 +366,7 @@ async def test_parse_sse_stream_ignores_malformed_json():
         _sse_event({"type": "response.output_text.delta", "delta": "hi"}),
         _sse_event({"type": "response.completed", "response": {"usage": {}}}),
     ]
-    text, _, _, _ = await _parse_sse_stream(_FakeSSEResponse(chunks), None)
+    text, *_ = await _parse_sse_stream(_FakeSSEResponse(chunks), None)
     assert text == "hi"
 
 
@@ -378,7 +380,7 @@ async def test_parse_sse_stream_handles_split_events_across_chunks():
     mid = len(payload) // 2
     chunks = [payload[:mid], payload[mid:], completed]
 
-    text, _, _, _ = await _parse_sse_stream(_FakeSSEResponse(chunks), None)
+    text, *_ = await _parse_sse_stream(_FakeSSEResponse(chunks), None)
     assert text == "split"
 
 
@@ -418,7 +420,7 @@ async def test_output_text_delta_inside_reasoning_item_routes_to_thinking():
     text_chunks: list[str] = []
     thinking_bodies: list[str] = []
     started: list[bool] = []
-    text, _, _, reasoning_items = await _parse_sse_stream(
+    text, _, _, reasoning_items, _bi, _bp = await _parse_sse_stream(
         _FakeSSEResponse(chunks),
         text_chunks.append,
         on_thinking_start=lambda: started.append(True),
@@ -478,7 +480,7 @@ async def test_unknown_reasoning_etype_routes_to_thinking():
         _sse_event({"type": "response.completed", "response": {"usage": {}}}),
     ]
     bodies: list[str] = []
-    text, _, _, _ = await _parse_sse_stream(
+    text, *_ = await _parse_sse_stream(
         _FakeSSEResponse(chunks),
         None,
         on_thinking_start=lambda: None,
@@ -768,3 +770,177 @@ def test_read_auth_migration_skipped_when_cli_tokens_malformed(monkeypatch, tmp_
 
     with pytest.raises(AuthError):
         _read_auth()
+
+
+# ── refresh: account_id re-extraction + persistence ────────────────────────
+#
+# The backend server may rotate ``chatgpt_account_id`` as part of a refresh
+# (rare; opencode defends against it explicitly). If we kept using the
+# ``account_id`` field persisted from a previous session, the retried request
+# would 401 again. ``_refresh_access_token_async`` must re-extract from the
+# fresh JWT; ``_get_auth_async`` must prefer the persisted (post-refresh)
+# value so both paths converge.
+
+
+def _make_jwt_with_account(account_id: str) -> str:
+    """Build a minimal unsigned JWT carrying chatgpt_account_id in the auth claim."""
+    import base64 as _b64
+    import json as _json
+    from butterfly.llm_engine.providers.codex import _JWT_AUTH_CLAIM
+
+    payload = {_JWT_AUTH_CLAIM: {"chatgpt_account_id": account_id}, "exp": 9999999999}
+    header_b64 = _b64.urlsafe_b64encode(b'{"alg":"none"}').rstrip(b"=").decode()
+    payload_b64 = (
+        _b64.urlsafe_b64encode(_json.dumps(payload).encode()).rstrip(b"=").decode()
+    )
+    return f"{header_b64}.{payload_b64}.sig"
+
+
+@pytest.mark.asyncio
+async def test_refresh_reextracts_and_persists_fresh_account_id(monkeypatch, tmp_path):
+    """After a refresh, the fresh access_token's account_id must win over any
+    stale ``account_id`` field on disk AND be re-persisted."""
+    import json as _json
+    from butterfly.llm_engine.providers import codex as codex_mod
+
+    fresh_access = _make_jwt_with_account("fresh-456")
+    auth_path = tmp_path / "auth.json"
+    stale = {
+        "tokens": {
+            "access_token": "expired-token",  # _is_token_expired returns True (unparseable)
+            "refresh_token": "r",
+            "id_token": "",
+            "account_id": "stale-123",  # lingering from a previous session
+        }
+    }
+    auth_path.write_text(_json.dumps(stale))
+    monkeypatch.setattr(codex_mod, "_AUTH_PATH", auth_path)
+
+    async def fake_refresh(refresh_token):
+        assert refresh_token == "r"
+        return {
+            "access_token": fresh_access,
+            "refresh_token": "r2",
+            "id_token": "",
+            "account_id": codex_mod._extract_account_id(fresh_access, ""),
+        }
+
+    monkeypatch.setattr(codex_mod, "_refresh_access_token_async", fake_refresh)
+
+    provider = CodexProvider.__new__(CodexProvider)
+    provider._conversation_id = "c"
+    provider._pending_reasoning = []
+
+    access, account_id = await provider._get_auth_async()
+    assert access == fresh_access
+    assert account_id == "fresh-456"
+
+    # The disk file was rewritten — the stale account_id must be gone.
+    rewritten = _json.loads(auth_path.read_text())
+    assert rewritten["tokens"]["account_id"] == "fresh-456"
+
+
+@pytest.mark.asyncio
+async def test_get_auth_prefers_persisted_account_id_when_present(monkeypatch, tmp_path):
+    """No refresh path: when the access_token is still valid, we trust the
+    already-persisted ``account_id`` (written by the last refresh) instead of
+    re-extracting on every call."""
+    import json as _json
+    from butterfly.llm_engine.providers import codex as codex_mod
+
+    # Unexpired token (exp way in the future) whose JWT account is ``jwt-only``
+    token = _make_jwt_with_account("jwt-only")
+    auth_path = tmp_path / "auth.json"
+    data = {
+        "tokens": {
+            "access_token": token,
+            "refresh_token": "r",
+            "id_token": "",
+            "account_id": "persisted-999",
+        }
+    }
+    auth_path.write_text(_json.dumps(data))
+    monkeypatch.setattr(codex_mod, "_AUTH_PATH", auth_path)
+
+    provider = CodexProvider.__new__(CodexProvider)
+    provider._conversation_id = "c"
+    provider._pending_reasoning = []
+
+    _, account_id = await provider._get_auth_async()
+    assert account_id == "persisted-999"
+
+
+@pytest.mark.asyncio
+async def test_get_auth_falls_back_to_jwt_extraction_when_no_persisted_account(
+    monkeypatch, tmp_path
+):
+    """Legacy auth.json lacking ``account_id`` (e.g. pre-v2.0.x or freshly
+    CLI-migrated) must still work — falls back to JWT extraction."""
+    import json as _json
+    from butterfly.llm_engine.providers import codex as codex_mod
+
+    token = _make_jwt_with_account("from-jwt-42")
+    auth_path = tmp_path / "auth.json"
+    data = {
+        "tokens": {
+            "access_token": token,
+            "refresh_token": "r",
+            "id_token": "",
+            # NOTE: no account_id key
+        }
+    }
+    auth_path.write_text(_json.dumps(data))
+    monkeypatch.setattr(codex_mod, "_AUTH_PATH", auth_path)
+
+    provider = CodexProvider.__new__(CodexProvider)
+    provider._conversation_id = "c"
+    provider._pending_reasoning = []
+
+    _, account_id = await provider._get_auth_async()
+    assert account_id == "from-jwt-42"
+
+
+# ── chunk-idle watchdog ─────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_parse_sse_stream_aborts_on_chunk_idle_timeout(monkeypatch):
+    """If the upstream connection hangs mid-stream (one chunk then silence),
+    the watchdog must raise ProviderTimeoutError rather than blocking for the
+    full read timeout."""
+    import asyncio as _asyncio
+    from butterfly.llm_engine.errors import ProviderTimeoutError
+    from butterfly.llm_engine.providers import codex as codex_mod
+    from butterfly.llm_engine.providers.codex import _parse_sse_stream
+
+    monkeypatch.setattr(codex_mod, "_CHUNK_IDLE_TIMEOUT", 0.05)
+
+    class _HangingResponse:
+        async def aiter_bytes(self):
+            # First chunk arrives promptly, then the connection stalls.
+            yield _sse_event({"type": "response.output_text.delta", "delta": "hi"})
+            # Block forever — simulates a stalled socket with no close.
+            await _asyncio.sleep(3600)
+            # Unreached — kept to document the intent.
+            yield b""
+
+    with pytest.raises(ProviderTimeoutError) as exc:
+        await _parse_sse_stream(_HangingResponse(), None)
+    assert "stalled" in str(exc.value).lower()
+
+
+@pytest.mark.asyncio
+async def test_parse_sse_stream_normal_stream_does_not_trigger_watchdog(monkeypatch):
+    """A well-behaved stream that finishes promptly must not raise."""
+    from butterfly.llm_engine.providers import codex as codex_mod
+    from butterfly.llm_engine.providers.codex import _parse_sse_stream
+
+    # Even at a very tight timeout, back-to-back chunks must sail through.
+    monkeypatch.setattr(codex_mod, "_CHUNK_IDLE_TIMEOUT", 0.5)
+
+    chunks = [
+        _sse_event({"type": "response.output_text.delta", "delta": "ok"}),
+        _sse_event({"type": "response.completed", "response": {"usage": {}}}),
+    ]
+    text, *_ = await _parse_sse_stream(_FakeSSEResponse(chunks), None)
+    assert text == "ok"

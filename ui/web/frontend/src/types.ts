@@ -87,6 +87,15 @@ export interface ModelCatalogEntry {
   max_context_tokens: number;
   exposes_reasoning_tokens: boolean;
   default: boolean;
+  // Optional Anthropic-specific knobs; null when unset or provider is not
+  // Anthropic. See models.yaml for allowed string values.
+  thinking_mode?: string | null;
+  thinking_effort?: string | null;
+  thinking_display?: string | null;
+  thinking_budget_tokens?: number | null;
+  interleaved_thinking_beta?: boolean | null;
+  cache_strategy?: string | null;
+  cache_ttl?: string | null;
 }
 
 export interface ProviderCatalogEntry {

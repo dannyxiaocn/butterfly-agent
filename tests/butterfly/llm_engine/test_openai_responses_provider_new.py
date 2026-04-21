@@ -31,6 +31,8 @@ def _make_provider() -> OpenAIResponsesProvider:
     p.max_tokens = 8096
     p._conversation_id = "conv-123"
     p._pending_reasoning = []
+    p._pending_builtin_items = []
+    p._pending_builtin_progress = []
     p._client = None  # patched per-test
     return p
 
@@ -608,3 +610,85 @@ def test_convert_tool_result_preserves_string_content():
     assert len(items) == 1
     assert items[0]["type"] == "function_call_output"
     assert "plain string result" in items[0]["output"]
+
+
+# ======================================================================
+# 7. Chunk-idle watchdog
+# ======================================================================
+
+
+class _HangingStreamCtxMgr:
+    """Emits one event promptly, then hangs forever — simulates a stalled
+    upstream socket that never closes."""
+
+    def __init__(self, first_event: Any, final_response: Any) -> None:
+        self._first = first_event
+        self._final = final_response
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        pass
+
+    def __aiter__(self):
+        async def _gen():
+            yield self._first
+            import asyncio as _asyncio
+            await _asyncio.sleep(3600)
+            # unreached
+            return
+
+        return _gen()
+
+    async def get_final_response(self):
+        return self._final
+
+
+@pytest.mark.asyncio
+async def test_stream_aborts_on_event_idle_timeout(monkeypatch):
+    """If the OpenAI SDK stream yields one event then stalls, the watchdog
+    must raise ProviderTimeoutError well before any read-level timeout."""
+    from butterfly.llm_engine.errors import ProviderTimeoutError
+    from butterfly.llm_engine.providers import openai_responses as or_mod
+
+    monkeypatch.setattr(or_mod, "_CHUNK_IDLE_TIMEOUT", 0.05)
+
+    provider = _make_provider()
+    first = _stream_event("response.output_text.delta", delta="hi")
+    final = _make_final_response()
+
+    provider._client = SimpleNamespace(
+        responses=SimpleNamespace(
+            stream=lambda **kw: _HangingStreamCtxMgr(first, final)
+        )
+    )
+
+    with pytest.raises(ProviderTimeoutError) as exc:
+        await provider._stream({"model": "gpt-5"}, lambda _: None)
+    assert "stalled" in str(exc.value).lower()
+
+
+@pytest.mark.asyncio
+async def test_stream_normal_flow_does_not_trip_watchdog(monkeypatch):
+    """Back-to-back events that finish promptly must not raise even with a
+    very tight idle timeout."""
+    from butterfly.llm_engine.providers import openai_responses as or_mod
+
+    monkeypatch.setattr(or_mod, "_CHUNK_IDLE_TIMEOUT", 0.5)
+
+    provider = _make_provider()
+    events = [
+        _stream_event("response.output_text.delta", delta="a"),
+        _stream_event("response.output_text.delta", delta="b"),
+    ]
+    final = _make_final_response()
+
+    provider._client = SimpleNamespace(
+        responses=SimpleNamespace(
+            stream=lambda **kw: _FakeResponsesStreamCtxMgr(events, final)
+        )
+    )
+
+    text, _, _ = await provider._stream({"model": "gpt-5"}, lambda _: None)
+    assert text == "ab"
