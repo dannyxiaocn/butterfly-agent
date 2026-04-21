@@ -100,7 +100,7 @@ butterfly chat --session 2026-04-13_10-00-00-a1b2 "What's the status?"
 
 | Command | Description |
 |---------|-------------|
-| `butterfly` (no args) | Start server + web UI together; prints `http://localhost:7720`; blocks until Ctrl+C |
+| `butterfly` (no args) | Start server + web UI together; prints `http://localhost:7250`; blocks until Ctrl+C |
 | `butterfly server` | Tail the running server's log (read-only; needs the daemon up) |
 | `butterfly update [--skip-frontend]` | git pull + pip install -e . + npm build + restart (refuses dirty/untracked tree) |
 

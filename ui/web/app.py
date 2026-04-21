@@ -55,7 +55,7 @@ from butterfly.service.sessions_service import _validate_session_id as _service_
 SESSIONS_DIR = Path(__file__).parent.parent.parent / "sessions"
 _SYSTEM_SESSIONS_DIR = Path(__file__).parent.parent.parent / "_sessions"
 _DEFAULT_AGENT = "agenthub/agent"
-_DEFAULT_PORT = 7720
+_DEFAULT_PORT = 7250
 _DIST_DIR = Path(__file__).parent / "frontend" / "dist"
 
 
