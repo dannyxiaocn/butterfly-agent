@@ -439,20 +439,100 @@ body.resizing * {
   flex: 1;
 }
 
-.new-session-form {
-  padding: 12px;
-  border-top: 1px solid var(--border);
+/* ── New-session card ────────────────────────────────────────────────────
+ * Lives inline at the top of the session list and mimics .session-item
+ * dimensions so the list reads as "one pending card waiting to be named".
+ */
+.new-session-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  margin-bottom: 4px;
+  border: 1px dashed var(--border2);
   background: var(--bg3);
+  box-shadow: inset 0 0 0 1px transparent;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.new-session-card:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-glow);
+}
+
+.new-session-card.hidden {
+  display: none;
+}
+
+.ns-name-input {
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 13px;
+  font-weight: 500;
+  padding: 0;
+  width: 100%;
+  line-height: 1.4;
+}
+
+.ns-name-input::placeholder {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.new-session-card-row2 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ns-agent-select {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--font);
+  font-size: 11px;
+  padding: 2px 0;
+  margin-left: -2px;
+  cursor: pointer;
+  /* Strip the default arrow — the session-card layout above doesn't show
+   * one either, so the two rows stay visually aligned. */
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.ns-agent-select:hover {
+  color: var(--text);
+}
+
+.ns-agent-select option {
+  background: var(--bg2);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.new-session-card-actions {
+  display: flex;
+  gap: 4px;
   flex-shrink: 0;
 }
 
-.new-session-form.new-session-form-top {
-  border-top: none;
-  border-bottom: 1px solid var(--border);
+.new-session-card-actions .btn-sm {
+  padding: 2px 8px;
+  font-size: 11px;
+  line-height: 1.6;
 }
 
-.new-session-form.hidden {
-  display: none;
+.new-session-card-actions .btn-primary {
+  padding: 3px 10px;
+  font-size: 11px;
+  line-height: 1.4;
 }
 
 /* ====== BUTTONS ====== */
