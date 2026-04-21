@@ -150,10 +150,16 @@ def create_app(
     from .weixin import WeixinBridge
     weixin = WeixinBridge(sessions_dir, system_sessions_dir)
 
+    # Shared shutdown flag. `shutdown_event.set()` unblocks every SSE
+    # generator's `wait_for(shutdown_event.wait(), timeout=poll_interval)`
+    # loop so Ctrl+C doesn't stall on an open browser tab (v2.0.30).
+    shutdown_event = asyncio.Event()
+
     @asynccontextmanager
     async def _lifespan(app):
         weixin.start()
         yield
+        shutdown_event.set()
         weixin.stop()
 
     app = FastAPI(title="Butterfly Web UI", docs_url=None, redoc_url=None, lifespan=_lifespan)
@@ -292,6 +298,19 @@ def create_app(
             raise HTTPException(404, f"Session not found: {session_id}")
 
         async def generator() -> AsyncIterator[str]:
+            # Simple consumer: `async for` lets CancelledError (uvicorn
+            # graceful shutdown or client disconnect) propagate cleanly
+            # into the inner generator's `asyncio.sleep(0.3)`, which
+            # unwinds without leaving a partially-running __anext__ —
+            # the v2.0.30-pre pattern that manually raced `__anext__`
+            # against `shutdown_event.wait()` tripped
+            # "aclose(): asynchronous generator is already running"
+            # whenever the stop happened mid-__anext__.
+            #
+            # The ``shutdown_event`` check gates the next yield: under a
+            # steady event stream it fires as soon as lifespan drops the
+            # flag; under an idle stream uvicorn's 1 s
+            # timeout_graceful_shutdown takes over.
             seq = 0
             async for event, _ctx, _evt in service_iter_events(
                 session_id,
@@ -300,6 +319,8 @@ def create_app(
                 events_offset=events_since,
                 poll_interval=0.3,
             ):
+                if shutdown_event.is_set():
+                    return
                 yield _sse_format(event, seq=seq, ctx=_ctx, evt=_evt)
                 seq += 1
 
@@ -367,7 +388,11 @@ def create_app(
             if "status" in payload:
                 payload["status"] = _parse_task_status(payload.get("status"))
         try:
-            updated = service_upsert_task(session_id, sessions_dir, **payload)
+            updated = service_upsert_task(
+                session_id, sessions_dir,
+                system_sessions_dir=system_sessions_dir,
+                **payload,
+            )
         except FileExistsError as exc:
             raise HTTPException(409, f"Task '{exc.args[0]}' already exists; choose a different name")
         except ValueError as exc:
@@ -380,7 +405,10 @@ def create_app(
     async def remove_task(session_id: str, task_name: str):
         normalized = _normalize_task_name(task_name, "Task name")
         try:
-            deleted = service_delete_task(session_id, normalized, sessions_dir)
+            deleted = service_delete_task(
+                session_id, normalized, sessions_dir,
+                system_sessions_dir=system_sessions_dir,
+            )
         except ValueError as exc:
             _raise_session_error(exc, session_id)
         if not deleted:

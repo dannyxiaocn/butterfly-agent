@@ -188,6 +188,37 @@ def delete_session(session_id: str, sessions_dir: Path, system_sessions_dir: Pat
     return True
 
 
+def _emit_task_changes_bulk(
+    session_id: str,
+    changed_names: list[str],
+    change: str,
+    system_sessions_dir: Path,
+) -> None:
+    """Emit one ``task_card_changed`` event per affected card name so the
+    web UI's on-event Tasks refresh fires for each visible row (v2.0.30).
+
+    Kept service-local (not in tasks_service) because only Start/Stop
+    mutate multiple cards atomically; the single-card path already
+    has its own emitter.
+    """
+    if not changed_names:
+        return
+    system_dir = system_sessions_dir / session_id
+    if not system_dir.exists():
+        return
+    from butterfly.runtime.ipc import FileIPC
+    ipc = FileIPC(system_dir)
+    for name in changed_names:
+        try:
+            ipc.append_event({
+                "type": "task_card_changed",
+                "card": name,
+                "change": change,
+            })
+        except OSError:
+            pass
+
+
 def stop_session(session_id: str, system_sessions_dir: Path) -> bool:
     _validate_session_id(session_id)
     system_dir = system_sessions_dir / session_id
@@ -198,13 +229,19 @@ def stop_session(session_id: str, system_sessions_dir: Path) -> bool:
     # quiet while stopped (otherwise pending cards would re-fire the moment
     # the user resumes). Resolved via the session's tasks_dir to keep this
     # service-layer call free of per-call disk-layout knowledge.
+    #
+    # v2.0.30: pause_all_cards now returns the affected names; emit a
+    # per-card task_card_changed event so the Tasks tab refreshes
+    # on-event when the user clicks Stop.
     sessions_base = _resolve_sessions_base(system_sessions_dir)
+    affected: list[str] = []
     if sessions_base is not None:
         try:
             from butterfly.session_engine.task_cards import pause_all_cards
-            pause_all_cards(sessions_base / session_id / "core" / "tasks")
+            affected = pause_all_cards(sessions_base / session_id / "core" / "tasks")
         except Exception:
-            pass  # best-effort — stop should still succeed even if pause fails
+            affected = []  # best-effort — stop should still succeed
+    _emit_task_changes_bulk(session_id, affected, "paused", system_sessions_dir)
     # v2.0.24: dropped the "paused — use ▶ Start to resume" status row.
     # The sidebar already renders the stopped state via /api/sessions; the
     # context-stream notice was redundant chrome.
@@ -221,13 +258,18 @@ def start_session(session_id: str, system_sessions_dir: Path) -> bool:
     # Stop. Cards manually paused by the user via CLI/UI also flip back; if
     # someone wants per-card persistence across Start they can re-pause
     # after resume. Best-effort.
+    #
+    # v2.0.30: resume_all_paused_cards now returns the affected names;
+    # emit per-card events so the Tasks tab refreshes on Start.
     sessions_base = _resolve_sessions_base(system_sessions_dir)
+    affected: list[str] = []
     if sessions_base is not None:
         try:
             from butterfly.session_engine.task_cards import resume_all_paused_cards
-            resume_all_paused_cards(sessions_base / session_id / "core" / "tasks")
+            affected = resume_all_paused_cards(sessions_base / session_id / "core" / "tasks")
         except Exception:
-            pass
+            affected = []
+    _emit_task_changes_bulk(session_id, affected, "resumed", system_sessions_dir)
     # v2.0.24: dropped the "resumed" context-stream notice — see stop_session.
     return True
 

@@ -220,6 +220,41 @@ export async function attachSession(id: string): Promise<void> {
         store.emit('sessions');
       }).catch(console.error);
     }
+
+    // v2.0.30: Tasks tab refresh is now on-event.
+    //   * `task_card_changed` → agent CRUD tool or API edit
+    //   * `task_check` / `task_check_error` → script poll just ran (may
+    //     have flipped status or updated last_checked_at)
+    //   * `task_wakeup` / `task_finished` → card transitioned
+    //     working ↔ pending around an agent turn
+    if (
+      event.type === 'task_card_changed' ||
+      event.type === 'task_check' ||
+      event.type === 'task_check_error' ||
+      event.type === 'task_wakeup' ||
+      event.type === 'task_finished'
+    ) {
+      api.getTasks(id).then(res => {
+        if (store.currentSessionId !== id) return; // stale
+        store.taskCards = res.cards;
+        store.emit('tasks');
+      }).catch(() => {
+        // Non-fatal — next event triggers another refresh.
+      });
+    }
+
+    // v2.0.30: Panel tab refresh is also on-event. Replaces the old
+    // 2 s setInterval in panel.ts. Panel.ts listens for the store
+    // `panelRefreshRequest` signal and pulls /panel + per-tid details
+    // only when the Panel tab is currently visible.
+    if (
+      event.type === 'panel_update' ||
+      event.type === 'tool_progress' ||
+      event.type === 'tool_finalize' ||
+      event.type === 'sub_agent_count'
+    ) {
+      store.emit('panelRefreshRequest');
+    }
   });
 }
 
@@ -258,19 +293,11 @@ async function init(): Promise<void> {
     }
   }, 3000);
 
-  // Refresh task cards every 15s when a session is active
-  setInterval(async () => {
-    const id = store.currentSessionId;
-    if (!id) return;
-    try {
-      const tasks = await api.getTasks(id);
-      if (store.currentSessionId !== id) return; // stale
-      store.taskCards = tasks.cards;
-      store.emit('tasks');
-    } catch {
-      // ignore
-    }
-  }, 15000);
+  // v2.0.30: no more 15 s Tasks polling — the SSE handler below reloads
+  // store.taskCards in response to `task_card_changed`, `task_check`,
+  // `task_check_error`, `task_wakeup`, and `task_finished`. That covers
+  // agent-driven CRUD, script-poll transitions, and the "wakeup landed"
+  // round-trip.
 
   // Refresh HUD every 10s when a session is active
   setInterval(async () => {
@@ -328,10 +355,6 @@ async function init(): Promise<void> {
 //     the user can commit/stash and run `butterfly update` manually.
 
 function startUpdateNotifier() {
-  // Baseline `applied_at` seen on the page's first observation — if we see a
-  // different one later, the bundle is stale relative to what the server now
-  // serves and we force-reload. Starts `null` so we can distinguish "no
-  // status file on page load" from "file present, this is the baseline".
   let baselineAppliedAt: string | null = null;
   let baselineStamped = false;
   let bannerCommits = -1;
@@ -359,15 +382,10 @@ function startUpdateNotifier() {
     try {
       const s = await api.getUpdateStatus();
       if (s.applied && s.applied_at) {
-        // Explicit reload signal from the worker always wins — the server
-        // just finished `execvp`-ing, so the cached bundle is stale.
         if (s.reload) {
           window.location.reload();
           return;
         }
-        // First observation baselines the value; later polls that see a
-        // different `applied_at` indicate the server silently respawned
-        // while we weren't watching (e.g. worker cleared and re-wrote).
         if (!baselineStamped) {
           baselineAppliedAt = s.applied_at;
           baselineStamped = true;
@@ -380,9 +398,7 @@ function startUpdateNotifier() {
         }
         hideBanner();
       } else if (s.dirty && s.available && s.commits_behind) {
-        // Stamp baseline even on dirty so a later clean apply is detected.
         if (!baselineStamped) baselineStamped = true;
-        // Re-render when commit count changes so users see fresh counts.
         if (s.commits_behind !== bannerCommits) renderBanner(s.commits_behind);
       } else {
         if (!baselineStamped) baselineStamped = true;

@@ -136,6 +136,69 @@ class WebUnitTests(unittest.TestCase):
             card = next(c for c in cards if c["name"] == "duty")
             self.assertEqual(card["description"], "check messages")
 
+    def test_stop_and_start_emit_task_card_changed_events(self) -> None:
+        """v2.0.30 — POST /stop pauses every active card AND emits one
+        ``task_card_changed`` per flipped card; POST /start flips them
+        back to pending + emits ``resumed`` events. Drives the web UI's
+        on-event Tasks tab refresh when the user clicks Stop/Start."""
+        with TemporaryDirectory() as td:
+            root = _make_session(Path(td))
+            tasks_dir = root / "sessions" / "test-session" / "core" / "tasks"
+            save_card(tasks_dir, TaskCard(name="a", description="", status="pending"))
+            save_card(tasks_dir, TaskCard(name="b", description="", status="working"))
+            save_card(tasks_dir, TaskCard(name="c", description="", status="finished"))
+            app = create_app(root / "sessions", root / "_sessions")
+            with TestClient(app) as client:
+                self.assertEqual(client.post("/api/sessions/test-session/stop").status_code, 200)
+            events_path = root / "_sessions" / "test-session" / "events.jsonl"
+            lines = [json.loads(line) for line in events_path.read_text().splitlines() if line.strip()]
+            paused = [e for e in lines if e.get("type") == "task_card_changed" and e.get("change") == "paused"]
+            self.assertEqual(
+                sorted(e["card"] for e in paused),
+                ["a", "b"],
+                "stop emits one paused event per flipped card; finished cards untouched",
+            )
+
+            with TestClient(app) as client:
+                self.assertEqual(client.post("/api/sessions/test-session/start").status_code, 200)
+            lines = [json.loads(line) for line in events_path.read_text().splitlines() if line.strip()]
+            resumed = [e for e in lines if e.get("type") == "task_card_changed" and e.get("change") == "resumed"]
+            self.assertEqual(
+                sorted(e["card"] for e in resumed),
+                ["a", "b"],
+                "start emits one resumed event per flipped card",
+            )
+
+    def test_put_tasks_emits_task_card_changed_event(self) -> None:
+        """v2.0.30 — web-side PUT /tasks must drop a ``task_card_changed``
+        line onto events.jsonl so the frontend's SSE-driven Tasks tab
+        refreshes on-event (replaces the old 15 s poll). Without this
+        event the UI would only update on the next full page load."""
+        with TemporaryDirectory() as td:
+            root = _make_session(Path(td))
+            app = create_app(root / "sessions", root / "_sessions")
+            with TestClient(app) as client:
+                resp = client.put(
+                    "/api/sessions/test-session/tasks",
+                    json={"name": "duty", "description": "check"},
+                )
+                self.assertEqual(resp.status_code, 200)
+                resp = client.put(
+                    "/api/sessions/test-session/tasks",
+                    json={"name": "duty", "description": "check v2"},
+                )
+                self.assertEqual(resp.status_code, 200)
+                resp = client.delete("/api/sessions/test-session/tasks/duty")
+                self.assertEqual(resp.status_code, 200)
+            events_path = root / "_sessions" / "test-session" / "events.jsonl"
+            lines = [json.loads(line) for line in events_path.read_text().splitlines() if line.strip()]
+            changed = [e for e in lines if e.get("type") == "task_card_changed"]
+            self.assertEqual(
+                [(e["card"], e["change"]) for e in changed],
+                [("duty", "created"), ("duty", "updated"), ("duty", "deleted")],
+                "put→put→delete must emit created, updated, deleted in order",
+            )
+
     def test_put_tasks_by_name_updates_existing_card_not_duplicates(self) -> None:
         """Saving a card by name overwrites it, does not create a second card."""
         with TemporaryDirectory() as td:

@@ -1662,6 +1662,36 @@ button:disabled {
   line-height: 1.5;
 }
 
+/* Task card inline script view — shell-highlighted, monospace block.
+ * Sits in the expanded card body alongside description/progress blocks. */
+.task-card-script {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.5;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+  overflow: auto;
+  max-height: 260px;
+}
+.task-card-script code {
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  white-space: inherit;
+}
+.task-card-script.lang-bash .sh-comment  { color: #6a9955; font-style: italic; }
+.task-card-script.lang-bash .sh-keyword  { color: #c586c0; font-weight: 600; }
+.task-card-script.lang-bash .sh-builtin  { color: #dcdcaa; }
+.task-card-script.lang-bash .sh-string   { color: #ce9178; }
+.task-card-script.lang-bash .sh-variable { color: #9cdcfe; }
+.task-card-script.lang-bash .sh-number   { color: #b5cea8; }
+
 .task-interval-pill {
   font-size: 10px;
   color: var(--muted);
@@ -1857,6 +1887,170 @@ button:disabled {
 
 .task-editor-actions {
   padding-top: 4px;
+}
+
+/* ---- Shell syntax highlight ------------------------------------------- */
+/* Overlay editor: a <pre> renders the highlighted copy; the textarea sits
+ * on top with transparent text + a visible caret. Both share the same font
+ * metrics, padding, wrapping, tab-size, so selection highlight and caret
+ * line up with the highlighted glyphs underneath. */
+.shell-edit {
+  position: relative;
+  min-height: 160px;
+}
+.shell-edit-highlight,
+.shell-edit-input {
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  margin: 0;
+  box-sizing: border-box;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  tab-size: 2;
+  width: 100%;
+  min-height: 160px;
+}
+.shell-edit-highlight {
+  position: absolute;
+  inset: 0;
+  background: var(--bg);
+  color: var(--text);
+  pointer-events: none;
+  overflow: auto;
+  z-index: 0;
+}
+.shell-edit-highlight code {
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  white-space: inherit;
+}
+.shell-edit-input {
+  position: relative;
+  background: transparent;
+  color: transparent;
+  caret-color: var(--text);
+  outline: none;
+  resize: vertical;
+  z-index: 1;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.shell-edit-input::selection {
+  background: var(--accent-glow);
+  color: transparent;
+}
+.shell-edit-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+/* Shared token palette — used by the editor overlay AND by tool-cell
+ * script arg blocks (task_create / task_update). */
+.sh-comment  { color: #6a9955; font-style: italic; }
+.sh-keyword  { color: #c586c0; font-weight: 600; }
+.sh-builtin  { color: #dcdcaa; }
+.sh-string   { color: #ce9178; }
+.sh-variable { color: #9cdcfe; }
+.sh-number   { color: #b5cea8; }
+
+.tool-pre.lang-bash .sh-comment,  .kv-val.lang-bash .sh-comment  { color: #6a9955; font-style: italic; }
+.tool-pre.lang-bash .sh-keyword,  .kv-val.lang-bash .sh-keyword  { color: #c586c0; font-weight: 600; }
+.tool-pre.lang-bash .sh-builtin,  .kv-val.lang-bash .sh-builtin  { color: #dcdcaa; }
+.tool-pre.lang-bash .sh-string,   .kv-val.lang-bash .sh-string   { color: #ce9178; }
+.tool-pre.lang-bash .sh-variable, .kv-val.lang-bash .sh-variable { color: #9cdcfe; }
+.tool-pre.lang-bash .sh-number,   .kv-val.lang-bash .sh-number   { color: #b5cea8; }
+
+/* ---- Diff view for edit / write / task_update ------------------------ */
+/* When a mutation tool renders as a diff, the original input + result
+ * sections are collapsed into a single view showing old→new. `.tool-body-
+ * diff-only` drops the two-section chrome so the diff block fills the
+ * whole body without duplicate padding. */
+.tool-body.tool-body-diff-only {
+  padding: 6px 10px 10px 10px;
+}
+.tool-diff-header {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--dimmed);
+  padding: 2px 0 4px 0;
+  word-break: break-all;
+}
+.tool-diff-subheader {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--dimmed);
+  padding: 6px 0 2px 0;
+}
+.tool-diff-badge {
+  display: inline-block;
+  background: rgba(100, 200, 100, 0.14);
+  color: #6fbf73;
+  padding: 0 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-left: 4px;
+}
+.diff-block {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 0;
+  margin: 0;
+  overflow: auto;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.diff-block code {
+  font: inherit;
+  display: block;
+  width: 100%;
+}
+.diff-line {
+  display: flex;
+  gap: 6px;
+  padding: 0 10px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.diff-prefix {
+  flex: 0 0 10px;
+  color: var(--dimmed);
+  user-select: none;
+  text-align: center;
+}
+.diff-text {
+  flex: 1 1 auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.diff-add {
+  background: rgba(80, 180, 100, 0.09);
+}
+.diff-add .diff-prefix {
+  color: #6fbf73;
+}
+.diff-add .diff-text {
+  color: #b7e7c2;
+}
+.diff-del {
+  background: rgba(220, 80, 80, 0.09);
+}
+.diff-del .diff-prefix {
+  color: #e07070;
+}
+.diff-del .diff-text {
+  color: #f0b5b5;
+}
+.diff-ctx .diff-text {
+  color: var(--dimmed);
 }
 
 /* ====== CONFIG ====== */

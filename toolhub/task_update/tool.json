@@ -1,6 +1,6 @@
 {
   "name": "task_update",
-  "description": "Update fields on an existing task card. Only the fields you pass will change. Pass `script` to overwrite the bash body on disk.",
+  "description": "Edit an existing task card. To change the bash body, pass `old_string` + `new_string` — these behave exactly like the `edit` tool on core/tasks/<name>.sh (exact-string replacement; must appear once unless `replace_all=true`). Metadata fields (`description`, `check_interval`, `progress`, `comments`) are full-replace when passed.",
   "input_schema": {
     "type": "object",
     "properties": {
@@ -8,28 +8,41 @@
         "type": "string",
         "description": "Name of the task card to update."
       },
+      "old_string": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Exact substring to replace in the card's bash script. Must appear once unless replace_all=true."
+      },
+      "new_string": {
+        "type": "string",
+        "description": "Replacement text for the bash script edit. Pair with `old_string`."
+      },
+      "replace_all": {
+        "type": "boolean",
+        "description": "If true, replace every occurrence of old_string in the script. Default false."
+      },
       "description": {
         "type": "string",
-        "description": "New description for the task."
+        "description": "New description for the task (full replace)."
       },
       "check_interval": {
         "type": ["number", "null"],
         "exclusiveMinimum": 0,
         "description": "New cadence in seconds between script runs (must be > 0)."
       },
-      "script": {
-        "type": "string",
-        "description": "New bash body for core/tasks/<name>.sh. Last line must be `[skip]`, `[start]`, `[start] <message>`, or `[done]`."
-      },
       "progress": {
         "type": "string",
-        "description": "Updated progress notes."
+        "description": "Updated progress notes (full replace)."
       },
       "comments": {
         "type": "string",
-        "description": "Updated comments/notes on the task."
+        "description": "Updated comments/notes on the task (full replace)."
       }
     },
-    "required": ["name"]
+    "required": ["name"],
+    "dependentRequired": {
+      "old_string": ["new_string"],
+      "new_string": ["old_string"]
+    }
   }
 }

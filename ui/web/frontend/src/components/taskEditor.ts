@@ -1,6 +1,7 @@
 import { api } from '../api';
 import type { TaskCard } from '../types';
 import { escapeHtml } from '../markdown';
+import { highlightShell } from '../shellHighlight';
 
 export function renderTaskEditor(card: TaskCard | null, sessionId: string, onDone: () => void): HTMLElement {
   const isNew = card === null;
@@ -39,7 +40,10 @@ export function renderTaskEditor(card: TaskCard | null, sessionId: string, onDon
     </div>
     <div class="form-field">
       <label>Script — last line: <code>[skip]</code> / <code>[start]</code> / <code>[start] &lt;msg&gt;</code> / <code>[done]</code></label>
-      <textarea id="te-script" class="task-content-textarea" rows="8">${escapeHtml(scriptVal)}</textarea>
+      <div class="shell-edit" data-shell-edit>
+        <pre class="shell-edit-highlight" aria-hidden="true"><code></code></pre>
+        <textarea id="te-script" class="shell-edit-input" spellcheck="false" rows="8"></textarea>
+      </div>
     </div>
     <div class="form-row task-editor-actions">
       <button class="btn-primary" id="te-save">Save</button>
@@ -48,6 +52,27 @@ export function renderTaskEditor(card: TaskCard | null, sessionId: string, onDon
     </div>
     <div id="te-error" class="form-error hidden"></div>
   `;
+
+  // Wire the shell-highlight overlay: the textarea carries the authoritative
+  // content + receives all keystrokes; the <pre><code> behind it is rewritten
+  // on every input so the colours track the text live, and scroll is mirrored
+  // so the cursor visually lands on the right character.
+  const scriptEl = el.querySelector<HTMLTextAreaElement>('#te-script')!;
+  const highlightCode = el.querySelector<HTMLElement>('.shell-edit-highlight code')!;
+  const highlightPre = el.querySelector<HTMLElement>('.shell-edit-highlight')!;
+  scriptEl.value = scriptVal;
+  const repaint = () => {
+    // Trailing newline workaround — otherwise the last empty line is clipped
+    // because <pre> collapses the final \n.
+    highlightCode.innerHTML = highlightShell(scriptEl.value) + '\n';
+  };
+  const syncScroll = () => {
+    highlightPre.scrollTop = scriptEl.scrollTop;
+    highlightPre.scrollLeft = scriptEl.scrollLeft;
+  };
+  scriptEl.addEventListener('input', repaint);
+  scriptEl.addEventListener('scroll', syncScroll);
+  repaint();
 
   const errorEl = el.querySelector('#te-error') as HTMLDivElement;
 
@@ -61,7 +86,7 @@ export function renderTaskEditor(card: TaskCard | null, sessionId: string, onDon
     const statusEl = el.querySelector('#te-status') as HTMLSelectElement;
     const intervalEl = el.querySelector('#te-interval') as HTMLInputElement;
     const contentEl = el.querySelector('#te-content') as HTMLTextAreaElement;
-    const scriptEl = el.querySelector('#te-script') as HTMLTextAreaElement;
+    // scriptEl is captured above for the highlight-overlay wiring.
 
     const name = nameEl.value.trim();
     if (!name) { showError('Task name is required'); return; }

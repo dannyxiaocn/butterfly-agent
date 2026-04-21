@@ -631,6 +631,13 @@ def _runtime_event_to_display(event: dict) -> list[dict]:
         # the streaming agent cell — without it, the footer only appears on
         # reload via ``per_iteration_usages`` positional pairing.
         "iteration_usage",
+        # v2.0.30: task card CRUD / script-poll transitions. Frontend uses
+        # these to refresh the Tasks tab on-event instead of polling. The
+        # events do not need any transform — their shape is already a
+        # direct display-event ({type, card, change?, ts}).
+        "task_card_changed",
+        "task_check",
+        "task_check_error",
     ):
         return [event]
 

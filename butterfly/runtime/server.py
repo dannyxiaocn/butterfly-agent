@@ -529,16 +529,18 @@ def _cmd_stop(args) -> int:
         _clear_pid(sdir)
         print("Server already stopped.")
         return 0
-    # Wait for graceful shutdown
-    for _ in range(20):  # up to 10 seconds
-        time.sleep(0.5)
+    # Short graceful wait — the server's SIGINT/SIGTERM path completes in
+    # <100 ms on a healthy system; a generous 2 s cap covers slow CI boxes
+    # without leaving the user staring at a blank terminal.
+    for _ in range(20):  # up to 2 seconds (20 × 0.1 s)
+        time.sleep(0.1)
         try:
             os.kill(pid, 0)
         except ProcessLookupError:
             _clear_pid(sdir)
             print("Server stopped.")
             return 0
-    print(f"Warning: server (pid={pid}) did not stop within 10s. Sending SIGKILL...")
+    print(f"Warning: server (pid={pid}) did not stop within 2s. Sending SIGKILL...")
     try:
         os.kill(pid, signal.SIGKILL)
     except ProcessLookupError:

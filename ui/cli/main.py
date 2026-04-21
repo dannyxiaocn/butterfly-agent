@@ -944,6 +944,30 @@ def cmd_agent(args) -> int:
 
 # ── Default: `butterfly` (no subcommand) — boot server + web ──────────────────
 
+def _port_in_use(host: str, port: int) -> bool:
+    """True when something is actively listening on ``host:port``.
+
+    Uses ``connect()`` rather than ``bind()`` — without SO_REUSEADDR, a
+    fresh ``bind()`` is refused while the kernel still holds the port
+    in TIME_WAIT after a recently-stopped server, producing a false
+    positive the moment the user does ``butterfly server stop &&
+    butterfly`` (reported 2026-04-20). ``connect()`` only returns
+    success when a real listener accepts, so TIME_WAIT never leaks
+    through.
+    """
+    import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        s.settimeout(0.2)
+        try:
+            s.connect((host, port))
+            return True
+        except (ConnectionRefusedError, socket.timeout, OSError):
+            return False
+    finally:
+        s.close()
+
+
 def cmd_default(args) -> int:
     """Start server daemon + run web UI in foreground, hang until Ctrl+C.
 
@@ -952,7 +976,7 @@ def cmd_default(args) -> int:
     import signal
     from butterfly.runtime.env import load_dotenv
     from butterfly.runtime.server import (
-        _start_daemon, _is_server_running, _cmd_stop,
+        _start_daemon, _is_server_running, _cmd_stop, _scan_butterfly_daemons,
     )
     load_dotenv()
 
@@ -961,21 +985,36 @@ def cmd_default(args) -> int:
     sessions_dir.mkdir(parents=True, exist_ok=True)
     sys_dir.mkdir(parents=True, exist_ok=True)
 
-    existing = _is_server_running(sys_dir)
-    started_server = False
-    if existing:
-        print(f"butterfly server already running (pid={existing}).")
-    else:
-        rc = _start_daemon(sessions_dir, sys_dir)
-        if rc != 0:
-            return rc
-        started_server = True
-
     from ui.web.app import create_app, _DEFAULT_PORT
     import uvicorn
-    app = create_app(sessions_dir, sys_dir)
     port = int(os.environ.get("BUTTERFLY_WEB_PORT", str(_DEFAULT_PORT)))
     host = os.environ.get("BUTTERFLY_WEB_HOST", "127.0.0.1")
+
+    # Singleton guard — every one of the below states means "another
+    # butterfly is already running", so refuse to start rather than
+    # crashing uvicorn on a port-bind collision or spawning a second
+    # daemon that would race the first on the shared _sessions/ dir.
+    existing = _is_server_running(sys_dir)
+    orphans = [p for p in _scan_butterfly_daemons(sys_dir) if p != existing]
+    web_up = _port_in_use(host, port)
+    if existing or orphans or web_up:
+        print("Another butterfly instance appears to be running:")
+        if existing:
+            print(f"  - tracked daemon pid={existing}")
+        if orphans:
+            print(f"  - orphan daemon(s): {orphans}")
+        if web_up:
+            print(f"  - web UI port {port} is already in use")
+        print(f"Open http://localhost:{port} to use it, or run "
+              f"`butterfly server stop` to terminate everything first.")
+        return 1
+
+    rc = _start_daemon(sessions_dir, sys_dir)
+    if rc != 0:
+        return rc
+    started_server = True
+
+    app = create_app(sessions_dir, sys_dir)
     print(f"butterfly web UI: http://localhost:{port}")
     print("(Ctrl+C to stop server + web)")
 
@@ -984,7 +1023,20 @@ def cmd_default(args) -> int:
     signal.signal(signal.SIGTERM, _stop_all)
 
     try:
-        uvicorn.run(app, host=host, port=port, log_level="warning")
+        # Fast shutdown: cap the graceful-shutdown wait at 1s so open SSE
+        # streams (browser tabs polling /events) can't stall Ctrl+C — the
+        # SSE generator's `await asyncio.sleep(0.3)` is cancellable so it
+        # usually exits immediately, but the cap is the belt-and-suspenders
+        # upper bound. `timeout_keep_alive=2` drops idle HTTP connections
+        # quickly on the second graceful-shutdown phase.
+        uvicorn.run(
+            app,
+            host=host,
+            port=port,
+            log_level="warning",
+            timeout_graceful_shutdown=1,
+            timeout_keep_alive=2,
+        )
     except KeyboardInterrupt:
         pass
     finally:
@@ -1086,14 +1138,48 @@ def _cmd_server_status(_args) -> int:
     return 0
 
 
+def _scan_port_holders(port: int) -> list[int]:
+    """Return PIDs of any process currently listening on ``port``.
+
+    Uses ``lsof -ti :<port>`` (macOS + Linux with lsof installed). If lsof
+    is missing or returns nothing, returns []. Shelling out to lsof keeps
+    us dependency-free — psutil is nice but is a 1 MB install for this
+    one probe.
+    """
+    import subprocess as _sp
+    try:
+        result = _sp.run(
+            ["lsof", "-ti", f":{port}"],
+            capture_output=True, text=True, check=False, timeout=1,
+        )
+    except (OSError, _sp.TimeoutExpired):
+        return []
+    if result.returncode not in (0, 1):
+        return []
+    pids: list[int] = []
+    my_pid = os.getpid()
+    for line in result.stdout.split():
+        try:
+            pid = int(line.strip())
+        except ValueError:
+            continue
+        if pid == my_pid:
+            continue
+        pids.append(pid)
+    return pids
+
+
 def _cmd_server_stop(_args) -> int:
     """Gracefully stop the tracked daemon + every orphan butterfly daemon
-    against the same ``_sessions/`` directory.
+    against the same ``_sessions/`` directory, plus any process holding
+    the web-UI port (the foreground `butterfly` (no-args) shell that
+    runs uvicorn in-process).
 
     ``butterfly.runtime.server._cmd_stop`` only SIGTERMs the PID in
     ``server.pid``. That misses orphan daemons (their PID was never
-    recorded or got overwritten by a later daemon). We SIGTERM them
-    explicitly after scanning ``ps``.
+    recorded or got overwritten by a later daemon) and every foreground
+    `butterfly` CLI shell (never written to server.pid). We SIGTERM them
+    explicitly after scanning ``ps`` / ``lsof``.
     """
     import signal
     from butterfly.runtime.server import (
@@ -1103,7 +1189,13 @@ def _cmd_server_stop(_args) -> int:
 
     tracked = _is_server_running(sys_dir)
     all_pids_before = _scan_butterfly_daemons(sys_dir)
+    from ui.web.app import _DEFAULT_PORT as _WEB_DEFAULT_PORT
+    port = int(os.environ.get("BUTTERFLY_WEB_PORT", str(_WEB_DEFAULT_PORT)))
+    web_holders = _scan_port_holders(port)
+    # De-dupe: a tracked/orphan daemon that happens to also hold the port
+    # only needs one SIGTERM, and the per-source print is clearer this way.
     orphans = [p for p in all_pids_before if p != tracked]
+    web_extras = [p for p in web_holders if p != tracked and p not in orphans]
 
     # 1. Stop the tracked daemon via the runtime module's handler (handles
     #    the graceful-then-SIGKILL loop + clears server.pid).
@@ -1116,11 +1208,15 @@ def _cmd_server_stop(_args) -> int:
     else:
         print("No tracked daemon (server.pid empty or stale).")
 
-    # 2. SIGTERM any orphans. These are unmanaged — no graceful shutdown
-    #    entry point, just the signal.
+    # 2. SIGTERM any orphans + foreground web holders. These are unmanaged
+    #    — no graceful shutdown entry point, just the signal.
+    extra = orphans + web_extras
     if orphans:
         print(f"Found {len(orphans)} orphan daemon(s): {orphans}")
-        for pid in orphans:
+    if web_extras:
+        print(f"Found {len(web_extras)} web-UI process(es) holding port {port}: {web_extras}")
+    if extra:
+        for pid in extra:
             try:
                 os.kill(pid, signal.SIGTERM)
                 print(f"  SIGTERM → pid {pid}")
@@ -1128,10 +1224,12 @@ def _cmd_server_stop(_args) -> int:
                 print(f"  pid {pid} already gone")
             except PermissionError:
                 print(f"  pid {pid}: permission denied (owned by another user?)")
-        # Give them a moment, then verify.
-        time.sleep(0.8)
+        # Give them a moment, then verify. Short window — these have no
+        # graceful-shutdown path, SIGTERM either takes effect fast or not
+        # at all, so a long wait just delays the inevitable SIGKILL.
+        time.sleep(0.3)
         still_alive = []
-        for pid in orphans:
+        for pid in extra:
             try:
                 os.kill(pid, 0)
                 still_alive.append(pid)
@@ -1146,7 +1244,7 @@ def _cmd_server_stop(_args) -> int:
                 except ProcessLookupError:
                     pass
 
-    if tracked is None and not orphans:
+    if tracked is None and not extra:
         print("butterfly server was not running; nothing to stop.")
     return 0
 

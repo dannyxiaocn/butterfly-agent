@@ -87,6 +87,9 @@ export class SSEConnection {
       // tool_use_ids so the handler can stamp the ↑/⛀/↓ footer on live tool
       // cells (matched by data-tool-use-id) and the streaming agent cell.
       'iteration_usage',
+      // v2.0.30: task-card CRUD / script-poll transitions drive the
+      // Tasks tab's on-event refresh (replaces the 15 s poll).
+      'task_card_changed', 'task_check', 'task_check_error',
     ];
 
     for (const type of eventTypes) {
