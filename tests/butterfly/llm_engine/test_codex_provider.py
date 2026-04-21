@@ -699,6 +699,146 @@ async def test_complete_invalid_effort_sends_medium_in_body(monkeypatch):
     assert captured_body.get("reasoning", {}).get("effort") == "medium"
 
 
+# ── Fix 4: warn-log when unsupported thinking_effort clamps to medium ──
+
+
+@pytest.mark.asyncio
+async def test_complete_unsupported_effort_logs_warning(monkeypatch, caplog):
+    """A non-empty unsupported ``thinking_effort`` (notably the Anthropic-only
+    ``"max"``) must log a warning before clamping to ``"medium"`` so the
+    silent YAML-misconfiguration case is visible in logs.
+    """
+    import logging as _logging
+    import httpx
+
+    from butterfly.core.types import Message
+
+    provider = CodexProvider.__new__(CodexProvider)
+    provider.max_tokens = 100
+    provider._conversation_id = "test-conv-warn"
+    provider._pending_reasoning = []
+    provider._pending_builtin_items = []
+    provider._pending_builtin_progress = []
+
+    async def fake_get_auth_async(self, *, force_refresh=False, rejected_token=""):
+        return "token", "acct-1"
+
+    provider._get_auth_async = fake_get_auth_async.__get__(provider, CodexProvider)
+
+    captured_body: dict = {}
+
+    class _FakeResponse:
+        status_code = 200
+        async def aread(self):
+            return b""
+        async def aiter_bytes(self):
+            yield b'data: {"type":"response.completed","response":{"usage":{}}}\n\n'
+
+    class _FakeStreamCtx:
+        def __init__(self, body):
+            captured_body.update(body)
+        async def __aenter__(self):
+            return _FakeResponse()
+        async def __aexit__(self, *args):
+            return False
+
+    class _FakeClient:
+        def __init__(self, *a, **kw):
+            pass
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            return False
+        def stream(self, method, url, *, headers, json, **kw):
+            return _FakeStreamCtx(json)
+
+    monkeypatch.setattr(httpx, "AsyncClient", _FakeClient)
+
+    with caplog.at_level(_logging.WARNING, logger="butterfly.llm_engine.providers.codex"):
+        await provider.complete(
+            messages=[Message(role="user", content="hi")],
+            tools=[],
+            system_prompt="sys",
+            model="gpt-5.4",
+            thinking=True,
+            thinking_effort="max",  # Anthropic-Opus-only — Codex must clamp + warn
+        )
+
+    # Clamped on the wire.
+    assert captured_body.get("reasoning", {}).get("effort") == "medium"
+    # Warning logged with the offending value.
+    warnings = [r for r in caplog.records if r.levelno == _logging.WARNING]
+    assert any("max" in r.getMessage() and "thinking_effort" in r.getMessage() for r in warnings), (
+        f"expected a warning mentioning 'max' and 'thinking_effort'; got: "
+        f"{[r.getMessage() for r in warnings]}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_complete_empty_effort_does_not_warn(monkeypatch, caplog):
+    """An empty / None ``thinking_effort`` (the default path when thinking is
+    off or the caller didn't pass one) must NOT log a warning — logs would be
+    noisy for the common case.
+    """
+    import logging as _logging
+    import httpx
+
+    from butterfly.core.types import Message
+
+    provider = CodexProvider.__new__(CodexProvider)
+    provider.max_tokens = 100
+    provider._conversation_id = "test-conv-empty"
+    provider._pending_reasoning = []
+    provider._pending_builtin_items = []
+    provider._pending_builtin_progress = []
+
+    async def fake_get_auth_async(self, *, force_refresh=False, rejected_token=""):
+        return "token", "acct-1"
+
+    provider._get_auth_async = fake_get_auth_async.__get__(provider, CodexProvider)
+
+    class _FakeResponse:
+        status_code = 200
+        async def aread(self):
+            return b""
+        async def aiter_bytes(self):
+            yield b'data: {"type":"response.completed","response":{"usage":{}}}\n\n'
+
+    class _FakeStreamCtx:
+        def __init__(self, body):
+            pass
+        async def __aenter__(self):
+            return _FakeResponse()
+        async def __aexit__(self, *args):
+            return False
+
+    class _FakeClient:
+        def __init__(self, *a, **kw):
+            pass
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            return False
+        def stream(self, method, url, *, headers, json, **kw):
+            return _FakeStreamCtx(json)
+
+    monkeypatch.setattr(httpx, "AsyncClient", _FakeClient)
+
+    with caplog.at_level(_logging.WARNING, logger="butterfly.llm_engine.providers.codex"):
+        await provider.complete(
+            messages=[Message(role="user", content="hi")],
+            tools=[],
+            system_prompt="sys",
+            model="gpt-5.4",
+            thinking=True,
+            thinking_effort="",  # empty → silent clamp
+        )
+
+    warnings = [r for r in caplog.records if r.levelno == _logging.WARNING]
+    # Empty string is falsy → no warning expected.
+    assert not any("thinking_effort" in r.getMessage() for r in warnings)
+
+
 # ── _read_auth migration (butterfly-owned auth store) ─────────────────────────
 
 

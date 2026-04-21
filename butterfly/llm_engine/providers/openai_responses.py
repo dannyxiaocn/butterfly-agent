@@ -451,10 +451,9 @@ def _format_tool_for_request(tool: "Tool | dict[str, Any]") -> dict[str, Any]:
     spliced using that dict; everything else is wrapped as
     ``type: "function"``.
     """
+    # Raw dict — user-supplied built-in spec OR an already-shaped function
+    # dict; either way, pass through verbatim.
     if isinstance(tool, dict):
-        ttype = tool.get("type", "")
-        if ttype in _BUILTIN_TOOL_TYPES:
-            return dict(tool)
         return dict(tool)
 
     builtin = getattr(tool, "to_builtin_dict", None)

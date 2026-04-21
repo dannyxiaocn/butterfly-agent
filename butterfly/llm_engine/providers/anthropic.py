@@ -7,6 +7,18 @@ from butterfly.core.provider import Provider
 from butterfly.core.types import Message, TokenUsage, ToolCall
 from butterfly.llm_engine.model_catalog import ModelSpec, get_model_spec
 
+# Anthropic SDK floor: v0.83.0 — first version whose Pydantic request model
+# accepts BOTH first-class kwargs this provider emits:
+#   * ``output_config``  (introduced 0.60; used by ``_apply_thinking_kwargs``
+#                         when mode=adaptive)
+#   * ``cache_control``  (top-level request field added 0.83; used by
+#                         ``_apply_cache_auto`` for server-managed caching)
+# Older SDKs raise ``TypeError: unexpected keyword argument`` before the
+# request ever leaves the process. Integration test
+# ``tests/butterfly/llm_engine/test_anthropic_sdk_integration.py`` pins this
+# against a real ``httpx.MockTransport`` so future kwarg drift is caught
+# without waiting for a first live call to crash.
+
 if TYPE_CHECKING:
     from butterfly.core.tool import Tool
 

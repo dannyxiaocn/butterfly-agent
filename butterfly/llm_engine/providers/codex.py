@@ -36,12 +36,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import re
 import time
 import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, ClassVar
+
+logger = logging.getLogger(__name__)
 
 from butterfly.core.provider import Provider
 from butterfly.core.types import TokenUsage, ToolCall
@@ -220,7 +223,23 @@ class CodexProvider(Provider):
             else system_prompt
         )
         effective_model = model if _is_codex_compatible_model(model) else self.DEFAULT_MODEL
-        effort = thinking_effort if thinking_effort in _VALID_EFFORTS else "medium"
+        # Codex accepts a fixed vocabulary of effort values. Anything else —
+        # including the Anthropic-Opus-4.7-only ``"max"`` — is clamped to
+        # ``"medium"`` so the request still lands, but we log a warning so a
+        # mis-copied YAML doesn't silently degrade reasoning quality.
+        if thinking_effort in _VALID_EFFORTS:
+            effort = thinking_effort
+        else:
+            if thinking_effort:
+                logger.warning(
+                    "Codex model %r received unsupported thinking_effort=%r "
+                    "(valid: %s); falling back to 'medium'. "
+                    "'max' is Anthropic-Opus-4.7-only.",
+                    effective_model,
+                    thinking_effort,
+                    sorted(_VALID_EFFORTS),
+                )
+            effort = "medium"
         body = _build_request_body(
             effective_model,
             full_system,
@@ -546,12 +565,9 @@ def _format_tool_for_request(tool: "Tool | dict[str, Any]") -> dict[str, Any]:
     needs explicit shaping. Tools with ``to_builtin_dict()`` return a
     non-None value are spliced via that dict.
     """
-    # Raw dict — user-supplied built-in spec, pass through verbatim.
+    # Raw dict — user-supplied built-in spec OR an already-shaped function
+    # dict; either way, pass through verbatim.
     if isinstance(tool, dict):
-        ttype = tool.get("type", "")
-        if ttype in _BUILTIN_TOOL_TYPES:
-            return dict(tool)
-        # An explicit function-dict (already shaped); pass through too.
         return dict(tool)
 
     # Tool object — prefer the built-in dict if present.
