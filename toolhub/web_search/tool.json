@@ -1,0 +1,9 @@
+{
+  "name": "web_search",
+  "description": "Search the web via the provider's built-in web_search tool. This is a provider-native tool executed server-side by OpenAI's Responses API (via the Codex OAuth or OpenAI Responses provider). Enable it by listing `web_search` in your agent's tools.md. The LLM decides when and how to query — Butterfly does not execute this locally. Intermediate search progress streams back as `web_search_call.searching` events the UI can render. For API-key-based (non-native) web search, use `web_search_brave` or `web_search_tavily` instead.",
+  "input_schema": {
+    "type": "object",
+    "properties": {},
+    "required": []
+  }
+}

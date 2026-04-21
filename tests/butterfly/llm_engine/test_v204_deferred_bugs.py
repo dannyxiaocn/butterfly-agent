@@ -32,7 +32,7 @@ async def test_sse_parser_recovers_trailing_event_without_double_newline():
             for p in payloads:
                 yield p
 
-    text, _tcs, _usage, _reasoning = await _parse_sse_stream(_Resp(), None)
+    text, *_ = await _parse_sse_stream(_Resp(), None)
     assert text == "hello world", f"trailing event was lost: {text!r}"
 
 
@@ -51,7 +51,7 @@ async def test_sse_parser_silently_drops_malformed_trailing_buffer():
             for p in payloads:
                 yield p
 
-    text, _tcs, _usage, _reasoning = await _parse_sse_stream(_Resp(), None)
+    text, *_ = await _parse_sse_stream(_Resp(), None)
     assert text == "only this"
 
 

@@ -69,6 +69,17 @@ def _models_for(provider: str) -> list[dict[str, Any]]:
             "max_context_tokens": spec.max_context_tokens,
             "exposes_reasoning_tokens": spec.exposes_reasoning_tokens,
             "default": spec.default,
+            # Anthropic-specific thinking/cache knobs — always serialized so
+            # the UI editor can render them when present. ``None`` becomes
+            # ``null`` in JSON, which the frontend treats as "inherit the
+            # provider default" (non-Anthropic providers land here).
+            "thinking_mode": spec.thinking_mode,
+            "thinking_effort": spec.thinking_effort,
+            "thinking_display": spec.thinking_display,
+            "thinking_budget_tokens": spec.thinking_budget_tokens,
+            "interleaved_thinking_beta": spec.interleaved_thinking_beta,
+            "cache_strategy": spec.cache_strategy,
+            "cache_ttl": spec.cache_ttl,
         }
         for spec in get_provider_models(provider)
     ]
