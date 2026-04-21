@@ -1,0 +1,22 @@
+{
+  "name": "subagent_resume",
+  "description": "Send a follow-up message to a sub-agent you've already spawned (via subagent_new) and wait for its reply. The sub-agent keeps its full conversation history — treat this like continuing a chat with the same collaborator, not like starting a fresh task. Use `subagent_list` first if you don't remember the exact name. If the target sub-agent was stopped, this call auto-restarts it before posting. On timeout, the call returns a notice; the sub-agent keeps running and you can `subagent_resume` it again later with a larger `timeout_seconds`.",
+  "input_schema": {
+    "type": "object",
+    "required": ["name", "message"],
+    "properties": {
+      "name": {
+        "type": "string",
+        "description": "The `name` you gave the sub-agent when calling `subagent_new`. Case- and space-sensitive. When multiple children share a name (duplicate spawns) the most recently created one is selected."
+      },
+      "message": {
+        "type": "string",
+        "description": "The follow-up message to send. Written as you would write a new user turn in a chat — the child sees it appended to its existing conversation."
+      },
+      "timeout_seconds": {
+        "type": "integer",
+        "description": "Sync wait timeout (default 600s). On timeout the call returns a timeout notice; the child keeps running and you can resume again later."
+      }
+    }
+  }
+}

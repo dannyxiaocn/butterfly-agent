@@ -22,12 +22,12 @@ from butterfly.tool_engine.sub_agent import (
 )
 
 
-_TOOL_JSON = Path(__file__).resolve().parent.parent.parent.parent / "toolhub" / "sub_agent" / "tool.json"
+_TOOL_JSON = Path(__file__).resolve().parent.parent.parent.parent / "toolhub" / "subagent_new" / "tool.json"
 
 
 def test_tool_json_declares_backgroundable_with_required_inputs() -> None:
     schema = json.loads(_TOOL_JSON.read_text(encoding="utf-8"))
-    assert schema["name"] == "sub_agent"
+    assert schema["name"] == "subagent_new"
     assert schema["backgroundable"] is True
     assert "task" in schema["input_schema"]["properties"]
     assert "mode" in schema["input_schema"]["properties"]
