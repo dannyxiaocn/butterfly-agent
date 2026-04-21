@@ -1377,3 +1377,95 @@ async def test_tick_cancel_without_thinking_writes_no_blank_turn(tmp_path):
     # What we're asserting: NO turn entry (interrupted or otherwise).
     turns = [e for e in ctx if e.get("type") == "turn"]
     assert turns == []
+
+
+# ── v2.0.33: tick-cancel mirrors chat-cancel for tool_use messages ──
+
+
+@pytest.mark.asyncio
+async def test_tick_cancel_preserves_tool_use_blocks(tmp_path):
+    """A TaskCard tick cancelled during tool execution must persist the
+    committed tool_use + tool_result messages on disk so reload surfaces
+    the tool cell. Pre-v2.0.33 ``_do_tick``'s CancelledError branch
+    rolled ``self._agent._history`` back to the pre-tick snapshot and
+    wrote an empty-``messages`` turn — meta sessions (100% TaskItem
+    workload) therefore lost every tool-call cell on refresh after
+    ⚡ interrupt."""
+    tool_started = asyncio.Event()
+
+    @tool(description="hangs until cancelled")
+    async def hang_tool() -> str:
+        tool_started.set()
+        await asyncio.Event().wait()
+        return "never"
+
+    class ToolThenHangProvider(Provider):
+        def __init__(self):
+            self.calls = 0
+
+        async def complete(
+            self,
+            messages,
+            tools,
+            system_prompt,
+            model,
+            *,
+            on_text_chunk=None,
+            cache_system_prefix="",
+            cache_last_human_turn=False,
+            thinking=False,
+            thinking_budget=8000,
+            thinking_effort="high",
+            on_thinking_start=None,
+            on_thinking_end=None,
+        ):
+            self.calls += 1
+            if self.calls == 1:
+                return (
+                    "",
+                    [ToolCall(id="tc1", name="hang_tool", input={})],
+                    TokenUsage(input_tokens=1, output_tokens=1),
+                )
+            await asyncio.Event().wait()
+            return ("never", [], TokenUsage())
+
+    agent = Agent(provider=ToolThenHangProvider(), tools=[hang_tool])
+    session = make_session(tmp_path, agent, session_id="tick-tool")
+    card = TaskCard(name="cardname", description="do a tool", status="pending")
+
+    tick_task = asyncio.create_task(session._do_tick(card))
+    await asyncio.wait_for(tool_started.wait(), timeout=2.0)
+    tick_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await tick_task
+
+    turns = [
+        e for e in read_jsonl(session.system_dir / "context.jsonl")
+        if e.get("type") == "turn"
+    ]
+    assert len(turns) == 1, f"expected one interrupted turn, got {turns}"
+    t = turns[0]
+    assert t.get("interrupted") is True
+    assert t.get("has_streaming_tools") is True
+
+    msgs = t.get("messages") or []
+    # [user(marker), assistant(tool_use), tool(cancelled-result)]
+    assert len(msgs) == 3
+    assert msgs[0]["role"] == "user"
+    assert msgs[0]["content"].startswith("[Task:cardname")
+    assert msgs[1]["role"] == "assistant"
+    assistant_blocks = msgs[1]["content"]
+    assert any(
+        b.get("type") == "tool_use" and b.get("name") == "hang_tool"
+        for b in assistant_blocks
+    ), f"expected tool_use block in assistant content, got {assistant_blocks}"
+    assert msgs[2]["role"] == "tool"
+
+    # Reload via FileIPC.tail_history — the tool cell must resurrect.
+    from butterfly.runtime.ipc import FileIPC
+    ipc = FileIPC(session.system_dir)
+    display_events = [ev for ev, _off in ipc.tail_history()]
+    tool_displays = [ev for ev in display_events if ev.get("type") == "tool"]
+    assert any(ev.get("name") == "hang_tool" for ev in tool_displays), (
+        f"expected tool display on reload, got {display_events}"
+    )
