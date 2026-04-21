@@ -88,10 +88,22 @@ export function createPanel(): HTMLElement {
     // Bind tab buttons
     el.querySelectorAll('.panel-tab').forEach(btn => {
       btn.addEventListener('click', () => {
-        activeTab = (btn as HTMLElement).dataset.tab as PanelTab;
+        const next = (btn as HTMLElement).dataset.tab as PanelTab;
+        activeTab = next;
         editingTask = null;
         configMode = 'view';
         render();
+        // Fire the one-shot panel refresh from the tab-switch side, NOT
+        // from render(). render() is called reactively from many store
+        // signals (sessions poll, panel emit, currentSession); if it also
+        // kicked off refreshPanel, the `store.emit('panel')` inside
+        // refreshPanel → 'panel' listener → render() → another
+        // refreshPanel cycle turns into a 2^N explosion that pins the
+        // main thread and starves other tab clicks. Keep refresh
+        // triggers to: tab switch, session attach, and SSE signals.
+        if (next === 'panel' && store.currentSessionId) {
+          void refreshPanel();
+        }
       });
     });
 
@@ -100,11 +112,6 @@ export function createPanel(): HTMLElement {
       bindTasksTab();
     } else if (activeTab === 'panel') {
       bindPanelTab();
-      // First render of the Panel tab — pull fresh entries once so we
-      // don't show a stale list. Subsequent updates arrive via the
-      // `panelRefreshRequest` store event driven by SSE (v2.0.30 —
-      // replaces the old 2 s setInterval poll).
-      void refreshPanel();
     } else {
       bindConfigTab();
     }
@@ -1185,6 +1192,13 @@ export function createPanel(): HTMLElement {
     panelDetails.clear();
     store.panelEntries = [];
     render();
+    // Re-attaching mid-session while already on Panel should still
+    // populate the list. Matches the old `updatePanelPolling()` side
+    // effect — after the tab-switch refactor above, render() no longer
+    // self-triggers a fetch.
+    if (activeTab === 'panel' && store.currentSessionId) {
+      void refreshPanel();
+    }
   });
 
   render();
