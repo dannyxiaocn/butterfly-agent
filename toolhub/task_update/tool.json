@@ -39,6 +39,10 @@
         "description": "Updated comments/notes on the task (full replace)."
       }
     },
-    "required": ["name"]
+    "required": ["name"],
+    "dependentRequired": {
+      "old_string": ["new_string"],
+      "new_string": ["old_string"]
+    }
   }
 }
