@@ -101,6 +101,11 @@ class KimiAnthropicProvider(AnthropicProvider):
     _supports_cache_control: ClassVar[bool] = False
     _supports_thinking: ClassVar[bool] = True
     _thinking_uses_betas: ClassVar[bool] = False
+    # Kimi's Anthropic-compat endpoint does not recognise the adaptive-thinking
+    # request shape — force the legacy ``enabled`` branch regardless of what
+    # the model catalog says. The branch then routes via ``extra_body`` (the
+    # Kimi-specific shape) because ``_thinking_uses_betas`` is False.
+    _supports_adaptive_thinking: ClassVar[bool] = False
 
     def __init__(
         self,

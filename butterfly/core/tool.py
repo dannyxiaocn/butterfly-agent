@@ -75,7 +75,21 @@ def _inject_backgroundable_fields(schema: dict) -> dict:
 
 
 class Tool:
-    """An external action that an agent can call."""
+    """An external action that an agent can call.
+
+    A Tool can be one of two kinds:
+
+    1. **Function tool** (default) — Butterfly owns the executor; the provider
+       receives a ``type: "function"`` schema and the server calls back via
+       ``function_call`` items.
+    2. **Provider-native built-in** — the provider (currently OpenAI's
+       Responses API / Codex OAuth) executes the tool server-side. Butterfly
+       only declares it at request time via a raw ``{"type": "web_search"}``
+       (or similar) dict. Direct ``execute()`` calls raise
+       ``NotImplementedError``. Set ``builtin_dict`` at construction time to
+       opt in; ``to_builtin_dict()`` will then return the shape the provider
+       needs to splice into its ``tools=[]`` list.
+    """
 
     def __init__(
         self,
@@ -84,6 +98,7 @@ class Tool:
         func: Callable,
         schema: dict | None = None,
         backgroundable: bool = False,
+        builtin_dict: dict | None = None,
     ) -> None:
         self.name = name
         self.backgroundable = backgroundable
@@ -95,6 +110,11 @@ class Tool:
             self.schema = base_schema
             self.description = description
         self._func = func
+        # Non-empty dict ⇒ provider-native built-in. Stored verbatim so the
+        # provider can splice it into its tools list without re-shaping.
+        self._builtin_dict: dict | None = (
+            dict(builtin_dict) if builtin_dict else None
+        )
 
     async def execute(self, **kwargs: Any) -> str:
         result = self._func(**kwargs)
@@ -110,12 +130,31 @@ class Tool:
             "input_schema": self.schema,
         }
 
+    def to_builtin_dict(self) -> dict | None:
+        """Return the raw provider-native tool dict (e.g. ``{"type": "web_search"}``).
+
+        Returns ``None`` for regular function tools. Providers that support
+        built-in tools (Codex / OpenAI Responses) detect a truthy return here
+        and splice the dict into their ``tools=[]`` request list verbatim
+        rather than wrapping it as a function tool.
+        """
+        if self._builtin_dict is None:
+            return None
+        # Return a copy so caller mutations don't leak into later requests.
+        return dict(self._builtin_dict)
+
+    @property
+    def is_builtin(self) -> bool:
+        """True if this tool is a provider-native built-in."""
+        return self._builtin_dict is not None
+
 
 def tool(
     name: str | None = None,
     description: str | None = None,
     schema: dict | None = None,
     backgroundable: bool = False,
+    builtin_dict: dict | None = None,
 ) -> Callable:
     """Decorator to define a Tool from a function.
 
@@ -137,6 +176,7 @@ def tool(
             func=func,
             schema=schema,
             backgroundable=backgroundable,
+            builtin_dict=builtin_dict,
         )
 
     # Support @tool without parentheses

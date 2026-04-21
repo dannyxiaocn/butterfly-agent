@@ -89,7 +89,7 @@ async def test_kimi_openai_streaming_tool_calls_and_choice_usage_fallback():
         messages=[Message(role="user", content="find butterfly")],
         tools=[],
         system_prompt="sys",
-        model="kimi-k2",
+        model="kimi-for-coding",
         on_text_chunk=lambda _chunk: None,
     )
 

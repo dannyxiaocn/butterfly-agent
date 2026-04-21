@@ -92,6 +92,8 @@ def test_extract_usage_from_obj_none_returns_zero():
 def test_consume_extra_blocks_drains():
     p = OpenAIResponsesProvider.__new__(OpenAIResponsesProvider)
     p._pending_reasoning = [{"type": "reasoning", "id": "rs_a"}]
+    p._pending_builtin_items = []
+    p._pending_builtin_progress = []
     assert p.consume_extra_blocks() == [{"type": "reasoning", "id": "rs_a"}]
     assert p.consume_extra_blocks() == []
 
@@ -240,6 +242,8 @@ async def test_complete_with_effort_none_omits_reasoning_block(monkeypatch):
     provider.max_tokens = 100
     provider._conversation_id = "test-conv"
     provider._pending_reasoning = []
+    provider._pending_builtin_items = []
+    provider._pending_builtin_progress = []
 
     captured: dict = {}
 

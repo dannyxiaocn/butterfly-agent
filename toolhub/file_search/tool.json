@@ -1,0 +1,15 @@
+{
+  "name": "file_search",
+  "description": "Search across OpenAI vector stores via the provider's built-in file_search tool. This is a provider-native tool executed server-side by OpenAI's Responses API (Codex OAuth / OpenAI Responses provider). Enable it by listing `file_search` in your agent's tools.md. At least one vector store id must be passed through when the agent's tool config builds the request — see agent docs.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "vector_store_ids": {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "OpenAI vector store IDs to search against. Pass via the agent config's built-in tool settings; the LLM does NOT supply this itself."
+      }
+    },
+    "required": []
+  }
+}

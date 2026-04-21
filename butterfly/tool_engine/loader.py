@@ -358,6 +358,34 @@ class ToolLoader:
                     return await executor.execute(**kwargs)
                 return _impl
 
+        # Provider-native built-in tools. These executors never actually
+        # run — the loader wraps them in a Tool carrying ``builtin_dict``
+        # so the provider splices ``{"type": "web_search", ...}`` (etc.)
+        # into its tools list. Local invocation raises NotImplementedError.
+        elif tool_name == "web_search":
+            executor_cls = getattr(mod, "WebSearchExecutor", None)
+            if executor_cls:
+                executor = executor_cls()
+                async def _impl(**kwargs: Any) -> str:
+                    return await executor.execute(**kwargs)
+                return _impl
+
+        elif tool_name == "file_search":
+            executor_cls = getattr(mod, "FileSearchExecutor", None)
+            if executor_cls:
+                executor = executor_cls()
+                async def _impl(**kwargs: Any) -> str:
+                    return await executor.execute(**kwargs)
+                return _impl
+
+        elif tool_name == "code_interpreter":
+            executor_cls = getattr(mod, "CodeInterpreterExecutor", None)
+            if executor_cls:
+                executor = executor_cls()
+                async def _impl(**kwargs: Any) -> str:
+                    return await executor.execute(**kwargs)
+                return _impl
+
         # Generic: look for an Executor class or execute function
         executor_cls = getattr(mod, "Executor", None)
         if executor_cls:
@@ -390,6 +418,12 @@ class ToolLoader:
                 raise NotImplementedError(f"Tool '{name}' has no executor in toolhub.")
             impl = _stub
 
+        # Provider-native built-in tools carry a module-level
+        # ``builtin_dict`` on their executor class — pick it up so the
+        # Tool wraps the raw ``{"type": "web_search"}`` (etc.) shape that
+        # Codex/OpenAI Responses splice into ``tools=[]``.
+        builtin_dict = self._load_builtin_dict(tool_name)
+
         backgroundable = bool(schema_data.get("backgroundable", False))
         return Tool(
             name=name,
@@ -397,7 +431,34 @@ class ToolLoader:
             func=impl,
             schema=input_schema,
             backgroundable=backgroundable,
+            builtin_dict=builtin_dict,
         )
+
+    def _load_builtin_dict(self, tool_name: str) -> dict | None:
+        """Look up ``builtin_dict`` on the executor module, if any.
+
+        The lookup is best-effort: built-in executors declare a class
+        attribute called ``builtin_dict`` on their executor class (e.g.
+        ``WebSearchExecutor.builtin_dict``). Regular toolhub modules don't
+        define one and this returns ``None``.
+        """
+        mod = _load_executor_module(tool_name, self._toolhub_dir)
+        if mod is None:
+            return None
+        # Prefer the known class-name pattern first to keep lookup cheap;
+        # fall back to scanning module attrs for an Executor-named class
+        # that happens to carry ``builtin_dict``.
+        candidates: list[str] = [
+            f"{''.join(p.title() for p in tool_name.split('_'))}Executor",
+            "Executor",
+        ]
+        for cls_name in candidates:
+            cls = getattr(mod, cls_name, None)
+            if cls is not None:
+                spec = getattr(cls, "builtin_dict", None)
+                if spec:
+                    return dict(spec)
+        return None
 
     def load_from_tool_md(self, tool_md_path: Path) -> list[Tool]:
         """Load all tools listed in a tools.md file."""

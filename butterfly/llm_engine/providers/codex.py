@@ -36,12 +36,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import re
 import time
 import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, ClassVar
+
+logger = logging.getLogger(__name__)
 
 from butterfly.core.provider import Provider
 from butterfly.core.types import TokenUsage, ToolCall
@@ -76,6 +79,11 @@ _JWT_AUTH_CLAIM = "https://api.openai.com/auth"
 _DEFAULT_READ_TIMEOUT = 600.0  # gpt-5 xhigh routinely exceeds 120s before first token
 _ORIGINATOR = "codex_cli_rs"  # matches openai/codex; "pi" is not on the server allowlist
 _MAX_SSE_BUFFER_BYTES = 1_048_576  # 1 MiB — defend against a server that never sends \n\n
+# Per-chunk idle watchdog: if the socket is still open but no bytes arrive for
+# this many seconds, treat the stream as stalled and raise. Keeps UX tight
+# without waiting out the full ``_DEFAULT_READ_TIMEOUT``. Tests monkey-patch
+# this down to sub-second values.
+_CHUNK_IDLE_TIMEOUT = 45.0
 
 # Module-level lock serializes token-refresh writes to ~/.butterfly/auth.json
 # across concurrent providers in the same process. File-level cross-process
@@ -87,6 +95,34 @@ _REFRESH_LOCK = asyncio.Lock()
 # else (Anthropic / Kimi / Gemini / typos / legacy names) falls back to
 # ``DEFAULT_MODEL``. Covers gpt-*, o-series (o1/o3/o4/...), codex-*, fine-tunes.
 _CODEX_MODEL_ALLOW_RE = re.compile(r"^(gpt-|o\d+(-|$)|codex-|ft:gpt-)", re.IGNORECASE)
+
+# Provider-native built-in tool ``type`` names (Responses API). When any of
+# these appears as a top-level tool-dict type the provider passes the dict
+# through verbatim (NOT wrapped as ``type: "function"``). It also unlocks a
+# matching family of SSE ``response.<tool>_call.*`` events that we route into
+# the ``builtin_progress`` / ``builtin_items`` channels instead of the
+# assistant-text channel.
+_BUILTIN_TOOL_TYPES: frozenset[str] = frozenset({
+    "web_search",
+    "file_search",
+    "code_interpreter",
+    "image_generation",
+    "mcp",
+    "computer_use_preview",
+})
+
+# ``item.type`` strings seen on ``response.output_item.done`` for built-in
+# tool calls — captured into ``builtin_items`` so they round-trip back into
+# the next turn's ``input[]``.
+_BUILTIN_ITEM_TYPES: frozenset[str] = frozenset({
+    "web_search_call",
+    "file_search_call",
+    "code_interpreter_call",
+    "image_generation_call",
+    "mcp_call",
+    "mcp_list_tools",
+    "computer_call",
+})
 
 
 def _is_codex_compatible_model(model: str | None) -> bool:
@@ -124,15 +160,46 @@ class CodexProvider(Provider):
         self._conversation_id = str(uuid.uuid4())
         # Reasoning items captured from the last stream; drained by consume_extra_blocks().
         self._pending_reasoning: list[dict[str, Any]] = []
+        # Captured built-in tool items (one per output_item.done with a
+        # ``web_search_call`` / ``file_search_call`` / ... type). Drained by
+        # ``consume_extra_blocks`` so they round-trip into the next turn's
+        # ``input[]`` — same lifecycle as reasoning items.
+        self._pending_builtin_items: list[dict[str, Any]] = []
+        # Progress events captured during streaming. Drained by
+        # ``consume_builtin_tool_events`` for UI / telemetry. Each entry is a
+        # dict ``{"tool_type": str, "phase": str, "payload": dict}``.
+        self._pending_builtin_progress: list[dict[str, Any]] = []
 
     # ------------------------------------------------------------------
     # Provider interface
     # ------------------------------------------------------------------
 
     def consume_extra_blocks(self) -> list[dict]:
-        blocks = self._pending_reasoning
+        """Drain reasoning items AND captured built-in-tool items.
+
+        The agent loop appends these verbatim to the last assistant message
+        so they round-trip to the provider on the next turn. Built-in-tool
+        items (``web_search_call`` etc.) are re-echoed the same way as
+        reasoning items: the server validates them by ``id`` + item type.
+        """
+        blocks = self._pending_reasoning + self._pending_builtin_items
         self._pending_reasoning = []
+        self._pending_builtin_items = []
         return blocks
+
+    def consume_builtin_tool_events(self) -> list[dict]:
+        """Drain captured built-in-tool progress events from the last stream.
+
+        Each entry is ``{"tool_type": str, "phase": str, "payload": dict}``.
+        ``phase`` is one of ``{in_progress, searching, completed, interpreting,
+        generating, partial_image, failed, code_delta, code_done,
+        arguments_delta}``. Callers use these for UI rendering of
+        intermediate states — failure is represented as a progress event
+        with ``phase == "failed"``, never raised.
+        """
+        events = self._pending_builtin_progress
+        self._pending_builtin_progress = []
+        return events
 
     async def complete(
         self,
@@ -156,7 +223,23 @@ class CodexProvider(Provider):
             else system_prompt
         )
         effective_model = model if _is_codex_compatible_model(model) else self.DEFAULT_MODEL
-        effort = thinking_effort if thinking_effort in _VALID_EFFORTS else "medium"
+        # Codex accepts a fixed vocabulary of effort values. Anything else —
+        # including the Anthropic-Opus-4.7-only ``"max"`` — is clamped to
+        # ``"medium"`` so the request still lands, but we log a warning so a
+        # mis-copied YAML doesn't silently degrade reasoning quality.
+        if thinking_effort in _VALID_EFFORTS:
+            effort = thinking_effort
+        else:
+            if thinking_effort:
+                logger.warning(
+                    "Codex model %r received unsupported thinking_effort=%r "
+                    "(valid: %s); falling back to 'medium'. "
+                    "'max' is Anthropic-Opus-4.7-only.",
+                    effective_model,
+                    thinking_effort,
+                    sorted(_VALID_EFFORTS),
+                )
+            effort = "medium"
         body = _build_request_body(
             effective_model,
             full_system,
@@ -202,12 +285,21 @@ class CodexProvider(Provider):
                             _raise_from_status(
                                 status, body_bytes.decode("utf-8", errors="replace")[:500]
                             )
-                        text, tool_calls, usage, reasoning_items = await _parse_sse_stream(
+                        (
+                            text,
+                            tool_calls,
+                            usage,
+                            reasoning_items,
+                            builtin_items,
+                            builtin_progress,
+                        ) = await _parse_sse_stream(
                             resp, on_text_chunk,
                             on_thinking_start=on_thinking_start,
                             on_thinking_end=on_thinking_end,
                         )
                         self._pending_reasoning = reasoning_items
+                        self._pending_builtin_items = builtin_items
+                        self._pending_builtin_progress = builtin_progress
                         return text, tool_calls, usage
                 except httpx.TimeoutException as exc:
                     raise ProviderTimeoutError(
@@ -259,7 +351,17 @@ class CodexProvider(Provider):
                 _write_auth(auth)
                 access_token = tokens["access_token"]
 
-        account_id = _extract_account_id(access_token, tokens.get("id_token", ""))
+        # Prefer the persisted account_id — _refresh_access_token_async always
+        # re-extracts it from the fresh access_token and stores it on the
+        # tokens dict, so reading it here picks up any rotation the server
+        # performed during refresh. Falls back to extracting from the JWT for
+        # the (rare) legacy case where the persisted auth.json pre-dates this
+        # field (e.g. a CLI-migrated file).
+        persisted_account_id = tokens.get("account_id", "") if isinstance(tokens, dict) else ""
+        if persisted_account_id:
+            account_id = persisted_account_id
+        else:
+            account_id = _extract_account_id(access_token, tokens.get("id_token", ""))
         return access_token, account_id
 
 
@@ -448,8 +550,34 @@ def _build_request_body(
         body["reasoning"] = {"effort": thinking_effort, "summary": "auto"}
         body["include"] = ["reasoning.encrypted_content"]
     if tools:
-        body["tools"] = [_tool_to_responses_api(t) for t in tools]
+        body["tools"] = [_format_tool_for_request(t) for t in tools]
     return body
+
+
+def _format_tool_for_request(tool: "Tool | dict[str, Any]") -> dict[str, Any]:
+    """Shape a single entry of a ``tools=[]`` list for the Responses API.
+
+    Accepts either a :class:`butterfly.core.tool.Tool` or a raw dict. Dicts
+    whose ``type`` names a provider-native built-in (``web_search``,
+    ``file_search``, etc.) pass through verbatim — the Responses API expects
+    each as a flat dict with additional per-tool fields (e.g.
+    ``file_search`` wants ``vector_store_ids``). Only ``type: "function"``
+    needs explicit shaping. Tools with ``to_builtin_dict()`` return a
+    non-None value are spliced via that dict.
+    """
+    # Raw dict — user-supplied built-in spec OR an already-shaped function
+    # dict; either way, pass through verbatim.
+    if isinstance(tool, dict):
+        return dict(tool)
+
+    # Tool object — prefer the built-in dict if present.
+    builtin = getattr(tool, "to_builtin_dict", None)
+    if callable(builtin):
+        spec = builtin()
+        if spec:
+            return dict(spec)
+
+    return _tool_to_responses_api(tool)
 
 
 def _tool_to_responses_api(tool: "Tool") -> dict[str, Any]:
@@ -565,6 +693,23 @@ def _convert_assistant(msg: "Message") -> list[dict[str, Any]]:
                 "name": block.get("name", ""),
                 "arguments": json.dumps(block.get("input", {})),
             })
+        elif btype in _BUILTIN_ITEM_TYPES:
+            # Provider-native built-in tool call captured on a previous turn
+            # (``web_search_call``, ``file_search_call``, etc.). Replay
+            # verbatim so the server can validate ``id`` + item state — same
+            # pattern as ``reasoning`` blocks above.
+            flush_text()
+            # Strip None values so the server doesn't see schema-invalid
+            # ``field: null`` — the Responses API rejects those on some
+            # built-in types (e.g. ``file_search_call.queries`` must be a
+            # list, not null). Also drop Butterfly-internal bookkeeping
+            # keys that aren't part of the API spec.
+            item = {
+                k: v
+                for k, v in block.items()
+                if v is not None and not k.startswith("_")
+            }
+            result.append(item)
 
     flush_text()
     return result
@@ -619,13 +764,58 @@ def _extract_summary_text(item: dict[str, Any]) -> str:
     return "\n\n".join(pieces)
 
 
+_BUILTIN_EVENT_RE = re.compile(
+    r"^response\.(?P<tool>web_search_call|file_search_call|code_interpreter_call|"
+    r"image_generation_call|mcp_call|mcp_list_tools|computer_call)\.(?P<phase>.+)$"
+)
+# ``response.mcp_call_arguments.delta`` uses an underscore-separated tool
+# prefix rather than a dotted one — handle it separately so the regex above
+# stays narrow.
+_MCP_ARGS_ETYPE = "response.mcp_call_arguments.delta"
+
+
+def _classify_builtin_event(etype: str) -> tuple[str, str] | None:
+    """Map an SSE ``type`` to ``(tool_type, phase)`` if it's a built-in-tool event.
+
+    Returns ``None`` for unrelated events. ``phase`` is normalised to one of
+    the values listed in :py:meth:`CodexProvider.consume_builtin_tool_events`.
+    """
+    if etype == _MCP_ARGS_ETYPE:
+        return "mcp_call", "arguments_delta"
+    m = _BUILTIN_EVENT_RE.match(etype)
+    if not m:
+        return None
+    tool = m.group("tool")
+    raw_phase = m.group("phase")
+    # ``code.delta`` / ``code.done`` collapse to a single token with a
+    # ``code_`` prefix to keep phase vocabulary flat.
+    phase_map = {
+        "code.delta": "code_delta",
+        "code.done": "code_done",
+    }
+    phase = phase_map.get(raw_phase, raw_phase)
+    return tool, phase
+
+
 async def _parse_sse_stream(
     resp: Any,
     on_text_chunk: Callable[[str], None] | None,
     *,
     on_thinking_start: Callable[[], None] | None = None,
     on_thinking_end: Callable[[str], None] | None = None,
-) -> tuple[str, list[ToolCall], TokenUsage, list[dict[str, Any]]]:
+) -> tuple[
+    str,
+    list[ToolCall],
+    TokenUsage,
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+]:
+    """Parse a Codex / Responses SSE stream.
+
+    Returns a 6-tuple ``(text, tool_calls, usage, reasoning_items,
+    builtin_items, builtin_progress)``.
+    """
     text_parts: list[str] = []
     tc_map: dict[str, dict[str, str]] = {}
     current_tc_id: str | None = None
@@ -636,6 +826,12 @@ async def _parse_sse_stream(
     # reasoning item rather than via reasoning_summary_text.delta.
     current_output_item_type: str | None = None
     reasoning_items: list[dict[str, Any]] = []
+    # Built-in tool state.
+    builtin_items: list[dict[str, Any]] = []
+    builtin_progress: list[dict[str, Any]] = []
+    # Accumulate code_interpreter_call ``.code.delta`` text, keyed by
+    # ``item_id``. ``None`` key catches events that drop the id (defensive).
+    code_deltas: dict[str | None, list[str]] = {}
     usage = TokenUsage()
     # Thinking block lifecycle: buffer reasoning deltas locally; deliver as
     # a single block via on_thinking_end when the item closes. Never leaks
@@ -735,6 +931,21 @@ async def _parse_sse_stream(
                         if extracted:
                             thinking_parts.append(extracted)
                     _end_thinking()
+                elif itype in _BUILTIN_ITEM_TYPES:
+                    # Capture the full item (all fields preserved, but type
+                    # kept so round-trip works). If a ``code_interpreter_call``
+                    # accumulated ``.code.delta`` chunks without a matching
+                    # ``.code.done`` that carried the final body, splice the
+                    # assembled text in under a ``code`` field so replay has
+                    # the program that was actually executed.
+                    captured_item = dict(item)
+                    captured_item.setdefault("type", itype)
+                    if itype == "code_interpreter_call":
+                        iid = item.get("id")
+                        assembled = "".join(code_deltas.pop(iid, []))
+                        if assembled and not captured_item.get("code"):
+                            captured_item["code"] = assembled
+                    builtin_items.append(captured_item)
                 current_output_item_type = None
 
             elif etype == "response.output_text.delta":
@@ -789,6 +1000,25 @@ async def _parse_sse_stream(
             elif etype in ("error", "response.failed"):
                 _raise_stream_error(event)
 
+            elif (classified := _classify_builtin_event(etype)) is not None:
+                tool_type, phase = classified
+                # Accumulate code_interpreter code.delta text so the final
+                # builtin_item can carry the assembled code body when the
+                # server's output_item.done doesn't include it directly.
+                if tool_type == "code_interpreter_call" and phase == "code_delta":
+                    delta = event.get("delta", "") or event.get("code", "")
+                    if delta:
+                        iid = event.get("item_id")
+                        code_deltas.setdefault(iid, []).append(delta)
+                payload = {k: v for k, v in event.items() if k != "type"}
+                builtin_progress.append({
+                    "tool_type": tool_type,
+                    "phase": phase,
+                    "payload": payload,
+                })
+                if debug_etypes:
+                    print(f"[codex builtin-tool] {tool_type}.{phase}", flush=True)
+
             elif etype.startswith("response.reasoning") or "summary" in etype:
                 # Catch-all for reasoning/summary event variants we don't
                 # explicitly handle. ONLY consume ``.delta`` variants — the
@@ -815,7 +1045,19 @@ async def _parse_sse_stream(
                 print(f"[codex unhandled etype] {etype}", flush=True)
 
     buffer = ""
-    async for raw_chunk in resp.aiter_bytes():
+    chunk_iter = resp.aiter_bytes().__aiter__()
+    while True:
+        try:
+            raw_chunk = await asyncio.wait_for(
+                chunk_iter.__anext__(), timeout=_CHUNK_IDLE_TIMEOUT
+            )
+        except StopAsyncIteration:
+            break
+        except asyncio.TimeoutError as exc:
+            raise ProviderTimeoutError(
+                f"Codex SSE stalled — no bytes for {_CHUNK_IDLE_TIMEOUT}s",
+                provider="codex-oauth",
+            ) from exc
         buffer += raw_chunk.decode("utf-8", errors="replace")
         # Bound the buffer so a server that never sends \n\n can't exhaust
         # memory. 1 MiB is ~10× the largest legitimate SSE event.
@@ -848,7 +1090,7 @@ async def _parse_sse_stream(
         for call_id, tc in tc_map.items()
         if tc["name"]
     ]
-    return text, tool_calls, usage, reasoning_items
+    return text, tool_calls, usage, reasoning_items, builtin_items, builtin_progress
 
 
 def _extract_usage(u: dict[str, Any]) -> TokenUsage:

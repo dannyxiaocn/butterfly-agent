@@ -1,0 +1,15 @@
+{
+  "name": "code_interpreter",
+  "description": "Run Python in an OpenAI-managed sandbox via the provider's built-in code_interpreter tool. Provider-native — executed server-side by the Responses API (Codex OAuth / OpenAI Responses). Enable by listing `code_interpreter` in your agent's tools.md. Streams `code_interpreter_call.code.delta` events that the UI can render as the sandbox executes. For local-machine Python execution use `bash` with a python invocation instead.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "container": {
+        "type": "object",
+        "description": "Optional sandbox container configuration. Passed through to the provider verbatim.",
+        "additionalProperties": true
+      }
+    },
+    "required": []
+  }
+}

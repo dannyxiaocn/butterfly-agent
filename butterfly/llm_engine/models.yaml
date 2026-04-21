@@ -13,6 +13,45 @@
 #       exposes_reasoning_tokens: bool    # true when usage.reasoning_tokens is populated
 #       default: true                     # exactly one entry per provider is the default
 #
+# Anthropic-only optional fields (the loader tolerates them absent for any
+# provider; other providers ignore them):
+#
+#   thinking_mode: "enabled" | "adaptive"
+#       "adaptive" — Anthropic 4.6+ picks the depth at serve time; callers pass
+#           an effort hint instead of a token budget.
+#       "enabled"  — legacy fixed-budget path; provider sends
+#           ``thinking={type:"enabled", budget_tokens: <thinking_budget_tokens>}``.
+#
+#   thinking_effort: "low" | "medium" | "high" | "xhigh" | "max"
+#       Advisory hint used when ``thinking_mode=adaptive``. ``xhigh`` and
+#       ``max`` are Opus 4.7+ only; the provider is expected to clamp or
+#       reject the rest.
+#
+#   thinking_display: "summarized" | "omitted"
+#       Controls whether the model streams the thinking trace back. Opus 4.7
+#       defaults to ``omitted`` upstream; set ``summarized`` here if you want
+#       the engine to request the trace anyway (per-account pricing applies).
+#
+#   thinking_budget_tokens: int
+#       Only consulted when ``thinking_mode=enabled``. Ignored in adaptive
+#       mode (the server picks the budget).
+#
+#   interleaved_thinking_beta: bool
+#       4.6+ GA'd interleaved thinking, so this is ``false`` by default. Flip
+#       to ``true`` only if you need the provider to send the dated
+#       ``anthropic-beta: interleaved-thinking-2025-05-14`` header.
+#
+#   cache_strategy: "single" | "two_plus_two" | "auto"
+#       "single"       — one cache_control breakpoint at the tail.
+#       "two_plus_two" — two breakpoints (system + last two user turns) for
+#           better hit rates on long sessions; current Anthropic best practice.
+#       "auto"         — top-level ``cache_control`` lets Anthropic manage
+#           breakpoints server-side (no per-block control blocks).
+#
+#   cache_ttl: "5m" | "1h"
+#       Prompt-cache TTL marker sent with cache_control breakpoints. ``1h``
+#       costs more on write and less on read; use for long-lived sessions.
+#
 # Every provider currently ships with one model. The list shape is preserved
 # so adding a second model later is a single YAML edit — no code change.
 
@@ -23,6 +62,15 @@ providers:
         max_context_tokens: 200000
         exposes_reasoning_tokens: false
         default: true
+        # Thinking configuration (Anthropic 4.6+ uses adaptive; older uses enabled+budget)
+        thinking_mode: adaptive          # Options: enabled | adaptive
+        thinking_effort: high            # Options: low | medium | high | xhigh | max (xhigh/max = Opus 4.7 only)
+        thinking_display: summarized     # Options: summarized | omitted (Opus 4.7 defaults to omitted; we force summarized)
+        thinking_budget_tokens: 8000     # Only used when thinking_mode=enabled (legacy path)
+        interleaved_thinking_beta: false # 4.6+ GA'd this; set false to skip the dated betas header
+        # Cache configuration
+        cache_strategy: two_plus_two     # Options: single | two_plus_two | auto   (auto = top-level cache_control, server-managed)
+        cache_ttl: 5m                    # Options: 5m | 1h
 
   openai:
     models:
