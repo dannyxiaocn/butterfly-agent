@@ -2385,3 +2385,18 @@ button:disabled {
   padding-bottom: 6px;
 }
 
+#update-banner {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  z-index: 1000;
+  max-width: 420px;
+  padding: 8px 14px;
+  background: var(--bg3);
+  border: 1px solid var(--yellow);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-size: 12px;
+  box-shadow: var(--shadow);
+}
+

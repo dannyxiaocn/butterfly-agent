@@ -30,6 +30,19 @@ export const api = {
   createSession: (body: { agent: string; display_name?: string }): Promise<{ id: string; agent: string; display_name?: string | null }> =>
     request('POST', '/api/sessions', body),
 
+  getUpdateStatus: (): Promise<{
+    applied?: boolean;
+    available?: boolean;
+    dirty?: boolean;
+    commits_behind?: number;
+    local_head?: string;
+    remote_head?: string;
+    applied_at?: string;
+    checked_at?: string;
+    new_head?: string;
+    reload?: boolean;
+  }> => request('GET', '/api/update_status'),
+
   deleteSession: (id: string): Promise<void> =>
     request('DELETE', `/api/sessions/${encodeURIComponent(id)}`),
 

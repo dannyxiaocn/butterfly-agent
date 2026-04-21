@@ -340,6 +340,77 @@ async function init(): Promise<void> {
   if (store.sessions.length > 0) {
     await attachSession(store.sessions[0].id);
   }
+
+  startUpdateNotifier();
+}
+
+// ====== Auto-update notifier ======
+//
+// Polls `/api/update_status` every 30s. The server's auto-update worker
+// writes this file when it detects new upstream commits:
+//   - `applied: true` means a silent update landed → force-reload the page
+//     so the browser picks up the rebuilt bundle.
+//   - `dirty: true` + `available: true` means the tree has uncommitted local
+//     changes and the worker refused to apply → show a top-right banner so
+//     the user can commit/stash and run `butterfly update` manually.
+
+function startUpdateNotifier() {
+  let baselineAppliedAt: string | null = null;
+  let baselineStamped = false;
+  let bannerCommits = -1;
+  let banner: HTMLElement | null = null;
+
+  const renderBanner = (commitsBehind: number) => {
+    const text = `🔔 ${commitsBehind} new commit${commitsBehind === 1 ? '' : 's'} upstream — commit local changes and run \`butterfly update\` to apply.`;
+    if (!banner) {
+      banner = document.createElement('div');
+      banner.id = 'update-banner';
+      document.body.appendChild(banner);
+    }
+    banner.textContent = text;
+    bannerCommits = commitsBehind;
+  };
+
+  const hideBanner = () => {
+    if (!banner) return;
+    banner.remove();
+    banner = null;
+    bannerCommits = -1;
+  };
+
+  const poll = async () => {
+    try {
+      const s = await api.getUpdateStatus();
+      if (s.applied && s.applied_at) {
+        if (s.reload) {
+          window.location.reload();
+          return;
+        }
+        if (!baselineStamped) {
+          baselineAppliedAt = s.applied_at;
+          baselineStamped = true;
+          hideBanner();
+          return;
+        }
+        if (baselineAppliedAt !== s.applied_at) {
+          window.location.reload();
+          return;
+        }
+        hideBanner();
+      } else if (s.dirty && s.available && s.commits_behind) {
+        if (!baselineStamped) baselineStamped = true;
+        if (s.commits_behind !== bannerCommits) renderBanner(s.commits_behind);
+      } else {
+        if (!baselineStamped) baselineStamped = true;
+        hideBanner();
+      }
+    } catch {
+      // ignore — server may be restarting during auto-update respawn
+    }
+  };
+
+  void poll();
+  setInterval(poll, 30_000);
 }
 
 init().catch(console.error);
