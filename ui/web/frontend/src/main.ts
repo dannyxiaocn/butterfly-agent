@@ -7,6 +7,7 @@ import { createHeader } from './components/header';
 import { createSidebar } from './components/sidebar';
 import { createChat } from './components/chat';
 import { createPanel } from './components/panel';
+import { terminalController } from './components/terminal';
 
 // Build the main layout
 const app = document.getElementById('app')!;
@@ -199,10 +200,20 @@ export async function attachSession(id: string): Promise<void> {
   // Refresh HUD on attach
   getChatEl().refreshHud(id).catch(() => {});
 
+  // Load Terminal panel state (non-blocking — the panel may not be open,
+  // but the controller is ready when the user switches to it).
+  terminalController.attachSession(id).then(() => {
+    store.emit('panel');
+  }).catch((e) => console.error('Failed to load terminal:', e));
+
   // Open SSE from history offsets
   sseConn.attach(id, contextOffset, eventsOffset, (event: DisplayEvent) => {
     if (store.currentSessionId !== id) return; // stale SSE
     getChatEl().handleEvent(event);
+    // Fan out terminal_* events to the Terminal panel controller.
+    if (event.type === 'terminal_log' || event.type === 'terminal_state' || event.type === 'terminal_rejected') {
+      terminalController.handleEvent(event as any);
+    }
 
     // Advance lastRenderedContextOffset from SSE's internal contextSince tracker.
     // _ctx is stripped from the event before the handler is called (Bug 3 fix),

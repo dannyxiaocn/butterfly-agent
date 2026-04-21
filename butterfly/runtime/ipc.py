@@ -638,6 +638,13 @@ def _runtime_event_to_display(event: dict) -> list[dict]:
         "task_card_changed",
         "task_check",
         "task_check_error",
+        # v2.0.30: web Terminal panel live stream. Without this pass-through
+        # the chunks are logged to terminal/log.jsonl but never reach the
+        # frontend over SSE — users only see output after a full page
+        # refresh triggers a fresh ``GET /terminal`` file read.
+        "terminal_log",
+        "terminal_state",
+        "terminal_rejected",
     ):
         return [event]
 

@@ -9,7 +9,7 @@ Tool discovery:
 Context injection — executors receive injected context so the agent passes
 only business-intent parameters:
   - bash: workdir + tool_results_dir (for disk spillover)
-  - session_shell: workdir + venv_env_provider
+  - session_shell: workdir + venv_env_provider + terminal_logger (for panel)
   - read/write/edit/glob/grep: workdir
   - task_*: tasks_dir
   - memory_recall: memory_dir
@@ -93,6 +93,7 @@ class ToolLoader:
         memory_dir: Path | None = None,
         main_memory_path: Path | None = None,
         panel_dir: Path | None = None,
+        terminal_dir: Path | None = None,
         tool_results_dir: Path | None = None,
         toolhub_dir: Path | None = None,
         # Legacy compatibility
@@ -111,6 +112,11 @@ class ToolLoader:
         # callback so the web UI can refresh the Tasks tab on-event. Session
         # provides one that appends to events.jsonl; None is a silent no-op.
         on_task_change: "Callable[[str, str], None] | None" = None,
+        # v2.0.30 — session-owned persistent executor for session_shell. When
+        # provided, the loader reuses this instance across capability reloads
+        # so the pty stays alive between agent turns. Tests/CLI can leave
+        # this None and a per-loader instance is created instead.
+        session_shell_executor: Any | None = None,
     ) -> None:
         self._default_workdir = default_workdir
         self._skills = list(skills or [])
@@ -118,6 +124,7 @@ class ToolLoader:
         self._memory_dir = memory_dir
         self._main_memory_path = main_memory_path
         self._panel_dir = panel_dir
+        self._terminal_dir = terminal_dir
         self._tool_results_dir = tool_results_dir
         self._toolhub_dir = toolhub_dir or _TOOLHUB_DIR
         self._impl_registry = impl_registry or {}
@@ -127,6 +134,10 @@ class ToolLoader:
         self._system_sessions_base = system_sessions_base
         self._agent_base = agent_base
         self._on_task_change = on_task_change
+        self._session_shell_executor_override = session_shell_executor
+        # Populated by _create_executor('session_shell'); lets the web
+        # Terminal route reach the shell without re-walking the registry.
+        self._session_shell_executor: Any | None = session_shell_executor
 
     def _create_executor(self, tool_name: str) -> Callable | None:
         """Create an executor callable for a toolhub tool."""
@@ -176,22 +187,32 @@ class ToolLoader:
         elif tool_name == "session_shell":
             executor_cls = getattr(mod, "SessionShellExecutor", None)
             if executor_cls:
-                # Mirror bash_terminal._venv_env() as a callable so the
-                # executor can pick up the session venv on first spawn.
-                def _venv_env_provider() -> dict[str, str] | None:
-                    try:
-                        from butterfly.tool_engine.executor.terminal.bash_terminal import (
-                            _venv_env,
-                        )
-                        return _venv_env()
-                    except Exception:
-                        return None
+                if self._session_shell_executor_override is not None:
+                    # Session owns the lifecycle — reuse across reloads.
+                    executor = self._session_shell_executor_override
+                else:
+                    # Tests / CLI: one executor per loader.
+                    def _venv_env_provider() -> dict[str, str] | None:
+                        try:
+                            from butterfly.tool_engine.executor.terminal.bash_terminal import (
+                                _venv_env,
+                            )
+                            return _venv_env()
+                        except Exception:
+                            return None
 
-                executor = executor_cls(
-                    workdir=self._default_workdir,
-                    venv_env_provider=_venv_env_provider,
-                    guardian=self._guardian,
-                )
+                    terminal_logger = None
+                    if self._terminal_dir is not None:
+                        from butterfly.session_engine.terminal import TerminalLogger
+                        terminal_logger = TerminalLogger(self._terminal_dir)
+
+                    executor = executor_cls(
+                        workdir=self._default_workdir,
+                        venv_env_provider=_venv_env_provider,
+                        guardian=self._guardian,
+                        terminal_logger=terminal_logger,
+                    )
+                self._session_shell_executor = executor
                 async def _impl(**kwargs: Any) -> str:
                     return await executor.execute(**kwargs)
                 return _impl

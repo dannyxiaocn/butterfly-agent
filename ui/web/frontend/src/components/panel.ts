@@ -5,6 +5,7 @@ import type { ModelsCatalog, Params, PanelEntry, PanelEntryDetail, PanelEntrySta
 import { formatInterval, formatRelative } from '../markdown';
 import { renderTaskEditor } from './taskEditor';
 import { highlightShell } from '../shellHighlight';
+import { terminalController } from './terminal';
 
 type PanelTab = 'tasks' | 'panel' | 'config';
 
@@ -816,8 +817,10 @@ export function createPanel(): HTMLElement {
 
   function renderPanelTab(): string {
     const entries = mergedPanelEntries();
+    const terminalHtml = terminalController.renderHtml();
     if (!entries.length) {
       return `
+        ${terminalHtml}
         <div class="tasks-empty">No panel entries yet.</div>
         <div class="tasks-footer">
           <button class="btn-sm" id="btn-refresh-panel">↻ Refresh</button>
@@ -826,6 +829,7 @@ export function createPanel(): HTMLElement {
     }
     const rowsHtml = entries.map(e => renderPanelRow(e)).join('');
     return `
+      ${terminalHtml}
       <div class="task-cards">${rowsHtml}</div>
       <div class="tasks-footer">
         <button class="btn-sm" id="btn-refresh-panel">↻ Refresh</button>
@@ -1018,6 +1022,12 @@ export function createPanel(): HTMLElement {
   }
 
   function bindPanelTab() {
+    // Rebind the persistent Terminal widget against the freshly-rendered DOM.
+    // The controller holds log buffer + input draft outside the innerHTML
+    // churn so this is safe to call on every render.
+    const termRoot = el.querySelector('.terminal-container') as HTMLElement | null;
+    if (termRoot) terminalController.rebind(termRoot);
+
     el.querySelector('#btn-refresh-panel')?.addEventListener('click', () => {
       refreshPanel();
     });

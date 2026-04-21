@@ -90,6 +90,8 @@ export class SSEConnection {
       // v2.0.30: task-card CRUD / script-poll transitions drive the
       // Tasks tab's on-event refresh (replaces the 15 s poll).
       'task_card_changed', 'task_check', 'task_check_error',
+      // v2.0.30: Terminal panel live stream (log entries + state snapshots).
+      'terminal_log', 'terminal_state', 'terminal_rejected',
     ];
 
     for (const type of eventTypes) {

@@ -2385,3 +2385,138 @@ button:disabled {
   padding-bottom: 6px;
 }
 
+/* ── Terminal panel ─────────────────────────────────────────────── */
+
+.terminal-container {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 14px;
+  border: 1px solid var(--bg4);
+  border-radius: var(--radius);
+  background: #07090d;
+  overflow: hidden;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.terminal-chrome {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--bg3);
+  border-bottom: 1px solid var(--bg4);
+}
+.terminal-title {
+  color: var(--text2);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+.terminal-status {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.terminal-lock-pill,
+.terminal-fg-pill,
+.terminal-pid-pill,
+.terminal-status-idle,
+.terminal-status-rejected {
+  font-size: 10.5px;
+  padding: 1px 7px;
+  border-radius: 10px;
+  border: 1px solid var(--bg4);
+  color: var(--dimmed);
+}
+.lock-agent {
+  color: var(--yellow);
+  border-color: var(--yellow);
+  background: rgba(210,153,34,0.08);
+}
+.lock-user {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.lock-free {
+  color: var(--green);
+  border-color: var(--green);
+}
+.terminal-fg-pill {
+  color: var(--text2);
+}
+.terminal-status-rejected {
+  color: var(--red);
+  border-color: var(--red);
+}
+.terminal-body {
+  position: relative;
+  max-height: 260px;
+  min-height: 120px;
+  overflow: hidden;
+  padding: 0;
+  background: #07090d;
+}
+.terminal-output {
+  margin: 0;
+  padding: 8px 10px;
+  max-height: 260px;
+  min-height: 120px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  line-height: 1.5;
+  color: var(--text2);
+}
+.term-line { display: block; }
+/* Agent-originated lines share the "Agent is working..." yellow. Command
+ * line is bold, output is dimmed — same command/output visual rhythm as
+ * the user path, just in yellow. */
+.term-line.term-agent-cmd { color: var(--yellow); font-weight: 600; }
+.term-line.term-agent-out { color: var(--yellow); opacity: 0.78; }
+.term-line.term-user-cmd { color: var(--green); font-weight: 600; }
+.term-line.term-user-out { color: var(--text); }
+.term-line.term-system { color: var(--dimmed); font-style: italic; }
+.term-prompt-agent { color: var(--yellow); opacity: 0.75; }
+.term-prompt-user { color: var(--green); opacity: 0.8; }
+.terminal-inputbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: #0a0d13;
+  border-top: 1px solid var(--bg4);
+}
+.terminal-prompt { color: var(--green); font-weight: 600; }
+.terminal-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  outline: none;
+}
+.terminal-input::placeholder {
+  color: var(--dimmed);
+  font-style: italic;
+}
+.terminal-input:disabled {
+  color: var(--dimmed);
+  cursor: not-allowed;
+}
+.terminal-btn-interrupt {
+  background: transparent;
+  border: 1px solid var(--bg4);
+  color: var(--yellow);
+  border-radius: var(--radius-sm);
+  padding: 2px 8px;
+  cursor: pointer;
+}
+.terminal-btn-interrupt:hover:not(:disabled) {
+  border-color: var(--yellow);
+  background: rgba(210,153,34,0.08);
+}
+.terminal-btn-interrupt:disabled {
+  color: var(--dimmed);
+  cursor: not-allowed;
+}

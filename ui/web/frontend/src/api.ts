@@ -117,4 +117,33 @@ export const api = {
    *  panel card to show what the child is doing right now. */
   getEventsTail: (id: string, n: number = 5): Promise<Array<Record<string, unknown>>> =>
     request('GET', `/api/sessions/${encodeURIComponent(id)}/events_tail?n=${encodeURIComponent(n)}`),
+
+  // ── Terminal panel ────────────────────────────────────────────────
+
+  getTerminal: (id: string, tail: number = 500): Promise<{
+    state: {
+      active: boolean;
+      cwd: string | null;
+      last_active_at: number | null;
+      foreground_pid: number | null;
+      foreground_cmd: string | null;
+      locked_by: 'agent' | 'user' | null;
+      shell_pid: number | null;
+    };
+    log: Array<{ ts: number; source: string; text: string; seq?: number }>;
+    log_offset: number;
+  }> =>
+    request('GET', `/api/sessions/${encodeURIComponent(id)}/terminal?tail=${tail}`),
+
+  getTerminalLog: (id: string, offset: number): Promise<{
+    log: Array<{ ts: number; source: string; text: string; seq?: number }>;
+    log_offset: number;
+  }> =>
+    request('GET', `/api/sessions/${encodeURIComponent(id)}/terminal/log?offset=${offset}`),
+
+  postTerminalInput: (id: string, content: string): Promise<{ id: string }> =>
+    request('POST', `/api/sessions/${encodeURIComponent(id)}/terminal/input`, { content }),
+
+  postTerminalInterrupt: (id: string): Promise<{ id: string }> =>
+    request('POST', `/api/sessions/${encodeURIComponent(id)}/terminal/interrupt`),
 };

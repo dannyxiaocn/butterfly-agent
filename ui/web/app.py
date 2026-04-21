@@ -529,6 +529,66 @@ def create_app(
         save_entry(panel_dir, entry)
         return {"status": "killed"}
 
+    @app.get("/api/sessions/{session_id}/terminal")
+    async def get_terminal(session_id: str, tail: int = 500):
+        """Initial Terminal panel payload: current state + last N log entries."""
+        _validate_session_id_or_400(session_id)
+        session_dir = sessions_dir / session_id
+        if not session_dir.exists():
+            raise HTTPException(404, f"Session not found: {session_id}")
+        from butterfly.service.terminal_service import read_state, read_log_tail
+        state = read_state(sessions_dir, session_id)
+        entries, size = read_log_tail(sessions_dir, session_id, limit=max(1, min(tail, 5000)))
+        return {"state": state, "log": entries, "log_offset": size}
+
+    @app.get("/api/sessions/{session_id}/terminal/log")
+    async def get_terminal_log(session_id: str, offset: int = 0):
+        """Resumable log tail — returns entries from `offset` bytes onward."""
+        _validate_session_id_or_400(session_id)
+        session_dir = sessions_dir / session_id
+        if not session_dir.exists():
+            raise HTTPException(404, f"Session not found: {session_id}")
+        from butterfly.service.terminal_service import read_log_from
+        entries, new_offset = read_log_from(sessions_dir, session_id, offset)
+        return {"log": entries, "log_offset": new_offset}
+
+    @app.post("/api/sessions/{session_id}/terminal/input")
+    async def post_terminal_input(session_id: str, body: dict):
+        """Append a user-typed command to the shell input queue.
+
+        Returns 409 if the agent currently holds the shell lock; the
+        frontend should keep the user's typed text in-place and re-enable
+        submit when ``state.locked_by`` transitions away from ``"agent"``.
+        """
+        _validate_session_id_or_400(session_id)
+        session_dir = sessions_dir / session_id
+        if not session_dir.exists():
+            raise HTTPException(404, f"Session not found: {session_id}")
+        from butterfly.service.terminal_service import enqueue_input, read_state
+        content = body.get("content")
+        if not isinstance(content, str):
+            raise HTTPException(400, "Body must include 'content' string")
+        # Fast 409 on a stale-UI submission. The daemon re-checks on pick-up.
+        state = read_state(sessions_dir, session_id)
+        if state.get("locked_by") == "agent":
+            raise HTTPException(409, "Agent is using the terminal")
+        entry_id = enqueue_input(sessions_dir, session_id, kind="input", content=content)
+        return {"id": entry_id}
+
+    @app.post("/api/sessions/{session_id}/terminal/interrupt")
+    async def post_terminal_interrupt(session_id: str):
+        """Queue a Ctrl-C for the Terminal. 409 while agent holds the lock."""
+        _validate_session_id_or_400(session_id)
+        session_dir = sessions_dir / session_id
+        if not session_dir.exists():
+            raise HTTPException(404, f"Session not found: {session_id}")
+        from butterfly.service.terminal_service import enqueue_input, read_state
+        state = read_state(sessions_dir, session_id)
+        if state.get("locked_by") == "agent":
+            raise HTTPException(409, "Agent is using the terminal")
+        entry_id = enqueue_input(sessions_dir, session_id, kind="interrupt")
+        return {"id": entry_id}
+
     @app.get("/api/sessions/{session_id}/config")
     async def get_config(session_id: str):
         try:
