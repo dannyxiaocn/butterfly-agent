@@ -244,8 +244,7 @@ def _new_session(
     if keep_alive:
         # Stop the in-process daemon but launch a background server. v2.0.16
         # removed the separate daemon console script; mirror `_start_daemon`
-        # and the auto-update `execvp` path by invoking the module directly
-        # (`python -m butterfly.runtime.server`).
+        # by invoking the module directly (`python -m butterfly.runtime.server`).
         _stop_daemon(stop_event_holder, daemon_thread)
         subprocess.Popen(
             [sys.executable, "-m", "butterfly.runtime.server"],

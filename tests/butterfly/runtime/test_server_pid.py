@@ -389,7 +389,6 @@ async def test_run_proceeds_when_lock_is_free(tmp_path, monkeypatch):
 
     import butterfly.runtime.watcher as watcher_mod
     monkeypatch.setattr(watcher_mod, "SessionWatcher", _NoopWatcher)
-    monkeypatch.setenv("BUTTERFLY_AUTOUPDATE_INTERVAL_SEC", "0")
 
     await server_mod._run(sessions_dir, tmp_path)
 

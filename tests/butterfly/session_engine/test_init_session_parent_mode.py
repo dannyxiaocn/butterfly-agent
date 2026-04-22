@@ -112,7 +112,7 @@ def test_missing_mode_prompt_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     sessions_base, sys_base, agent_base = _bases(tmp_path)
     # Point the toolhub lookup at an empty dir so explorer.md is missing.
     empty_toolhub = tmp_path / "fake_toolhub"
-    (empty_toolhub / "sub_agent").mkdir(parents=True)
+    (empty_toolhub / "subagent_new").mkdir(parents=True)
     import butterfly.session_engine.session_init as mod
     monkeypatch.setattr(mod, "_TOOLHUB_DIR", empty_toolhub)
     with pytest.raises(FileNotFoundError, match="inconsistent state"):

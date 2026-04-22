@@ -8,6 +8,7 @@ export function createSidebar(): HTMLElement {
   el.id = 'sidebar';
 
   let formVisible = false;
+  let pendingDisplayName = '';
   let agentOptions: string[] | null = null;
   let agentOptionsPromise: Promise<string[]> | null = null;
   let selectedAgent = 'agent';
@@ -128,21 +129,25 @@ export function createSidebar(): HTMLElement {
         <span class="sidebar-title">Sessions</span>
         <button class="btn-icon" id="btn-new-session" title="New session">+</button>
       </div>
-      <div id="new-session-form" class="new-session-form new-session-form-top${formVisible ? '' : ' hidden'}">
-        <div class="form-field">
-          <label>Display name</label>
-          <input id="ns-display-name" type="text" placeholder="e.g. audit auth flow (optional)" maxlength="40" />
-        </div>
-        <div class="form-field">
-          <label>Agent</label>
-          <select id="ns-agent">${renderAgentOptions()}</select>
-        </div>
-        <div class="form-row">
-          <button class="btn-sm btn-primary" id="ns-create">Create</button>
-          <button class="btn-sm" id="ns-cancel">Cancel</button>
-        </div>
-      </div>
       <div class="session-list" id="session-list">
+        <div id="new-session-form" class="new-session-card${formVisible ? '' : ' hidden'}">
+          <input
+            id="ns-display-name"
+            class="ns-name-input"
+            type="text"
+            placeholder="Enter session name…"
+            maxlength="40"
+            autocomplete="off"
+            value="${escHtml(pendingDisplayName)}"
+          />
+          <div class="new-session-card-row2">
+            <select id="ns-agent" class="ns-agent-select">${renderAgentOptions()}</select>
+            <div class="new-session-card-actions">
+              <button class="btn-sm btn-primary" id="ns-create">Create</button>
+              <button class="btn-sm" id="ns-cancel">Cancel</button>
+            </div>
+          </div>
+        </div>
         ${listHtml || '<div style="padding:12px 8px;font-size:12px;color:var(--dimmed)">No sessions</div>'}
       </div>
       <div class="sidebar-footer">
@@ -164,20 +169,28 @@ export function createSidebar(): HTMLElement {
     });
 
     // bind events
-    el.querySelector('#btn-new-session')?.addEventListener('click', () => {
-      formVisible = !formVisible;
-      el.querySelector('#new-session-form')?.classList.toggle('hidden', !formVisible);
-      if (formVisible) ensureAgents();
-    });
+    const nameInput = () => el.querySelector('#ns-display-name') as HTMLInputElement | null;
 
-    el.querySelector('#ns-cancel')?.addEventListener('click', () => {
+    function openForm() {
+      formVisible = true;
+      el.querySelector('#new-session-form')?.classList.remove('hidden');
+      ensureAgents();
+      // Focus deferred so layout settles after the .hidden flip.
+      queueMicrotask(() => nameInput()?.focus());
+    }
+
+    function closeForm() {
       formVisible = false;
+      pendingDisplayName = '';
       el.querySelector('#new-session-form')?.classList.add('hidden');
-    });
+      const ni = nameInput();
+      if (ni) ni.value = '';
+    }
 
-    el.querySelector('#ns-create')?.addEventListener('click', async () => {
-      const nameEl = el.querySelector('#ns-display-name') as HTMLInputElement;
-      const agentEl = el.querySelector('#ns-agent') as HTMLSelectElement;
+    async function submitCreate() {
+      const nameEl = nameInput();
+      const agentEl = el.querySelector('#ns-agent') as HTMLSelectElement | null;
+      if (!nameEl || !agentEl) return;
       // Agent dropdown (PR #36) holds either "agent" or "agenthub/agent" —
       // normalize to the fully-qualified form the service expects.
       const agentName = (agentEl.value || 'agent').trim();
@@ -190,9 +203,7 @@ export function createSidebar(): HTMLElement {
       if (trimmedName) body.display_name = trimmedName;
       try {
         const res = await api.createSession(body);
-        formVisible = false;
-        el.querySelector('#new-session-form')?.classList.add('hidden');
-        nameEl.value = '';
+        closeForm();
         // Refresh sessions list
         const sessions = await api.listSessions();
         store.sessions = sessions;
@@ -201,7 +212,46 @@ export function createSidebar(): HTMLElement {
       } catch (e) {
         alert(`Failed to create session: ${e}`);
       }
+    }
+
+    el.querySelector('#btn-new-session')?.addEventListener('click', () => {
+      if (formVisible) {
+        closeForm();
+      } else {
+        openForm();
+      }
     });
+
+    el.querySelector('#ns-cancel')?.addEventListener('click', closeForm);
+    el.querySelector('#ns-create')?.addEventListener('click', submitCreate);
+
+    // Enter submits, Escape cancels — keep keyboard flow fast since the form
+    // auto-focuses on open.
+    nameInput()?.addEventListener('keydown', (e) => {
+      const ke = e as KeyboardEvent;
+      if (ke.key === 'Enter') {
+        ke.preventDefault();
+        submitCreate();
+      } else if (ke.key === 'Escape') {
+        ke.preventDefault();
+        closeForm();
+      }
+    });
+    // Persist in-progress input across re-renders (the sidebar rebuilds on
+    // every `sessions` store event — without this, typing while a sub-agent
+    // emits a wakeup event wipes the field mid-keystroke).
+    nameInput()?.addEventListener('input', (e) => {
+      pendingDisplayName = (e.target as HTMLInputElement).value;
+    });
+
+    // If the form was visible before a re-render (sessions poll, etc.), keep
+    // focus on the name input so typing isn't interrupted.
+    if (formVisible) {
+      queueMicrotask(() => {
+        const ni = nameInput();
+        if (ni && document.activeElement !== ni) ni.focus();
+      });
+    }
 
     el.querySelector('#btn-start')?.addEventListener('click', async () => {
       if (!store.currentSessionId) return;

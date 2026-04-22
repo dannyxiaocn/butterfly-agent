@@ -290,11 +290,11 @@ class Session:
         )
         self._agent.background_spawn = self._bg_manager.spawn
 
-        # Sub-agent runner: lets ``sub_agent`` calls with run_in_background=true
+        # Sub-agent runner: lets ``subagent_new`` calls with run_in_background=true
         # flow through the same panel + events plumbing as bash. Sync calls
         # use SubAgentTool directly via ToolLoader.
         from butterfly.tool_engine.sub_agent import SubAgentRunner
-        self._bg_manager.register_runner("sub_agent", SubAgentRunner(
+        self._bg_manager.register_runner("subagent_new", SubAgentRunner(
             parent_session_id=self._session_id,
             sessions_base=self._base_dir,
             system_sessions_base=self._system_base,
@@ -1642,7 +1642,7 @@ class Session:
                 return
 
             entry = evt.entry
-            is_sub_agent = entry.tool_name == "sub_agent"
+            is_sub_agent = entry.tool_name == "subagent_new"
             # Build the human-readable notification text. Kept concise on
             # purpose — bulk output is fetchable via tool_output(task_id=...).
             if evt.kind == "completed":
@@ -1967,7 +1967,7 @@ class Session:
             # Newly-spawned sub_agent → bump HUD count immediately. Final
             # decrement happens in _drain_background_events when the runner
             # emits the terminal event.
-            if name == "sub_agent" and tid is not None:
+            if name == "subagent_new" and tid is not None:
                 self._emit_sub_agent_count()
             if ext:
                 # External hooks are 3-arg (pre-v2.0.19) — preserve that contract.

@@ -777,7 +777,7 @@ class IPCUnitTests(unittest.TestCase):
                 + json.dumps({
                     "type": "user_input", "content": "bg done",
                     "id": "u2", "caller": "system", "source": "panel",
-                    "tid": "bg_abc", "tool_name": "sub_agent",
+                    "tid": "bg_abc", "tool_name": "subagent_new",
                     "ts": "2026-04-18T23:30:54",
                 }) + "\n"
                 + json.dumps({
@@ -792,7 +792,7 @@ class IPCUnitTests(unittest.TestCase):
                         # from here.
                         "content": [{
                             "type": "tool_use", "id": "call_1",
-                            "name": "sub_agent",
+                            "name": "subagent_new",
                             "input": {"name": "bg-poet"},
                             "ts": "2026-04-18T23:30:33",
                         }],

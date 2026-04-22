@@ -1,0 +1,8 @@
+{
+  "name": "subagent_list",
+  "description": "List every sub-agent you've spawned in this session (via subagent_new), with display name, mode, current status, and child session id. Pair with `subagent_resume` to send a follow-up message to one of them — the `name` field here is the handle `subagent_resume` takes. An empty list means you haven't spawned any sub-agents yet.",
+  "input_schema": {
+    "type": "object",
+    "properties": {}
+  }
+}
