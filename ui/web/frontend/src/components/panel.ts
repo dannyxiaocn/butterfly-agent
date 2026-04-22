@@ -2,7 +2,7 @@ import { store } from '../store';
 import { api } from '../api';
 import { attachSession } from '../main';
 import type { ModelsCatalog, Params, PanelEntry, PanelEntryDetail, PanelEntryStatus, ProviderCatalogEntry, TaskCard } from '../types';
-import { formatInterval, formatRelative } from '../markdown';
+import { formatInterval, formatRelative, renderMarkdown } from '../markdown';
 import { renderTaskEditor } from './taskEditor';
 import { highlightShell } from '../shellHighlight';
 import { terminalController } from './terminal';
@@ -37,6 +37,12 @@ export function createPanel(): HTMLElement {
   let modelsCatalog: ModelsCatalog | null = null;
   let modelsCatalogPromise: Promise<ModelsCatalog | null> | null = null;
   const expandedPanel = new Set<string>(); // tids currently expanded
+  // Task cards are re-rendered whenever store.emit('tasks') fires (SSE
+  // task_card_changed, task_check, etc.). innerHTML rewrite drops each
+  // <details>'s native `open` state, which would slam an expanded card
+  // shut a frame after any live update. Track expansion explicitly so
+  // render() can re-assert the `open` attribute.
+  const expandedTasks = new Set<string>();
   const panelDetails = new Map<string, PanelEntryDetail>(); // tid → latest detail fetch
   // Sub-agent panel cards expand to show the child session's last 5 events.
   // Cached so repeated open/close doesn't refetch.
@@ -146,32 +152,31 @@ export function createPanel(): HTMLElement {
     const lastRun = formatRelative(card.last_finished_at);
     const statusClass = `task-status-${card.status}`;
 
-    // v2.0.23: collapsible <details> chrome. Summary shows just identity
-    // (name + duty + status + interval pill). The heavier fields —
-    // full description, progress, comments, window + last-run meta,
-    // and the Edit button — live in the body so the panel stays scannable
-    // when there are many task cards.
+    // v2.0.23: collapsible <details> chrome. Summary shows identity
+    // (name + duty + status) plus the latest one-line progress / comment
+    // snippet so the user can scan recent agent activity without expanding.
+    // Full description, progress, comments, window + last-run meta,
+    // run-cadence line, and the Edit button live in the body.
     const descriptionBlock = card.description.trim()
       ? `<div class="task-card-section">
            <div class="task-card-section-label">description</div>
-           <div class="task-card-section-body">${escHtml(card.description)}</div>
+           <div class="task-card-section-body markdown-body">${renderMarkdown(card.description)}</div>
          </div>`
       : '';
-    const progressBlock = card.progress && card.progress.trim()
-      ? `<div class="task-card-section">
-           <div class="task-card-section-label">progress</div>
-           <div class="task-card-section-body">${escHtml(card.progress)}</div>
-         </div>`
-      : '';
-    const commentsBlock = card.comments && card.comments.trim()
-      ? `<div class="task-card-section">
-           <div class="task-card-section-label">comments</div>
-           <div class="task-card-section-body">${escHtml(card.comments)}</div>
-         </div>`
-      : '';
-    const windowMeta = card.script
-      ? `<span class="task-window">script</span>`
-      : '';
+    const progressBody = card.progress && card.progress.trim()
+      ? `<div class="task-card-section-body">${escHtml(card.progress)}</div>`
+      : `<div class="task-card-section-body task-card-empty">—</div>`;
+    const progressBlock = `<div class="task-card-section">
+         <div class="task-card-section-label">progress</div>
+         ${progressBody}
+       </div>`;
+    const commentsBody = card.comments && card.comments.trim()
+      ? `<div class="task-card-section-body">${escHtml(card.comments)}</div>`
+      : `<div class="task-card-section-body task-card-empty">—</div>`;
+    const commentsBlock = `<div class="task-card-section">
+         <div class="task-card-section-label">comments</div>
+         ${commentsBody}
+       </div>`;
     // v2.0.30 — render the bash body inline with shell highlighting so the
     // card view shows the same content as the editor without needing to
     // click Edit. The highlighter HTML-escapes its output, so feed it
@@ -182,20 +187,44 @@ export function createPanel(): HTMLElement {
            <pre class="task-card-script lang-bash"><code>${highlightShell(card.script)}</code></pre>
          </div>`
       : '';
+    const cadenceLine = card.script
+      ? `<span class="task-cadence">script runs ${escHtml(intervalStr)}</span>`
+      : '';
 
+    const progressSnippet = latestLine(card.progress);
+    const commentsSnippet = latestLine(card.comments);
+    const progressSummaryBlock = progressSnippet
+      ? `<div class="task-summary-block">
+           <div class="task-summary-label">progress</div>
+           <div class="task-summary-snippet">${escHtml(progressSnippet)}</div>
+         </div>`
+      : '';
+    const commentsSummaryBlock = commentsSnippet
+      ? `<div class="task-summary-block">
+           <div class="task-summary-label">comment</div>
+           <div class="task-summary-snippet">${escHtml(commentsSnippet)}</div>
+         </div>`
+      : '';
+    const summarySnippets = progressSummaryBlock || commentsSummaryBlock
+      ? `<div class="task-card-summary-snippets">${progressSummaryBlock}${commentsSummaryBlock}</div>`
+      : '';
+
+    const openAttr = expandedTasks.has(card.name) ? ' open' : '';
     return `
-      <details class="task-card" data-name="${escHtml(card.name)}">
+      <details class="task-card" data-name="${escHtml(card.name)}"${openAttr}>
         <summary class="task-card-summary">
-          <span class="task-card-summary-main">
-            <span class="task-name">${escHtml(card.name)}</span>
-            ${dutyPill}
-            <span class="task-status-badge ${statusClass}">${card.status}</span>
-            <span class="task-interval-pill">${escHtml(intervalStr)}</span>
-          </span>
+          <div class="task-card-summary-top">
+            <span class="task-card-summary-main">
+              <span class="task-name">${escHtml(card.name)}</span>
+              ${dutyPill}
+              <span class="task-status-badge ${statusClass}">${card.status}</span>
+            </span>
+          </div>
+          ${summarySnippets}
         </summary>
         <div class="task-card-body">
           <div class="task-card-meta">
-            ${windowMeta}
+            ${cadenceLine}
             <span class="task-last-run">last run: ${escHtml(lastRun)}</span>
           </div>
           ${descriptionBlock}
@@ -208,6 +237,16 @@ export function createPanel(): HTMLElement {
         </div>
       </details>
     `;
+  }
+
+  function latestLine(s: string | null | undefined): string {
+    if (!s) return '';
+    const lines = s.split(/\r?\n/);
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i].trim();
+      if (line) return line.length > 120 ? line.slice(0, 117) + '…' : line;
+    }
+    return '';
   }
 
   function bindTasksTab() {
@@ -234,6 +273,17 @@ export function createPanel(): HTMLElement {
         const card = store.taskCards.find(c => c.name === name) ?? null;
         editingTask = card;
         showTaskEditor(card);
+      });
+    });
+
+    // Keep expandedTasks in sync with each card's <details>.open state so
+    // re-renders triggered by live SSE updates don't collapse the card.
+    el.querySelectorAll<HTMLDetailsElement>('details.task-card').forEach(d => {
+      d.addEventListener('toggle', () => {
+        const name = d.dataset.name;
+        if (!name) return;
+        if (d.open) expandedTasks.add(name);
+        else expandedTasks.delete(name);
       });
     });
   }
@@ -1199,6 +1249,7 @@ export function createPanel(): HTMLElement {
     editingTask = null;
     configMode = 'view';
     expandedPanel.clear();
+    expandedTasks.clear();
     panelDetails.clear();
     store.panelEntries = [];
     render();

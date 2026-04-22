@@ -137,13 +137,16 @@ export async function attachSession(id: string): Promise<void> {
   store.currentSessionId = id;
   store.emit('currentSession');
 
-  // Clear chat and reset per-session state so panel doesn't show stale data
+  // Clear chat and reset per-session state so panel doesn't show stale data.
+  // Exception: keep store.taskCards in place until the new session's tasks
+  // finish loading. Clearing + emitting here would flash the Tasks tab into
+  // the "No task cards yet" empty state for the ~50ms until api.getTasks()
+  // resolves. Old cards briefly visible is less jarring than the flash; the
+  // attachVersion race guard still prevents stale fetches from overwriting.
   getChatEl().clearMessages();
   lastRenderedContextOffset = 0;
-  store.taskCards = [];
   store.panelEntries = [];
   store.currentParams = null;
-  store.emit('tasks');
   store.emit('panel');
   store.emit('config');
 
