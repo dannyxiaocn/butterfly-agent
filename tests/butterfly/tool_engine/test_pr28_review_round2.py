@@ -3,7 +3,7 @@
 The first round shipped a Guardian for inline ``bash`` / ``write`` / ``edit``
 but missed two ways an explorer-mode child could still escape:
 
-  - Bug #4: ``session_shell`` (persistent shell) ran with the session's
+  - Bug #4: ``terminal_use`` (persistent shell) ran with the session's
     own workdir, ignoring the Guardian boundary.
   - Bug #5: background-mode ``bash`` (``run_in_background=true``) routed
     through ``BashRunner`` which read ``input["workdir"]`` without
@@ -105,13 +105,13 @@ async def test_background_bash_with_guardian_pins_cwd_and_env(tmp_path: Path) ->
     assert str(bogus_workdir) not in output
 
 
-# ── Bug #4: session_shell respects Guardian ───────────────────────────────────
+# ── Bug #4: terminal_create / terminal_use respect Guardian ────────────────
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="needs bash")
 @pytest.mark.asyncio
-async def test_session_shell_with_guardian_pins_workdir(tmp_path: Path) -> None:
-    from butterfly.tool_engine.executor.terminal.session_shell import SessionShellExecutor
+async def test_terminal_with_guardian_pins_workdir(tmp_path: Path) -> None:
+    from butterfly.tool_engine.executor.pure_context.terminal import TerminalExecutor
 
     play = tmp_path / "play"
     play.mkdir()
@@ -120,13 +120,14 @@ async def test_session_shell_with_guardian_pins_workdir(tmp_path: Path) -> None:
     bogus.mkdir()
 
     # Even if caller passes a workdir outside the boundary, Guardian wins.
-    sh = SessionShellExecutor(workdir=str(bogus), guardian=g)
+    sh = TerminalExecutor(workdir=str(bogus), guardian=g)
     try:
-        out = await sh.execute(command='pwd && echo "$BUTTERFLY_GUARDIAN_ROOT"', timeout=10)
+        await sh.create()
+        out = await sh.use(command='pwd && echo "$BUTTERFLY_GUARDIAN_ROOT"', timeout=10)
         assert str(play.resolve()) in out
         assert str(bogus) not in out
     finally:
-        await sh._hard_kill()
+        await sh.close()
 
 
 # ── Gap #6: sub-agent child sees parent's playground via symlink ──────────────

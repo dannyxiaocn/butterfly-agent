@@ -1,0 +1,9 @@
+{
+  "name": "terminal_create",
+  "description": "Open the session's persistent pty terminal and capture its initial environment. Call this ONCE before the first terminal_use; subsequent calls are idempotent and just re-report the current env. Returns a welcome block:\n[terminal ready]\nenv: <conda/venv name or null>\npath: <cwd>\ngit: <branch or null>\nThe terminal survives across agent turns — cd, export, aliases, python REPLs, and ssh sessions all persist. Use this for multi-step workflows that need shared environment; for one-off commands in a fresh subprocess, use `bash` instead.",
+  "input_schema": {
+    "type": "object",
+    "properties": {},
+    "required": []
+  }
+}

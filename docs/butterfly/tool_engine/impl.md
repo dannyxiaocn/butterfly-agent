@@ -109,10 +109,10 @@ The Guardian is wired through *all four* surfaces an agent can shell out:
 |---|---|
 | `bash` (inline) | `BashExecutor(workdir=…, guardian=…)` — pins cwd, exports env. |
 | `bash` (background, `run_in_background=true`) | `BashRunner.run` reads `ctx.guardian` from `BackgroundContext`; same pin + env logic. The `BackgroundTaskManager` accepts `guardian=` and threads it into the shared context. |
-| `session_shell` (persistent shell) | `SessionShellExecutor(workdir=…, guardian=…)` — Guardian overrides workdir at construction so the long-lived shell can never spawn outside the boundary; `_build_env` injects `BUTTERFLY_GUARDIAN_ROOT`. |
+| `terminal_create` / `terminal_use` | `TerminalExecutor(workdir=…, guardian=…)` — Guardian overrides workdir at construction so the long-lived shell can never spawn outside the boundary; `_build_env` injects `BUTTERFLY_GUARDIAN_ROOT`. |
 | `write` / `edit` | Hard `Guardian.check_write(path)` returning `Error: Failed to …: guardian: …` on violation. |
 
-Without these the explorer-mode contract was a sieve — `session_shell`
-or `bash + run_in_background` would let a child spawn a shell with cwd
-anywhere on disk. Each is exercised by
+Without these the explorer-mode contract was a sieve — the persistent
+terminal or `bash + run_in_background` would let a child spawn a shell
+with cwd anywhere on disk. Each is exercised by
 `tests/butterfly/tool_engine/test_pr28_review_round2.py`.

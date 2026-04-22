@@ -21,7 +21,7 @@ import re
 from typing import Callable
 
 
-# Matches the structured footer that bash / session_shell append to every
+# Matches the structured footer that bash / terminal_use append to every
 # completed run: e.g. ``[exit 0, duration 0.1s, truncated false]`` or
 # ``[exit 127, duration 0.0s, ...]``. We scan the whole buffer and use the
 # last match so trailing multi-command output still classifies on the final
@@ -66,9 +66,11 @@ def _bash_rule(result: str) -> bool:
 # Tools without a dedicated rule fall through to ``_default_rule``.
 _RULES: dict[str, Callable[[str], bool]] = {
     "bash": _bash_rule,
-    # session_shell shares the same [exit N] footer format (see
-    # tool_engine/executor/terminal/session_shell.py).
-    "session_shell": _bash_rule,
+    # terminal_use shares the same [exit N] footer format (see
+    # tool_engine/executor/pure_context/terminal.py). terminal_create
+    # returns a welcome block with no footer and falls through to the
+    # default rule, which correctly treats it as success.
+    "terminal_use": _bash_rule,
 }
 
 

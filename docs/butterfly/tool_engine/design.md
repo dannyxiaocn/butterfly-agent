@@ -30,7 +30,8 @@ The catalog is split into **toolhub tools** (declared in `toolhub/<name>/`) and 
 |---|---|---|---|
 | `bash` | One-shot shell command, fresh process every call | **Yes** | `command, timeout?, stdin?, run_in_background?, polling_interval?` |
 | `sub_agent` | Spawn a child session (same agent), return its FINAL reply | **Yes** | `name, task, mode (explorer\|executor), timeout_seconds?, run_in_background?, polling_interval?` |
-| `session_shell` | Persistent long-lived shell, `cd`/env survive across calls | No | `command, timeout?, reset?` |
+| `terminal_create` | Open the session's persistent pty terminal (idempotent). Returns the welcome block `[terminal ready]\nenv: …\npath: …\ngit: …`. | No | — |
+| `terminal_use` | Run one command against the terminal created by `terminal_create`. Fails closed when called before create. Prepends `[env: … | path: … | git: …]` when the fingerprint changes. | No | `command, timeout?, idle_threshold?` |
 | `read` | Read file contents (paginated) | No | `path, offset?, limit?` |
 | `write` | Write/overwrite a file | No | `path, content` |
 | `edit` | Exact string replacement on a file | No | `path, old_string, new_string, replace_all?` |
@@ -56,7 +57,7 @@ The catalog is split into **toolhub tools** (declared in `toolhub/<name>/`) and 
 
 ---
 
-## 3. Bash (one-shot) vs session_shell (persistent)
+## 3. Bash (one-shot) vs terminal_create + terminal_use (persistent)
 
 The two cover distinct use cases. Their descriptions point at each other.
 
@@ -77,23 +78,39 @@ Structured output (returned as a single string, but formatted):
 ```
 If output > `max_output_chars` (default 10_000), the tail is kept and a `[spilled: _sessions/<id>/tool_results/<uuid>.txt]` line is appended; `tool_output` or `read` can fetch the full file.
 
-### 3.2 `session_shell` — persistent
+### 3.2 `terminal_create` + `terminal_use` — persistent
 
-- **One long-lived `bash --norc --noprofile` per session**, lazily started on first call.
-- **Sentinel protocol**: each call writes `{command}\nprintf '\n__BFY_DONE_%d_%d__\n' $RANDOM $?\n` and reads until the marker; the exit code is embedded in the marker.
+- **One long-lived `bash --norc --noprofile` per session.** `terminal_create`
+  spawns it (idempotent; re-calling a live terminal just re-reports the
+  fingerprint). `terminal_use` runs one command at a time against the
+  existing terminal.
+- **Fail-closed ordering**: `terminal_use` before `terminal_create`
+  returns *"Error: Terminal not created, please use terminal_create
+  tool to create one first"* verbatim. The v2.0.33 single-verb
+  `session_shell(reset=true)` path collapsed "open" and "run" into one
+  kwarg and silently dropped the command on fresh shells — the split
+  makes the ordering explicit.
+- **Sentinel protocol**: each `terminal_use` writes `{command}\nprintf '\n__BFY_DONE_<marker>_%d__\n' $?\n` and reads until the marker; the exit code is embedded in the marker.
+- **Env fingerprint**: both verbs probe `(venv, cwd, git_branch)`
+  inside the pty. `terminal_create` returns the snapshot as a welcome
+  block; `terminal_use` prepends `[env: <venv> | path: <cwd> | git: <branch>]`
+  when the fingerprint changes since the last call (so the agent
+  notices `cd` / `conda activate` / `git switch` without re-probing).
 - Workdir, env vars, aliases, functions persist between calls.
-- **Single-command timeout**: sends SIGINT; escalates to SIGKILL + shell restart; caller sees `[timed out after Ns, shell restarted]`.
+- **Single-command timeout**: sends SIGINT through the pty; the shell
+  stays alive and the model can call `terminal_create` again for a
+  hard respawn if it's wedged.
 - **Auto-restart** if the shell dies between calls; next output is prefixed `[shell restarted]`.
-- `reset=True`: kills and restarts the shell, clearing all state.
-- **Not** backgroundable — long-running work goes in `bash` with `run_in_background=true`. session_shell is for *sequencing*, not for background processes.
+- **Not** backgroundable — long-running work goes in `bash` with `run_in_background=true`. The terminal is for *sequencing*, not for background processes.
 - **No parallel calls within one session**; the lock is enforced inside the executor (concurrent calls queue on the shell's stdin).
 
 ### 3.3 When to use which (agent-facing doc)
 
 The tool descriptions explicitly point at the other:
 
-- `bash.description`: *"One-shot shell command. Each call is a fresh process; `cd`/`export` do NOT persist. Use for independent commands, file operations, git, tests. For long-running work (> 30s) set `run_in_background=true`. For multi-step workflows that need to share environment (venv activate + run, cd into subdir + run), use `session_shell` instead."*
-- `session_shell.description`: *"Persistent shell — all calls share one long-lived bash. `cd`, `export`, aliases, functions persist. Use when setup and subsequent commands must share environment. One command at a time. Not for background processes — use `bash(run_in_background=true)` for those."*
+- `bash.description`: *"One-shot shell command. Each call is a fresh process; `cd`/`export` do NOT persist. Use for independent commands, file operations, git, tests. For long-running work (> 30s) set `run_in_background=true`. For multi-step workflows that need to share environment (venv activate + run, cd into subdir + run), call `terminal_create` once then use `terminal_use` instead."*
+- `terminal_create.description`: *"Open the session's persistent pty terminal and capture its initial environment. Call this ONCE before the first `terminal_use`."*
+- `terminal_use.description`: *"Run a command inside the persistent pty terminal opened by `terminal_create`. State (cwd, exported vars, aliases, active ssh/python REPL) persists between calls. Env-fingerprint changes are surfaced via a `[env: …]` banner. Not for long-running background processes — use `bash(run_in_background=true)` for those."*
 
 ---
 
@@ -210,7 +227,7 @@ The watchdog also scans the tail of stdout for interactive-prompt patterns (`[y/
 
 All tools return strings for provider compatibility, but adopt conventions so the agent and the UI can parse them.
 
-- **Commands (bash/session_shell)**: `<output>\n[exit N, duration T, truncated bool]` with optional `[spilled: <path>]` line if output was written to disk.
+- **Commands (bash / terminal_use)**: `<output>\n[exit N, duration T, truncated bool]` with optional `[spilled: <path>]` line if output was written to disk.
 - **File tools (read)**: `<content>\n[read N bytes, lines A-B of L]`.
 - **File tools (write/edit)**: `Wrote 1234 bytes to <path>.` / `Replaced 1 occurrence of '...' in <path>.`
 - **Search (grep/glob)**: standard ripgrep-style line output; truncation marker at the end if result size exceeds limit.
@@ -221,7 +238,7 @@ All tools return strings for provider compatibility, but adopt conventions so th
 Tools that complete normally (no raised exception) but whose output text encodes a failure — e.g. `bash` returning with `[exit 127, ...]`, an executor echoing a `Traceback (most recent call last):` — used to surface as green ✓ cells in the web UI, which was misleading. `butterfly/tool_engine/result_classifier.py` centralises the detection:
 
 - `classify_tool_result(tool_name, result) -> bool` — called once per call from `core/agent.py::_execute_tools` right after `tool.execute()` returns. The returned flag is combined with the exception-path `is_error` (tool-not-found, background-spawn-fail, raised exception) and threaded through `on_tool_done(name, input, result, tool_use_id, is_error)` so `Session._make_tool_done_callback` stamps `is_error` onto the `tool_done` event on `events.jsonl`.
-- Rule table lives at the module top of `result_classifier.py`. `bash` and `session_shell` share a rule that parses the last `[exit N, ...]` footer (last match wins so trailing multi-command output classifies on the final exit code) and treats any `[timed out after ...]` prefix as error. All other tools fall through to the default rule: `Traceback (most recent call last):` anywhere in the body, or the first non-empty line starting with `Error:` / `ERROR:` / `Error ` / `Traceback …`.
+- Rule table lives at the module top of `result_classifier.py`. `bash` and `terminal_use` share a rule that parses the last `[exit N, ...]` footer (last match wins so trailing multi-command output classifies on the final exit code) and treats any `[timed out after ...]` prefix as error. `terminal_create` has no footer (welcome-block only) and falls through to the default rule, which correctly treats it as success. All other tools fall through to the default rule: `Traceback (most recent call last):` anywhere in the body, or the first non-empty line starting with `Error:` / `ERROR:` / `Error ` / `Traceback …`.
 - The classifier errs on the side of green. An unknown tool produces a false negative (error that should be red stays green) — never a false positive (success painted red). Add a dedicated rule in `_RULES` when a tool's failure idiom slips past the default.
 
 The web UI renders the same `is_error` bit two ways:
@@ -276,7 +293,7 @@ Per-tool context injection table (v2.0.5):
 | Tool | Auto-injected |
 |---|---|
 | `bash` | `workdir`, `tool_results_dir` (for disk spillover) |
-| `session_shell` | `workdir`, `venv_env_provider` |
+| `terminal_create` / `terminal_use` | `workdir`, `venv_env_provider`, `terminal_logger` (shared `TerminalExecutor`) |
 | `read`/`write`/`edit` | `workdir` (for relative path resolution) |
 | `glob`/`grep` | `workdir` |
 | `web_search`/`web_fetch` | (provider-registry driven; no constructor injection) |

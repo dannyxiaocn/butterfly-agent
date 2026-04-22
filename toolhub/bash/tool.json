@@ -1,6 +1,6 @@
 {
   "name": "bash",
-  "description": "Execute a shell command. Each call spawns a fresh subprocess — `cd`, `export`, and aliases DO NOT persist across calls. Use relative paths (resolved against your session workdir). For multi-step workflows that need shared environment, use `session_shell` instead.",
+  "description": "Execute a shell command. Each call spawns a fresh subprocess — `cd`, `export`, and aliases DO NOT persist across calls. Use relative paths (resolved against your session workdir). For multi-step workflows that need shared environment, call `terminal_create` once then use `terminal_use` instead.",
   "backgroundable": true,
   "input_schema": {
     "type": "object",

@@ -241,6 +241,7 @@ class Session:
         (self.core_dir / "skills").mkdir(exist_ok=True)
         self.hook_dir.mkdir(parents=True, exist_ok=True)
         self.panel_dir.mkdir(parents=True, exist_ok=True)
+        self.terminal_dir.mkdir(parents=True, exist_ok=True)
         self.docs_dir.mkdir(exist_ok=True)
         self.playground_dir.mkdir(exist_ok=True)
         self.system_dir.mkdir(parents=True, exist_ok=True)
@@ -289,6 +290,26 @@ class Session:
             guardian=self._guardian,
         )
         self._agent.background_spawn = self._bg_manager.spawn
+
+        # Persistent terminal — one pty per session that survives across
+        # capability reloads. The TerminalLogger backs the web Terminal
+        # panel (state.json + append-only log.jsonl under core/terminal/).
+        # The executor is shared between the ``terminal_create`` and
+        # ``terminal_use`` tool entries via ToolLoader.
+        from butterfly.session_engine.terminal import TerminalLogger
+        from butterfly.tool_engine.executor.pure_context.terminal import (
+            TerminalExecutor,
+        )
+        self._terminal_logger = TerminalLogger(
+            self.terminal_dir,
+            event_sink=self._append_event,
+        )
+        self._terminal_executor = TerminalExecutor(
+            workdir=str(self.session_dir),
+            venv_env_provider=_venv_env_provider,
+            guardian=self._guardian,
+            terminal_logger=self._terminal_logger,
+        )
 
         # Sub-agent runner: lets ``subagent_new`` calls with run_in_background=true
         # flow through the same panel + events plumbing as bash. Sync calls
@@ -414,6 +435,7 @@ class Session:
                 memory_dir=self.core_dir / "memory",
                 main_memory_path=self.memory_path,
                 panel_dir=self.panel_dir,
+                terminal_dir=self.terminal_dir,
                 tool_results_dir=self.tool_results_dir,
                 guardian=self._guardian,
                 parent_session_id=self._session_id,
@@ -421,6 +443,7 @@ class Session:
                 system_sessions_base=self._system_base,
                 agent_base=self._base_dir.parent / "agenthub",
                 on_task_change=_emit_task_change,
+                terminal_executor=self._terminal_executor,
             )
             # Load tools from tools.md (toolhub), fallback to legacy tool.md
             tools_md_path = self.core_dir / "tools.md"
@@ -1379,6 +1402,20 @@ class Session:
         # while guaranteeing fresh sessions pick up their seed inputs.
         input_offset = self._initial_input_offset()
         interrupt_offset = ipc.events_size()
+        terminal_input_path = self.terminal_dir / "input.jsonl"
+        # Start past the current tail of ``input.jsonl`` so historical
+        # user commands (from previous daemon runs) are not re-dispatched
+        # on restart. The pty state itself is never persisted — replaying
+        # those commands would both re-run them in a fresh shell AND
+        # append duplicate ``user_input`` rows to ``context.jsonl``, which
+        # the agent would then ingest as tool output every time the
+        # server started. Inputs enqueued while the daemon was down are
+        # deliberately dropped: there is no live pty to send them to.
+        terminal_input_offset = (
+            terminal_input_path.stat().st_size
+            if terminal_input_path.exists()
+            else 0
+        )
         loop = asyncio.get_running_loop()
         next_housekeeping_at = loop.time()
 
@@ -1415,6 +1452,16 @@ class Session:
                             user_input_ids=[msg_id] if msg_id else [],
                         )
                         await self._enqueue(item)
+
+                # Terminal input queue — picks up typed lines + ^C from
+                # the web Terminal panel and dispatches through the
+                # session-scoped TerminalExecutor.
+                from butterfly.service.terminal_service import poll_queue
+                term_entries, terminal_input_offset = poll_queue(
+                    terminal_input_path, terminal_input_offset
+                )
+                for entry in term_entries:
+                    await self._dispatch_terminal_input(entry)
 
                 now = loop.time()
                 if now >= next_housekeeping_at:
@@ -1457,6 +1504,15 @@ class Session:
                                 continue
                             await self._enqueue(TaskItem(card=card, seed=seed))
 
+                    # Phase 5: snapshot + close the persistent terminal
+                    # when it's been idle for 10 minutes. Agent lock is
+                    # re-checked inside the executor, so a concurrent run
+                    # can't be clobbered.
+                    try:
+                        await self._terminal_executor.maybe_idle_close()
+                    except Exception as exc:
+                        print(f"[session] terminal idle-close failed: {exc}")
+
                     next_housekeeping_at = now + self._TASK_POLL_INTERVAL
 
                 if stop_event is not None and stop_event.is_set():
@@ -1468,6 +1524,7 @@ class Session:
             self._append_event({"type": "status", "value": "cancelled"})
             await self._shutdown_consumer()
             await self._shutdown_background_manager()
+            await self._shutdown_terminal()
             self._clear_pid()
             raise
 
@@ -1475,6 +1532,7 @@ class Session:
         self._append_event({"type": "status", "value": "stopped"})
         await self._shutdown_consumer()
         await self._shutdown_background_manager()
+        await self._shutdown_terminal()
         self._clear_pid()
 
     async def _handle_explicit_interrupt(self, discarded_inbound: int) -> None:
@@ -1575,6 +1633,25 @@ class Session:
         except Exception as exc:
             self._append_event({"type": "error", "content": f"bg_manager shutdown: {exc}"})
 
+    async def _shutdown_terminal(self) -> None:
+        """Snapshot cwd + hard-kill the persistent pty on daemon exit.
+
+        Without this, an explicit /stop or server shutdown leaves the
+        bash subprocess + pty master fd alive until the 10-min
+        ``maybe_idle_close`` housekeeping tick — but that tick only
+        fires inside the daemon loop, which has already exited. Next
+        daemon start respawns a fresh pty and picks up the snapshot.
+        """
+        executor = getattr(self, "_terminal_executor", None)
+        if executor is None:
+            return
+        try:
+            await asyncio.wait_for(executor.snapshot_and_close(), timeout=3.0)
+        except (asyncio.TimeoutError, Exception) as exc:
+            self._append_event(
+                {"type": "error", "content": f"terminal shutdown: {exc}"}
+            )
+
     # ── Properties ─────────────────────────────────────────────────
 
     @property
@@ -1608,6 +1685,11 @@ class Session:
     @property
     def panel_dir(self) -> Path:
         return self.core_dir / "panel"
+
+    @property
+    def terminal_dir(self) -> Path:
+        """Persistent-shell state + log for the web Terminal panel."""
+        return self.core_dir / "terminal"
 
     @property
     def hook_dir(self) -> Path:
@@ -1645,6 +1727,55 @@ class Session:
             event.setdefault("ts", datetime.now().isoformat())
             with self._events_path.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(event, ensure_ascii=False) + "\n")
+
+    async def _dispatch_terminal_input(self, entry: dict) -> None:
+        """Act on one entry from ``core/terminal/input.jsonl``.
+
+        Routes ``type="input"`` to ``TerminalExecutor.user_input`` and
+        ``type="interrupt"`` to ``user_interrupt``. Both reject with a
+        ``terminal_rejected`` SSE event when the agent holds the lock so
+        the panel can surface "Agent is using terminal…".
+
+        On accepted user input, we also append a ``user_input`` row to
+        ``context.jsonl`` (``caller=system, source=panel,
+        tool_name=terminal_user, mode=wait``) so the agent sees the
+        ``$ cmd\\n<output>`` transcript on its next natural break without
+        being preempted.
+        """
+        t = entry.get("type")
+        entry_id = entry.get("id")
+        executor = self._terminal_executor
+        if t == "input":
+            content = entry.get("content", "")
+            if not isinstance(content, str):
+                return
+            ok, output = await executor.user_input(content)
+            if not ok:
+                self._append_event({
+                    "type": "terminal_rejected",
+                    "id": entry_id,
+                    "reason": "locked_by_agent",
+                })
+                return
+            cmd_line = content.rstrip("\n")
+            transcript = f"$ {cmd_line}\n{output}" if output else f"$ {cmd_line}"
+            self._append_context({
+                "type": "user_input",
+                "caller": "system",
+                "source": "panel",
+                "tool_name": "terminal_user",
+                "mode": "wait",
+                "content": transcript,
+                "id": f"terminal-{entry_id}" if entry_id else None,
+            })
+        elif t == "interrupt":
+            ok = await executor.user_interrupt()
+            if not ok:
+                self._append_event({
+                    "type": "terminal_rejected",
+                    "id": entry_id,
+                    "reason": "locked_by_agent",
+                })
 
     def _drain_background_events(self) -> None:
         """Non-blocking drain of the BackgroundTaskManager event queue.

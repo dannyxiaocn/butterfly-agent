@@ -1,0 +1,22 @@
+{
+  "name": "terminal_use",
+  "description": "Run a command inside the persistent pty terminal opened by `terminal_create`. Fails fast with \"Error: Terminal not created, please use terminal_create tool to create one first\" if called before terminal_create. State (cwd, exported vars, aliases, active ssh/python REPL) persists between calls — this is the tool to use when a workflow needs shared environment across steps. Each call appends a structured footer: `[exit N, duration Ns, foreground=…]` when the sentinel fires, `[no exit captured — output idle …]` when the shell is parked waiting for input (e.g. inside a REPL), or `[timed out after Ns …]` on the hard cap. When the environment fingerprint (venv / cwd / git branch) changes between calls, the output is prefixed with `[env: <venv> | path: <cwd> | git: <branch>]` so you notice the drift without re-probing. Not for long-running background processes — use `bash(run_in_background=true)` for those.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "command": {
+        "type": "string",
+        "description": "Shell command (or input for whatever subprocess currently owns the pty, e.g. a line to type into a python REPL after `python3` was launched in an earlier call)."
+      },
+      "timeout": {
+        "type": "number",
+        "description": "Hard total-time cap in seconds (default 60). On expiry ^C is sent through the pty to the foreground process group; the shell remains alive."
+      },
+      "idle_threshold": {
+        "type": "number",
+        "description": "Seconds of output-idle that count as 'command done waiting for input' (default 1.5). Shorter = faster return for interactive commands; longer = more room for slow-streaming output. Most callers leave this unset."
+      }
+    },
+    "required": ["command"]
+  }
+}
