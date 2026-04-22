@@ -78,8 +78,8 @@ async def test_spawn_calls_runner_validate_synchronously(tmp_path: Path) -> None
 async def test_spawn_sub_agent_uses_sub_agent_panel_type(tmp_path: Path) -> None:
     mgr = BackgroundTaskManager(panel_dir=tmp_path / "p", tool_results_dir=tmp_path / "r")
     runner = _DummyRunner()
-    mgr.register_runner("sub_agent", runner)
-    tid = await mgr.spawn("sub_agent", {"task": "x", "mode": "explorer"})
+    mgr.register_runner("subagent_new", runner)
+    tid = await mgr.spawn("subagent_new", {"task": "x", "mode": "explorer"})
     # Wait for the runner task to settle so the entry transitions terminally.
     for _ in range(40):
         if any(e.tid == tid and e.is_terminal() for e in list_entries(tmp_path / "p")):
@@ -88,7 +88,7 @@ async def test_spawn_sub_agent_uses_sub_agent_panel_type(tmp_path: Path) -> None
     entries = list_entries(tmp_path / "p")
     assert len(entries) == 1
     assert entries[0].type == TYPE_SUB_AGENT
-    assert entries[0].tool_name == "sub_agent"
+    assert entries[0].tool_name == "subagent_new"
 
 
 @pytest.mark.asyncio

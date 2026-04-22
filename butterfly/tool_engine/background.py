@@ -423,7 +423,7 @@ class BackgroundTaskManager:
             # Sub-agent entries get a dedicated panel type so the UI can
             # render the child-session card differently.
             from butterfly.session_engine.panel import TYPE_SUB_AGENT
-            entry_type = TYPE_SUB_AGENT if tool_name == "sub_agent" else TYPE_PENDING_TOOL
+            entry_type = TYPE_SUB_AGENT if tool_name == "subagent_new" else TYPE_PENDING_TOOL
         entry = create_pending_tool_entry(
             self._panel_dir,
             tool_name=tool_name,

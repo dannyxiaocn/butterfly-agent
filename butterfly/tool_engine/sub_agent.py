@@ -29,7 +29,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from butterfly.session_engine.panel import PanelEntry, STATUS_KILLED
+from butterfly.session_engine.panel import (
+    PanelEntry,
+    STATUS_KILLED,
+    TYPE_SUB_AGENT,
+    list_entries,
+)
 from butterfly.session_engine.session_init import init_session
 from butterfly.tool_engine.background import BackgroundContext, BackgroundEvent
 
@@ -60,6 +65,35 @@ _MAX_SUB_AGENT_DEPTH = 2
 def _new_child_id() -> str:
     """Same id format Session uses internally."""
     return datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + "-" + uuid.uuid4().hex[:4]
+
+
+def _list_sub_agent_entries(
+    parent_session_id: str, sessions_base: Path
+) -> list[PanelEntry]:
+    """Return all sub-agent panel entries for ``parent_session_id``, oldest first.
+
+    Reads ``sessions/<parent>/core/panel/*.json`` and keeps only entries of
+    ``type=TYPE_SUB_AGENT`` — filtering out background bash and other pending
+    tools. Safe to call when no panel dir exists (returns empty list).
+    """
+    panel_dir = sessions_base / parent_session_id / "core" / "panel"
+    return [e for e in list_entries(panel_dir) if e.type == TYPE_SUB_AGENT]
+
+
+def _find_sub_agent_by_name(
+    entries: list[PanelEntry], name: str
+) -> PanelEntry | None:
+    """Pick the sub-agent with display_name==name.
+
+    When multiple entries share a name (duplicate spawn), return the most
+    recently created one — that matches the LLM's intuition of "the one I
+    was just talking to". Returns None when no entry matches.
+    """
+    matches = [e for e in entries if (e.meta or {}).get("display_name") == name]
+    if not matches:
+        return None
+    matches.sort(key=lambda e: e.created_at)
+    return matches[-1]
 
 
 def _compose_initial_message(task: str, mode: str) -> str:

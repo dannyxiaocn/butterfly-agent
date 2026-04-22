@@ -327,7 +327,7 @@ def init_session(
                     # child will still work, just without the convenience link.
                     pass
 
-    # Mode prompt — copy toolhub/sub_agent/<mode>.md into core/mode.md.
+    # Mode prompt — copy toolhub/subagent_new/<mode>.md into core/mode.md.
     # Session._load_session_capabilities folds it into the static
     # (cacheable) system prefix consumed by Agent._build_system_parts.
     #
@@ -337,7 +337,7 @@ def init_session(
     # the agent-visible rules that make those mechanisms safe. Cubic
     # review (PR #28) flagged the silent-skip path as a consistency hole.
     if mode is not None:
-        mode_src = _TOOLHUB_DIR / "sub_agent" / f"{mode}.md"
+        mode_src = _TOOLHUB_DIR / "subagent_new" / f"{mode}.md"
         if not mode_src.exists():
             raise FileNotFoundError(
                 f"init_session: mode={mode!r} requires {mode_src} to exist; "

@@ -102,9 +102,8 @@ butterfly chat --session 2026-04-13_10-00-00-a1b2 "What's the status?"
 |---------|-------------|
 | `butterfly` (no args) | Start server + web UI together; prints `http://localhost:7250`; blocks until Ctrl+C |
 | `butterfly server` | Tail the running server's log (read-only; needs the daemon up) |
-| `butterfly update [--skip-frontend]` | git pull + pip install -e . + npm build + restart (refuses dirty/untracked tree) |
 
-Internal use: `python -m butterfly.runtime.server --foreground` is what `_start_daemon` spawns and what the auto-update path `execvp`s onto. You normally never invoke it directly.
+Internal use: `python -m butterfly.runtime.server --foreground` is what `_start_daemon` spawns. You normally never invoke it directly.
 
 ### Session Lifecycle
 

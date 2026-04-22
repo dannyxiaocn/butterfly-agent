@@ -22,7 +22,6 @@ butterfly stop ID                       # stop session
 butterfly start ID                      # resume session
 butterfly agent new ...                 # scaffold a new agent
 butterfly server                        # tail the running server's log (read-only)
-butterfly update [--skip-frontend]      # git pull + pip install + rebuild web + restart
 
 # Auth helpers (v2.0.13+)
 butterfly codex login                   # device-code OAuth → ~/.butterfly/auth.json
@@ -46,6 +45,5 @@ The separate `butterfly` + `-server` / `-web` console scripts were removed in v2
 |---------|----------|
 | `butterfly` | Backgrounds the server daemon (`_start_daemon`) if none is running, then runs uvicorn in-process; prints `http://localhost:7250`; blocks until Ctrl+C. Ctrl+C stops the server **only if this invocation started it**; a pre-existing daemon is left alone so another `butterfly` session keeps working. |
 | `butterfly server` | Tails `_sessions/server.log` via `tail -F`. Read-only. Exits with "not running" if the daemon is down. |
-| `butterfly update` | `git status --porcelain` refuses on dirty/untracked; stops the server **if it was running**; `git pull --ff-only` + `pip install -e .` + `npm run build` (unless `--skip-frontend`); restarts the server if it was running. Restores the server on git / pip failure so the user is never left without a daemon. If no server was running at start, none is started at end. |
 
-Invoke the server module directly with `python -m butterfly.runtime.server --foreground` for in-process daemon use (this is what `_start_daemon` Popens and what the auto-update `execvp` path rebinds to). PID stored in `_sessions/server.pid`, logs in `_sessions/server.log`.
+Invoke the server module directly with `python -m butterfly.runtime.server --foreground` for in-process daemon use (this is what `_start_daemon` Popens). PID stored in `_sessions/server.pid`, logs in `_sessions/server.log`.
