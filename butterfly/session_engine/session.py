@@ -1085,31 +1085,51 @@ class Session:
                     on_llm_call_end=self._make_llm_call_end_callback(),
                 )
         except asyncio.CancelledError:
-            # On cancel we roll back the per-iteration commits the agent
-            # may have written so the verbose task prompt does not pollute
-            # history. The card is marked pending by ``_dispatch_one``.
-            self._agent._history = history_snapshot
+            # Mirror _do_chat / _save_partial_chat_turn: keep committed
+            # history and persist the partial turn so tool_use blocks
+            # survive reload after ⚡ interrupt. Pre-v2.0.34 this branch
+            # rolled history back to ``history_snapshot`` and wrote an
+            # empty-``messages`` turn, which broke tool-history reload
+            # for meta sessions (100% TaskItem workload). Card is marked
+            # pending by ``_dispatch_one``.
             self._set_model_status("idle", triggered_by)
             on_chunk.flush()
-            # v2.0.28: mirror ``_do_chat``'s partial-turn write so a tick
-            # cancelled mid-thought still surfaces "Thinking interrupted"
-            # on reload. Tick prompts don't textually merge across runs
-            # (the re-scheduled tick emits a fresh ``task_wakeup``), so
-            # ``messages`` stays empty and only the thinking_blocks ride
-            # along for the UI. No write when thinking never started —
-            # keeps context.jsonl free of blank turns after a vanilla
-            # cancel. Persisted BEFORE firing the external hook so a
-            # ``agent_loop_end`` observer sees the turn on disk.
+
+            # Same marker rewrite as the success path — shortens the
+            # bloated "Task wakeup: …" user prompt to "[Task:{card} {ts}]"
+            # before the partial turn is serialised.
+            new_msgs = self._agent._history[old_len:]
+            if new_msgs and new_msgs[0].role == "user":
+                from butterfly.core.types import Message as _Msg
+                marker = f"[Task:{card.name} {trigger_ts}]"
+                new_msgs = [_Msg(role="user", content=marker), *new_msgs[1:]]
+                self._agent._history = history_snapshot + new_msgs
+
+            partial = self._agent._history[old_len:]
             _tick_thinking_blocks = get_thinking_blocks()
-            if _tick_thinking_blocks:
-                self._append_context({
+            if partial or _tick_thinking_blocks:
+                turn: dict = {
                     "type": "turn",
                     "triggered_by": triggered_by,
                     "trigger_ts": trigger_ts,
                     "interrupted": True,
-                    "messages": [],
-                    "thinking_blocks": _tick_thinking_blocks,
-                })
+                    "pre_triggered": True,
+                    "messages": self._serialize_turn_messages(partial),
+                }
+                if get_tool_call_count() > 0:
+                    turn["has_streaming_tools"] = True
+                if had_thinking():
+                    turn["has_streaming_thinking"] = True
+                if _tick_thinking_blocks:
+                    turn["thinking_blocks"] = _tick_thinking_blocks
+                if self._current_turn_agent_durations:
+                    turn["agent_output_durations"] = list(self._current_turn_agent_durations)
+                if self._current_turn_agent_usages:
+                    turn["agent_output_usages"] = list(self._current_turn_agent_usages)
+                if self._current_turn_iteration_usages:
+                    turn["per_iteration_usages"] = list(self._current_turn_iteration_usages)
+                self._append_context(turn)
+
             await self._fire_external_hook("agent_loop_end", {
                 "source": "task", "card": card.name, "reason": "cancelled",
             })
