@@ -29,18 +29,6 @@ Every `user_input` event written to `context.jsonl` carries a `mode` field — `
 
 `mode` is written once at producer time and never rewritten. The `BridgeSession.send_interrupt()` event remains a separate control event on `events.jsonl`; it cancels the in-flight run AND drops every queued item — distinct from a chat-with-`mode=interrupt` (which cancels and runs the new content in its place).
 
-## Auto-update worker (v2.0.16)
-
-The server daemon runs an hourly background task (`_auto_update_worker` in `butterfly/runtime/server.py`) that compares local `HEAD` against `origin/main`:
-
-- **No new commits** → delete any stale `_sessions/update_status.json` and sleep until the next tick.
-- **New commits + dirty working tree** → write `update_status.json` with `{available: true, dirty: true, commits_behind: N, local_head, remote_head, checked_at}`. The web frontend polls `/api/update_status` every 30 s and shows a top-right banner; no automatic apply, because `git pull --ff-only` would clobber local work.
-- **New commits + clean working tree** → run `git pull --ff-only` + `pip install -e .` + `npm run build` (best-effort; frontend failure is warned, not fatal). Then write `{applied: true, new_head, applied_at, reload: true}` and `os.execvp` the current process with fresh Python bytecode. The web frontend sees a new `applied_at` on its next poll and calls `window.location.reload()`.
-
-Disable with `BUTTERFLY_AUTOUPDATE_INTERVAL_SEC=0`. Interval seconds default is 3600; any positive value is respected. Worker only runs when `.git/` exists (pip-only installs are skipped).
-
-Why `os.execvp` instead of a respawn-with-parent pattern: `execvp` replaces the process image in place, so the PID is preserved, open sockets held by uvicorn in the co-located web wrapper (see `ui/cli/main.py::cmd_default`) get dropped cleanly when the wrapper itself notices the server child exited. `_clear_pid` is called immediately before `execvp` so the new image can claim the PID file unambiguously.
-
 ## Agent-output lifecycle events (v2.0.20)
 
 Text output from an LLM call is surfaced to the frontend through three dedicated events on `events.jsonl`, all emitted from `Session` during `Agent.run()`:
@@ -65,6 +53,5 @@ Every `tool_done` event on `events.jsonl` carries the originating `tool_use_id` 
 |------------|----------|
 | `butterfly` (no args) | `_start_daemon()` backgrounds the server, then runs uvicorn in-process; prints URL; hangs. Ctrl+C stops both. |
 | `butterfly server` | Tails `_sessions/server.log` via `tail -F`. Errors if server isn't running. Read-only. |
-| `butterfly update` | Refuses if working tree dirty; stops server; `git pull --ff-only` + `pip install -e .` + `npm run build` (unless `--skip-frontend`); restarts server. |
 
-Session-management subcommands (`chat`, `new`, `sessions`, `stop`, `start`, `log`, `tasks`, `panel`, `agent new`) are unchanged. `--foreground` on `python -m butterfly.runtime.server` is still the mode used by `_start_daemon` Popen and by the auto-update execvp path; the module retains `start`/`stop`/`status` subcommands for in-process use but is no longer on the user's PATH.
+Session-management subcommands (`chat`, `new`, `sessions`, `stop`, `start`, `log`, `tasks`, `panel`, `agent new`) are unchanged. `--foreground` on `python -m butterfly.runtime.server` is still the mode used by `_start_daemon` Popen; the module retains `start`/`stop`/`status` subcommands for in-process use but is no longer on the user's PATH.

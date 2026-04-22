@@ -18,7 +18,6 @@ butterfly kimi login
 butterfly                       # start server + web UI; print URL; hang
 butterfly chat "hello"          # auto-starts server if needed
 butterfly server                # tail the running server's log
-butterfly update                # git pull + pip install + rebuild + restart
 ```
 
 Both login commands are idempotent and print step-by-step tutorials if any

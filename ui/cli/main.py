@@ -3,7 +3,6 @@
 Usage:
     butterfly                                  Start server + web UI, print URL, hang
     butterfly server [tail|status|stop]       Manage the server daemon (default: tail log)
-    butterfly update                          git pull + pip install -e . + rebuild web + restart
 
     butterfly chat MESSAGE [options]          Send a message / create a session
     butterfly sessions [--json]               List all sessions
@@ -1249,97 +1248,6 @@ def _cmd_server_stop(_args) -> int:
     return 0
 
 
-# ── Subcommand: `butterfly update` ────────────────────────────────────────────
-
-def _add_update_parser(subparsers) -> None:
-    p = subparsers.add_parser(
-        "update",
-        allow_abbrev=False,
-        help="git pull + pip install -e . + rebuild web + restart server.",
-    )
-    p.add_argument("--skip-frontend", action="store_true",
-                   help="Skip the frontend rebuild step.")
-    p.set_defaults(func=cmd_update)
-
-
-def cmd_update(args) -> int:
-    import subprocess as _sp
-    from butterfly.runtime.server import (
-        _is_server_running, _cmd_stop, _start_daemon,
-    )
-    sys_dir = _DEFAULT_SYSTEM_BASE
-    sessions_dir = _DEFAULT_SESSIONS_BASE
-
-    # 1. Refuse to clobber uncommitted changes OR untracked files. `git diff`
-    # alone misses untracked files, which `git pull --ff-only` then happily
-    # overwrites if upstream added a file at the same path. Use
-    # `status --porcelain` which reports all three classes (modified / staged
-    # / untracked) in one go.
-    status = _sp.run(
-        ["git", "-C", str(_REPO_ROOT), "status", "--porcelain"],
-        capture_output=True, text=True,
-    )
-    if status.returncode != 0:
-        print(f"Error: git status failed: {status.stderr}", file=sys.stderr)
-        return 1
-    if status.stdout.strip():
-        print("Error: working tree is not clean (modified / staged / untracked "
-              "files present). Commit, stash, or remove them first.",
-              file=sys.stderr)
-        return 1
-
-    # 2. Stop server if running; remember so we can restart.
-    server_was_running = _is_server_running(sys_dir) is not None
-
-    def _ensure_server_restarted_on_exit():
-        if server_was_running and _is_server_running(sys_dir) is None:
-            _start_daemon(sessions_dir, sys_dir)
-
-    if server_was_running:
-        print("Stopping butterfly server...")
-        class _A: pass
-        a = _A()
-        a.system_sessions_dir = str(sys_dir)
-        _cmd_stop(a)
-
-    # 3. git pull --ff-only
-    print("git pull...")
-    r = _sp.run(["git", "-C", str(_REPO_ROOT), "pull", "--ff-only"])
-    if r.returncode != 0:
-        print("Error: git pull failed.", file=sys.stderr)
-        _ensure_server_restarted_on_exit()
-        return 1
-
-    # 4. pip install -e .
-    print("pip install -e .")
-    r = _sp.run([sys.executable, "-m", "pip", "install", "-e", str(_REPO_ROOT)])
-    if r.returncode != 0:
-        # Even if pip fails, the new code is already on disk and importable.
-        # Restart the server so we don't leave the user without a running
-        # daemon after a partial update.
-        print("Error: pip install failed.", file=sys.stderr)
-        _ensure_server_restarted_on_exit()
-        return 1
-
-    # 5. Rebuild frontend (best-effort; warn but don't fail).
-    if not args.skip_frontend:
-        frontend_dir = _REPO_ROOT / "ui" / "web" / "frontend"
-        if (frontend_dir / "package.json").exists() and shutil.which("npm"):
-            print("npm run build (frontend)...")
-            r = _sp.run(["npm", "run", "build"], cwd=str(frontend_dir))
-            if r.returncode != 0:
-                print("Warning: npm build failed; frontend may be stale.",
-                      file=sys.stderr)
-
-    # 6. Restart server if it was running.
-    if server_was_running:
-        print("Starting butterfly server...")
-        _start_daemon(sessions_dir, sys_dir)
-    print("Update complete.")
-    return 0
-
-
-
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -1369,7 +1277,6 @@ def main() -> None:
             "  butterfly kimi login                 Paste Kimi API key into .env\n\n"
             "Runtime:\n"
             "  butterfly server                     Tail the running server's log\n"
-            "  butterfly update                     git pull + pip install + rebuild + restart\n"
         ),
     )
     subparsers = parser.add_subparsers(dest="command", metavar="COMMAND")
@@ -1388,7 +1295,6 @@ def main() -> None:
     _add_codex_parser(subparsers)
     _add_kimi_parser(subparsers)
     _add_server_parser(subparsers)
-    _add_update_parser(subparsers)
 
     args = parser.parse_args()
     if getattr(args, "func", None) is None:

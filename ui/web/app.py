@@ -172,27 +172,6 @@ def create_app(
     async def index():
         return FileResponse(_DIST_DIR / "index.html")
 
-    @app.get("/api/update_status")
-    async def update_status():
-        """Return the auto-update worker's latest status, if any.
-
-        Shape (written by `butterfly/runtime/server.py::_auto_update_worker`):
-          - `{applied: true, new_head, applied_at, reload: true}` after a
-            silent update landed; the frontend force-reloads on seeing a
-            newer `applied_at` than its last-seen value.
-          - `{available: true, dirty: true, commits_behind, ...}` when the
-            worker sees upstream commits but the tree is dirty — frontend
-            shows a top-right notification.
-          - `{}` when no pending update.
-        """
-        status_path = system_sessions_dir / "update_status.json"
-        if not status_path.exists():
-            return {}
-        try:
-            return json.loads(status_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return {}
-
     @app.get("/api/sessions")
     async def list_sessions():
         return service_list_sessions(sessions_dir, system_sessions_dir, exclude_meta=False)

@@ -219,15 +219,15 @@ def test_hud_endpoint_reports_sub_agent_count(tmp_path: Path) -> None:
     # Two running sub_agent entries + one already-completed entry that
     # MUST NOT be counted.
     create_pending_tool_entry(
-        panel_dir, tool_name="sub_agent", input={"task": "x", "mode": "explorer"},
+        panel_dir, tool_name="subagent_new", input={"task": "x", "mode": "explorer"},
         entry_type=TYPE_SUB_AGENT,
     )
     create_pending_tool_entry(
-        panel_dir, tool_name="sub_agent", input={"task": "y", "mode": "executor"},
+        panel_dir, tool_name="subagent_new", input={"task": "y", "mode": "executor"},
         entry_type=TYPE_SUB_AGENT,
     )
     e3 = create_pending_tool_entry(
-        panel_dir, tool_name="sub_agent", input={"task": "z", "mode": "explorer"},
+        panel_dir, tool_name="subagent_new", input={"task": "z", "mode": "explorer"},
         entry_type=TYPE_SUB_AGENT,
     )
     # Mark one as terminal.

@@ -236,7 +236,7 @@ class ToolLoader:
                     return await executor.use(**kwargs)
             return _impl
 
-        elif tool_name == "sub_agent":
+        elif tool_name == "subagent_new":
             executor_cls = getattr(mod, "SubAgentTool", None)
             if executor_cls:
                 executor = executor_cls(
@@ -244,6 +244,30 @@ class ToolLoader:
                     sessions_base=self._sessions_base,
                     system_sessions_base=self._system_sessions_base,
                     agent_base=self._agent_base,
+                )
+                async def _impl(**kwargs: Any) -> str:
+                    return await executor.execute(**kwargs)
+                return _impl
+
+        elif tool_name == "subagent_list":
+            executor_cls = getattr(mod, "SubAgentListTool", None)
+            if executor_cls:
+                executor = executor_cls(
+                    parent_session_id=self._parent_session_id,
+                    sessions_base=self._sessions_base,
+                    system_sessions_base=self._system_sessions_base,
+                )
+                async def _impl(**kwargs: Any) -> str:
+                    return await executor.execute(**kwargs)
+                return _impl
+
+        elif tool_name == "subagent_resume":
+            executor_cls = getattr(mod, "SubAgentResumeTool", None)
+            if executor_cls:
+                executor = executor_cls(
+                    parent_session_id=self._parent_session_id,
+                    sessions_base=self._sessions_base,
+                    system_sessions_base=self._system_sessions_base,
                 )
                 async def _impl(**kwargs: Any) -> str:
                     return await executor.execute(**kwargs)

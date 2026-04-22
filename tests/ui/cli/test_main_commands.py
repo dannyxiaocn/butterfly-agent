@@ -746,3 +746,36 @@ def test_cmd_new_inject_memory(tmp_path):
     assert code == 0
     assert (sessions / "inject-test" / "core" / "memory" / "mykey.md").read_text() == "myvalue"
     assert (sessions / "inject-test" / "core" / "memory" / "other.md").read_text() == "content here"
+
+
+# ── PR #52: `butterfly update` subcommand removed ────────────────────────────
+
+def test_cmd_update_symbol_not_exported() -> None:
+    """PR #52 deleted the `butterfly update` subcommand wholesale — the
+    module must no longer expose ``cmd_update`` or ``_add_update_parser``.
+
+    Keeping the symbols around (even as dead code) is a trap: an autocomplete
+    or stale import elsewhere would resurrect a half-wired command.
+    """
+    import ui.cli.main as main_mod
+
+    assert not hasattr(main_mod, "cmd_update"), (
+        "`cmd_update` still exported from ui.cli.main — PR #52 was supposed "
+        "to delete it."
+    )
+    assert not hasattr(main_mod, "_add_update_parser"), (
+        "`_add_update_parser` still exported from ui.cli.main — PR #52 was "
+        "supposed to delete it."
+    )
+
+
+def test_butterfly_update_argv_rejected(monkeypatch) -> None:
+    """Invoking ``butterfly update`` via the unified CLI must fail with a
+    non-zero argparse error — the subcommand is not registered."""
+    from ui.cli.main import main
+
+    monkeypatch.setattr(sys, "argv", ["butterfly", "update"])
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+    # argparse rejects an unknown subcommand with exit code 2.
+    assert exc_info.value.code != 0
