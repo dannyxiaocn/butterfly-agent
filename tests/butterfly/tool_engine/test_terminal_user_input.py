@@ -253,3 +253,98 @@ async def test_use_prepends_env_banner_after_cd(tmp_path: Path) -> None:
         assert str(tmp_path / "b") in first_line
     finally:
         await ex.close()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="bash required")
+@pytest.mark.asyncio
+async def test_use_skips_env_probe_when_parked_in_subprocess(tmp_path: Path) -> None:
+    """PR review #5: When the pty is parked in a subprocess (python REPL,
+    ssh, read -p) ``idle_return=True`` — the env probe would round-trip
+    against the wrong process and return ``null_fp``, nulling the HUD
+    and prepending ``[env: null | path: null | git: null]``. The fix
+    skips the probe in that case."""
+    ex = TerminalExecutor(workdir=str(tmp_path))
+    try:
+        await ex.create()
+        # Seed a fingerprint so "banner appeared" is visible.
+        fp0 = ex.last_env
+        assert fp0 is not None
+        # Enter the python3 REPL. ``python3`` with no args prints a
+        # banner + prompt and then idles — sentinel won't fire, so
+        # ``idle_return=True``.
+        out = await ex.use(command="python3 -q", idle_threshold=1.0, timeout=5.0)
+        # Fingerprint must NOT have been blanked — the gate prevents the
+        # bad probe from landing.
+        fp1 = ex.last_env
+        assert fp1 is not None
+        assert fp1.cwd is not None, "probe ran inside REPL and nulled cwd"
+        # Output must NOT carry a spurious [env: null | ...] banner.
+        assert "env: null" not in out, f"leaked null banner: {out!r}"
+        # Exit the REPL cleanly so the fixture can close.
+        await ex.use(command="exit()", idle_threshold=0.8, timeout=5.0)
+    finally:
+        await ex.close()
+
+
+def test_format_result_uses_idle_threshold_in_footer(tmp_path: Path) -> None:
+    """PR review #7: The "output idle for N s" footer used the
+    module-level ``_IDLE_THRESHOLD`` instead of the per-run value,
+    contradicting the actual wait when a caller bumped idle_threshold."""
+    from butterfly.tool_engine.executor.pure_context.terminal import (
+        RunResult,
+        _format_result,
+    )
+
+    r = RunResult(
+        output="",
+        exit_code=None,
+        duration=5.0,
+        timeout=30.0,
+        idle_threshold=5.0,
+        idle_return=True,
+        timed_out=False,
+        foreground_cmd="python3",
+        foreground_pid=1234,
+        shell_alive=True,
+        restarted=False,
+    )
+    footer = _format_result(r)
+    assert "output idle for 5.0s" in footer, footer
+    assert "output idle for 1.5s" not in footer, footer
+
+
+def test_read_log_from_handles_multibyte_utf8(tmp_path: Path) -> None:
+    """PR review #1: Text-mode byte-offset seek can split multi-byte
+    UTF-8 chars and swallow entries silently via ``errors='replace'``.
+    Binary-mode read + line-boundary trim must round-trip Chinese text
+    cleanly."""
+    from butterfly.service.terminal_service import read_log_from
+    sid = "sess-42"
+    term = tmp_path / sid / "core" / "terminal"
+    term.mkdir(parents=True)
+    lines = [
+        '{"ts": 1.0, "source": "agent_out", "text": "你好"}',
+        '{"ts": 2.0, "source": "user_cmd", "text": "ls 中文目录"}',
+        '{"ts": 3.0, "source": "agent_out", "text": "café"}',
+    ]
+    (term / "log.jsonl").write_bytes(
+        ("\n".join(lines) + "\n").encode("utf-8")
+    )
+    # Read from byte 0 — must return all three entries with content
+    # intact (decoded via UTF-8, not clobbered by errors='replace').
+    entries, new_offset = read_log_from(tmp_path, sid, 0)
+    assert len(entries) == 3
+    assert entries[0]["text"] == "你好"
+    assert entries[1]["text"] == "ls 中文目录"
+    assert entries[2]["text"] == "café"
+    # Offset must land on a newline boundary so the next call resumes
+    # cleanly with no duplicates and no skips.
+    assert new_offset == (term / "log.jsonl").stat().st_size
+
+    # Seek mid-file (past the first line, at a newline boundary) —
+    # must return entries 2 + 3 without corrupting the "ls 中文目录"
+    # payload.
+    first_line_len = len(lines[0].encode("utf-8")) + 1  # +1 for \n
+    entries2, _ = read_log_from(tmp_path, sid, first_line_len)
+    assert len(entries2) == 2
+    assert entries2[0]["text"] == "ls 中文目录"

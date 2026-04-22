@@ -1524,6 +1524,7 @@ class Session:
             self._append_event({"type": "status", "value": "cancelled"})
             await self._shutdown_consumer()
             await self._shutdown_background_manager()
+            await self._shutdown_terminal()
             self._clear_pid()
             raise
 
@@ -1531,6 +1532,7 @@ class Session:
         self._append_event({"type": "status", "value": "stopped"})
         await self._shutdown_consumer()
         await self._shutdown_background_manager()
+        await self._shutdown_terminal()
         self._clear_pid()
 
     async def _handle_explicit_interrupt(self, discarded_inbound: int) -> None:
@@ -1630,6 +1632,25 @@ class Session:
             await self._bg_manager.shutdown()
         except Exception as exc:
             self._append_event({"type": "error", "content": f"bg_manager shutdown: {exc}"})
+
+    async def _shutdown_terminal(self) -> None:
+        """Snapshot cwd + hard-kill the persistent pty on daemon exit.
+
+        Without this, an explicit /stop or server shutdown leaves the
+        bash subprocess + pty master fd alive until the 10-min
+        ``maybe_idle_close`` housekeeping tick — but that tick only
+        fires inside the daemon loop, which has already exited. Next
+        daemon start respawns a fresh pty and picks up the snapshot.
+        """
+        executor = getattr(self, "_terminal_executor", None)
+        if executor is None:
+            return
+        try:
+            await asyncio.wait_for(executor.snapshot_and_close(), timeout=3.0)
+        except (asyncio.TimeoutError, Exception) as exc:
+            self._append_event(
+                {"type": "error", "content": f"terminal shutdown: {exc}"}
+            )
 
     # ── Properties ─────────────────────────────────────────────────
 

@@ -91,7 +91,13 @@ def read_log_from(
     session_id: str,
     offset: int,
 ) -> tuple[list[dict], int]:
-    """Return (entries, new_offset) — the delta since `offset` bytes."""
+    """Return (entries, new_offset) — the delta since `offset` bytes.
+
+    Reads in binary so byte offsets round-trip cleanly past multi-byte
+    UTF-8 sequences (entries are written with ``ensure_ascii=False``).
+    Trims the tail to the last newline so a ``_MAX_READ_BYTES`` cap
+    never splits a multi-byte char mid-line.
+    """
     term = _terminal_dir(sessions_dir, session_id)
     p = term / "log.jsonl"
     if not p.exists():
@@ -99,14 +105,23 @@ def read_log_from(
     size = p.stat().st_size
     if offset >= size:
         return [], size
-    new_offset = min(size, offset + _MAX_READ_BYTES)
-    entries: list[dict] = []
+    cap = min(size, offset + _MAX_READ_BYTES)
     try:
-        with p.open("r", encoding="utf-8", errors="replace") as f:
+        with p.open("rb") as f:
             f.seek(offset)
-            data = f.read(new_offset - offset)
+            raw = f.read(cap - offset)
     except OSError:
         return [], offset
+    # Advance only to the last complete newline — a partial trailing
+    # line would split a multi-byte char OR skip an entry on the next
+    # call. Leave it in the file for the next read.
+    last_nl = raw.rfind(b"\n")
+    if last_nl < 0:
+        return [], offset
+    raw = raw[: last_nl + 1]
+    new_offset = offset + len(raw)
+    data = raw.decode("utf-8", errors="replace")
+    entries: list[dict] = []
     for line in data.splitlines():
         s = line.strip()
         if not s:
@@ -148,13 +163,22 @@ def poll_queue(input_path: Path, offset: int) -> tuple[list[dict], int]:
 
     Returns (entries, new_offset). Each entry is a dict with keys
     `{ts, id, type, content?}`; caller dispatches based on `type`.
+
+    Binary-mode read with line-boundary alignment — same rationale as
+    ``read_log_from``: text-mode byte-offset seeks are undefined and
+    can mis-decode non-ASCII input.
     """
     if not input_path.exists():
         return [], offset
-    with input_path.open("r", encoding="utf-8", errors="replace") as f:
+    with input_path.open("rb") as f:
         f.seek(offset)
-        data = f.read()
-        new_offset = f.tell()
+        raw = f.read()
+    last_nl = raw.rfind(b"\n")
+    if last_nl < 0:
+        return [], offset
+    raw = raw[: last_nl + 1]
+    new_offset = offset + len(raw)
+    data = raw.decode("utf-8", errors="replace")
     out: list[dict] = []
     for line in data.splitlines():
         s = line.strip()

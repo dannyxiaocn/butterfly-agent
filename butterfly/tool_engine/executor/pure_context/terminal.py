@@ -141,6 +141,7 @@ class RunResult:
     exit_code: int | None  # None when sentinel didn't fire
     duration: float        # total wall time, incl. any interrupt recovery
     timeout: float         # the threshold this run was configured with
+    idle_threshold: float  # the idle-settle threshold this run was configured with
     idle_return: bool      # True when we returned on idle, not sentinel
     timed_out: bool        # True on total-timeout cut-off
     foreground_cmd: str | None  # hint: who owns the pty now
@@ -285,8 +286,15 @@ class PtyShell:
         try:
             os.write(master, init)
         except OSError:
+            # Init-write failed (e.g. bash died instantly). ``hard_kill``
+            # does the full cleanup — remove_reader + close(master) +
+            # SIGTERM→SIGKILL the child — so we don't leak the fd, the
+            # asyncio reader callback, or the child process. Re-raise so
+            # the caller can surface the spawn failure instead of ending
+            # up with a half-alive PtyShell.
             self._draining = False
-            return
+            await self.hard_kill()
+            raise
 
         marker_bytes = spawn_marker.encode()
         deadline = time.monotonic() + 2.0
@@ -617,6 +625,7 @@ class PtyShell:
             exit_code=exit_code,
             duration=duration,
             timeout=timeout,
+            idle_threshold=idle_threshold,
             idle_return=idle_return and not timed_out and not shell_died,
             timed_out=timed_out,
             foreground_cmd=fg_cmd,
@@ -665,6 +674,7 @@ def RuntimeError_to_result(msg: str, *, restarted: bool) -> RunResult:
         exit_code=None,
         duration=0.0,
         timeout=0.0,
+        idle_threshold=_IDLE_THRESHOLD,
         idle_return=False,
         timed_out=False,
         foreground_cmd=None,
@@ -994,10 +1004,15 @@ class TerminalExecutor:
 
                 # Re-probe env; if changed (or we have no prior), prepend
                 # the banner so the agent notices without extra round-trips.
-                # We only probe when the shell is still alive — no point
-                # opening a second shell just to report "shell died".
+                # Only probe when bash returned to its prompt (sentinel
+                # matched). If we returned on idle or total-timeout, some
+                # subprocess — ``python3``, ``ssh``, ``read -p`` — still
+                # owns the tty; sending ``pwd; git rev-parse`` at it would
+                # hit the REPL (SyntaxError), round-trip no markers,
+                # produce ``null_fp``, and then blank the HUD + prepend
+                # ``[env: null | path: null | git: null]``.
                 env_banner = ""
-                if result.shell_alive:
+                if result.shell_alive and not result.idle_return and not result.timed_out:
                     new_env = await self._detect_env()
                     if self._last_env is None or new_env.as_tuple() != self._last_env.as_tuple():
                         env_banner = self._format_env_change(new_env) + "\n"
@@ -1092,12 +1107,16 @@ class TerminalExecutor:
         cwd = snap.get("cwd")
         if not isinstance(cwd, str) or not cwd:
             return
-        # `cd` quietly — it's OK if the dir no longer exists; we just stay at
-        # whatever bash picked at spawn.
-        probe = f"cd {shlex.quote(cwd)} 2>/dev/null || true\n"
+        # Run the cd through ``run_command`` so its output (empty in the
+        # happy path, or a harmless blank line) is drained before the
+        # agent's real command lands. ``write_raw`` + no drain left the
+        # cd's output in the buffer and the next ``run_command`` picked
+        # it up as its own header line. ``2>/dev/null`` silences the
+        # directory-gone error; ``|| true`` swallows its exit code.
+        probe = f"cd {shlex.quote(cwd)} 2>/dev/null || true"
         try:
-            await self._shell.write_raw(probe.encode(), source="agent_out")
-        except OSError:
+            await self._shell.run_command(probe, timeout=2.0, idle_threshold=0.3)
+        except RuntimeError:
             return
         if self._terminal_logger is not None:
             self._terminal_logger.append_system(
@@ -1136,13 +1155,21 @@ class TerminalExecutor:
                     )
                 await self._shell.write_raw(content.encode(), source="user_out")
                 output = await self._shell.collect_until_idle()
-                # A user `cd` / `conda activate` / `git switch` updates the
-                # fingerprint; refresh so the HUD pill reflects it.
-                try:
-                    env = await self._detect_env()
-                    self._publish_env(env)
-                except Exception:
-                    pass
+                # A user `cd` / `conda activate` / `git switch` updates
+                # the fingerprint; refresh so the HUD pill reflects it.
+                # Skip the probe when a subprocess still owns the tty
+                # (user ran ``python3`` / ``ssh host`` and is parked in
+                # the REPL): the ``pwd; git rev-parse`` probe would
+                # land in the REPL, round-trip no markers, and blank
+                # the HUD. ``foreground_info()`` reports the current
+                # pgid's command via ``tcgetpgrp(master)``.
+                fg_cmd, _fg_pid = self._shell.foreground_info()
+                if fg_cmd is None or fg_cmd in ("bash", "-bash", "zsh", "-zsh", "sh"):
+                    try:
+                        env = await self._detect_env()
+                        self._publish_env(env)
+                    except Exception:
+                        pass
             finally:
                 if self._terminal_logger is not None:
                     self._terminal_logger.mark_locked(None)
@@ -1185,7 +1212,7 @@ def _format_result(r: RunResult) -> str:
         return f"{body}\n[exit {r.exit_code}, duration {_fmt_dur(r.duration)}s{fg_hint}]"
     # Idle return: sentinel didn't fire, shell is parked in a subprocess.
     return (
-        f"{body}\n[no exit captured — output idle for {_IDLE_THRESHOLD}s"
+        f"{body}\n[no exit captured — output idle for {_fmt_dur(r.idle_threshold)}s"
         f"{fg_hint}; shell still alive, send next command to continue]"
     )
 
