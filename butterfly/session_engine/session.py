@@ -1113,6 +1113,7 @@ class Session:
                     "triggered_by": triggered_by,
                     "trigger_ts": trigger_ts,
                     "interrupted": True,
+                    "pre_triggered": True,
                     "messages": self._serialize_turn_messages(partial),
                 }
                 if get_tool_call_count() > 0:

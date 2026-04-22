@@ -1446,6 +1446,7 @@ async def test_tick_cancel_preserves_tool_use_blocks(tmp_path):
     assert len(turns) == 1, f"expected one interrupted turn, got {turns}"
     t = turns[0]
     assert t.get("interrupted") is True
+    assert t.get("pre_triggered") is True
     assert t.get("has_streaming_tools") is True
 
     msgs = t.get("messages") or []
