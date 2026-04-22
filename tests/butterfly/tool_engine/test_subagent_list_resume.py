@@ -11,6 +11,7 @@ import pytest
 from butterfly.session_engine.panel import (
     STATUS_COMPLETED,
     STATUS_RUNNING,
+    TYPE_PENDING_TOOL,
     TYPE_SUB_AGENT,
     create_pending_tool_entry,
     save_entry,
@@ -259,3 +260,111 @@ async def test_resume_cascades_cancel_to_child(tmp_path: Path) -> None:
     assert events_path.exists()
     body = events_path.read_text(encoding="utf-8")
     assert '"type": "interrupt"' in body
+
+
+# ── Additional coverage (PR #52 review follow-ups) ───────────────────────────
+
+@pytest.mark.asyncio
+async def test_list_filters_out_non_sub_agent_entries(tmp_path: Path) -> None:
+    """subagent_list must skip non-sub-agent panel entries (e.g. background bash).
+
+    The parent's panel dir holds every backgroundable tool's pending entry —
+    bash runs, sub-agents, future tool types. subagent_list keys on
+    TYPE_SUB_AGENT so the LLM only sees child sessions, not unrelated
+    background work.
+    """
+    panel_dir = tmp_path / "p" / "core" / "panel"
+    create_pending_tool_entry(
+        panel_dir, tool_name="subagent_new",
+        input={"task": "t", "mode": "explorer", "name": "child-one"},
+        entry_type=TYPE_SUB_AGENT,
+        meta={"child_session_id": "s-one", "display_name": "child-one",
+              "mode": "explorer", "agent": "a"},
+    )
+    create_pending_tool_entry(
+        panel_dir, tool_name="bash",
+        input={"command": "sleep 30"},
+        entry_type=TYPE_PENDING_TOOL,
+    )
+    tool = SubAgentListTool(parent_session_id="p", sessions_base=tmp_path)
+    out = await tool.execute()
+    assert "1 sub-agent(s)" in out
+    assert "child-one" in out
+    assert "bash" not in out and "sleep 30" not in out
+
+
+@pytest.mark.asyncio
+async def test_resume_rejects_entry_missing_child_session_id(tmp_path: Path) -> None:
+    """Panel entry exists but ``meta.child_session_id`` is missing — tool
+    must surface a ``corrupt panel entry`` error rather than silently
+    timing out.
+
+    This happens when the panel file on disk was written by an older
+    version or hand-edited; without the guard the resume call would post
+    to ``system_sessions_base/None/context.jsonl`` or similar.
+    """
+    panel_dir = tmp_path / "p" / "core" / "panel"
+    create_pending_tool_entry(
+        panel_dir, tool_name="subagent_new",
+        input={"task": "t", "mode": "explorer", "name": "broken"},
+        entry_type=TYPE_SUB_AGENT,
+        meta={"display_name": "broken", "mode": "explorer", "agent": "a"},
+    )
+    tool = SubAgentResumeTool(parent_session_id="p", sessions_base=tmp_path)
+    out = await tool.execute(name="broken", message="hi")
+    assert out.startswith("Error:")
+    assert "child_session_id" in out
+    # Guide the LLM toward the recovery action.
+    assert "subagent_new" in out
+
+
+@pytest.mark.asyncio
+async def test_resume_auto_restarts_stopped_child(tmp_path: Path) -> None:
+    """A child session in ``status=stopped`` must be flipped to active
+    before the user_input posts — otherwise the follow-up would sit idle
+    on disk until someone manually resumed the session.
+
+    Verified by seeding ``status.json`` as stopped, running resume, then
+    cancelling before the reply timeout: the post-cancel status.json must
+    read ``active``.
+    """
+    panel_dir = tmp_path / "p" / "core" / "panel"
+    create_pending_tool_entry(
+        panel_dir, tool_name="subagent_new",
+        input={"task": "t", "mode": "explorer", "name": "asleep"},
+        entry_type=TYPE_SUB_AGENT,
+        meta={"child_session_id": "s-asleep", "display_name": "asleep",
+              "mode": "explorer", "agent": "a"},
+    )
+    sys_base = tmp_path / "_sessions"
+    (sys_base / "s-asleep").mkdir(parents=True)
+    (sys_base / "s-asleep" / "manifest.json").write_text(
+        json.dumps({"session_id": "s-asleep", "agent": "a"}), encoding="utf-8",
+    )
+    (sys_base / "s-asleep" / "status.json").write_text(
+        json.dumps({"status": "stopped", "stopped_at": "2026-04-21T00:00:00"}),
+        encoding="utf-8",
+    )
+
+    tool = SubAgentResumeTool(
+        parent_session_id="p",
+        sessions_base=tmp_path,
+        system_sessions_base=sys_base,
+    )
+    task = asyncio.create_task(
+        tool.execute(name="asleep", message="wake up", timeout_seconds=60)
+    )
+    # Give the tool a moment to run _ensure_child_active + post the input.
+    await asyncio.sleep(0.3)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    status = json.loads(
+        (sys_base / "s-asleep" / "status.json").read_text(encoding="utf-8")
+    )
+    assert status["status"] == "active", (
+        f"_ensure_child_active failed to un-stop the child; status.json = {status!r}"
+    )
+    ctx = (sys_base / "s-asleep" / "context.jsonl").read_text(encoding="utf-8")
+    assert "wake up" in ctx

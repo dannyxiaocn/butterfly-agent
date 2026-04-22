@@ -568,3 +568,17 @@ class WebUnitTests(unittest.TestCase):
                 second.status_code == 409 or first.json()["id"] != second.json()["id"],
                 "session creation should either generate a unique ID or reject the duplicate",
             )
+
+    def test_api_update_status_endpoint_removed(self) -> None:
+        """PR #52 deleted the auto-update worker + its ``/api/update_status``
+        endpoint. The endpoint must return 404 (not 200 with ``{}``), so a
+        stale frontend polling against an old build never triggers a reload
+        loop — and so nothing on the server side quietly keeps servicing a
+        feature that was supposed to be retired.
+        """
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            app = create_app(root / "sessions", root / "_sessions")
+            with TestClient(app) as client:
+                response = client.get("/api/update_status")
+            self.assertEqual(response.status_code, 404)
