@@ -1,11 +1,24 @@
-"""Persistent per-session bash shell backed by a PTY (pure_context series).
+"""Persistent per-session pty terminal (pure_context series).
 
-The agent sees the same `session_shell(command=...)` semantics as bash: send
-one command, get the resulting output. Under the hood the shell is a
-long-lived `bash --norc --noprofile` attached to a pseudo-tty, so it
-supports commands that need a real TTY — `ssh host` stays alive across
-calls, `python` drops the caller into a REPL, and state (`cd`, `export`,
-aliases, remote-login context) persists between calls.
+Replaces the v2.0.33 ``session_shell`` tool — that shape fused
+"create pty" and "run command" into one verb, which turned a stale /
+freshly-re-created shell into silent-failure ambiguity (observed: first
+call with ``reset=true`` returned ``[shell reset]\\n[exit 0]`` and swallowed
+the actual ``pwd`` command). The new surface is an explicit two-step:
+
+* ``terminal_create`` — spawn a fresh pty, snapshot
+  ``(venv, cwd, git_branch)`` once, return a welcome block.
+* ``terminal_use`` — run one command against the already-created
+  terminal; errors fail-closed when ``terminal_create`` hasn't run. On
+  any env-fingerprint change (the agent cd'd, activated a venv,
+  checked out a different branch) we prepend ``[env: … | path: … |
+  git: …]`` to the tool result so the model notices the drift without
+  re-probing.
+
+Under the hood a long-lived ``bash --norc --noprofile`` is attached to
+a pseudo-tty, so interactive commands work: ``ssh host`` stays alive
+across calls, ``python`` drops the caller into a REPL, and ``cd`` /
+``export`` / aliases persist between calls.
 
 Unified return rule
 -------------------
@@ -15,23 +28,24 @@ One rule handles every command shape:
    to the payload. A match means bash returned to the prompt → emit exit
    code + duration.
 2. **Output idle** — no new bytes for ``idle_threshold`` seconds (default
-   1.5). Covers ssh-prompt-reached, REPL-waiting-for-input, `read -p`
+   1.5). Covers ssh-prompt-reached, REPL-waiting-for-input, ``read -p``
    parked on stdin. We return the collected output; the shell stays alive
    and a later call continues talking to whatever subprocess owns the tty.
 3. **Total timeout** — hard ceiling (default 60s). Cut-off; collected
    output is returned and marked truncated, but the shell is NOT killed
    (a background compile shouldn't lose its pty).
 
-`shell_state.foreground_cmd` is a *hint only* — it tells the model "you're
-inside an ssh subprocess now" via ``tcgetpgrp(master)``; it does not
-influence return timing.
+``shell_state.foreground_cmd`` is a *hint only* — it tells the model
+"you're inside an ssh subprocess now" via ``tcgetpgrp(master)``; it does
+not influence return timing.
 
 On-chunk hook
 -------------
 Every byte read from the pty is forwarded to an optional
-``on_chunk(source, text)`` callback where ``source`` is ``"agent_out"`` or
-``"user_out"`` depending on whose command is in flight. Phase 2 wires this
-to ``terminal.jsonl`` for the web panel to replay.
+``on_chunk(source, text)`` callback where ``source`` is ``"agent_out"``
+or ``"user_out"`` depending on whose command is in flight.
+``TerminalLogger.append_output`` is the production wire-up — it feeds
+the web panel's ``log.jsonl`` stream.
 """
 from __future__ import annotations
 
@@ -52,7 +66,6 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
 
 from butterfly.core.guardian import Guardian
-from butterfly.tool_engine.executor.base import BaseExecutor
 from butterfly.tool_engine.executor.pure_context.base import strip_ansi
 
 _MAX_OUTPUT = 10_000
@@ -67,8 +80,37 @@ _IDLE_CLOSE_SECONDS = 600.0
 _SNAPSHOT_MAX_AGE = 7 * 24 * 3600.0
 _SNAPSHOT_FILENAME = "snapshot.json"
 
+# Exact string surfaced by ``terminal_use`` when called before
+# ``terminal_create``. The agent-facing phrasing is part of the tool's
+# public contract; tests pin it verbatim.
+_NOT_CREATED_ERROR = (
+    "Error: Terminal not created, please use terminal_create tool to "
+    "create one first"
+)
+
 OnChunk = Callable[[str, str], None]
 OnChunkAsync = Callable[[str, str], Awaitable[None]]
+
+
+def _homify(path: str | None) -> str | None:
+    """Render an absolute path with ``$HOME`` replaced by ``~``.
+
+    Matches the zsh/bash ``%~`` prompt expansion so the web panel's
+    HUD row looks like a normal terminal prompt (``(base) ~/work: main``
+    instead of ``(base) /Users/<username>/work: main``). Falls through
+    untouched when the path doesn't start with home, when ``HOME`` is
+    unset (rare — tests), or when the caller passed ``None``.
+    """
+    if not path:
+        return path
+    home = os.environ.get("HOME") or os.path.expanduser("~")
+    if not home or home == "~":
+        return path
+    if path == home:
+        return "~"
+    if path.startswith(home + "/"):
+        return "~" + path[len(home):]
+    return path
 
 
 def _try_import_fcntl():
@@ -87,6 +129,11 @@ def _try_import_fcntl():
 # filter is only for the separate `on_chunk` listener path.
 _SENTINEL_LEAK = re.compile(rb"\n?__BFY_DONE_[0-9a-f]+_-?\d+__\n?")
 
+# Env-probe markers: each detect_env() run boxes the 3 lines of interest
+# with unique markers so we can slice them out of the noisy pty output
+# (bash's own echo, any trailing newline games). Markers are regenerated
+# per probe — random hex keeps them unique even under concurrent calls.
+
 
 @dataclass
 class RunResult:
@@ -100,6 +147,30 @@ class RunResult:
     foreground_pid: int | None
     shell_alive: bool
     restarted: bool        # shell was respawned just before this run
+
+
+@dataclass
+class EnvFingerprint:
+    """Snapshot of ``(venv, cwd, git_branch, git_dirty)`` captured inside
+    the pty. ``git_dirty`` is ``None`` when we're not inside a git repo
+    (or the probe fails), ``True`` when ``git status --porcelain`` had
+    any output, ``False`` otherwise. The HUD renders it as a trailing
+    ``*`` on the branch name."""
+    venv: str | None
+    cwd: str | None
+    git_branch: str | None
+    git_dirty: bool | None = None
+
+    def as_tuple(self) -> tuple[str | None, str | None, str | None, bool | None]:
+        return (self.venv, self.cwd, self.git_branch, self.git_dirty)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "venv": self.venv,
+            "cwd": self.cwd,
+            "git_branch": self.git_branch,
+            "git_dirty": self.git_dirty,
+        }
 
 
 class PtyShell:
@@ -508,8 +579,8 @@ class PtyShell:
         # Total-timeout recovery: pass ^C through the pty (reaches the
         # foreground process group, including across ssh). Wait briefly for
         # bash to print the sentinel. On success we keep the shell; on
-        # failure we don't kill it either — the agent can call with
-        # reset=True if needed.
+        # failure we don't kill it either — the agent can call
+        # terminal_create again if needed.
         if timed_out and not shell_died:
             try:
                 await self.write_raw(b"\x03", source="agent_out")
@@ -604,20 +675,33 @@ def RuntimeError_to_result(msg: str, *, restarted: bool) -> RunResult:
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# Executor — tool-side entry point
+# Executor — backs both terminal_create and terminal_use
 # ─────────────────────────────────────────────────────────────────────────
 
 
-class SessionShellExecutor(BaseExecutor):
-    """Tool executor backing `session_shell`.
+class TerminalExecutor:
+    """Domain class driving the persistent pty.
 
-    Serializes agent calls (asyncio lock), forwards them to the shared
-    `PtyShell`, and formats the result for the model. The underlying shell
-    is lazily spawned on the first call. Guardian (sub-agent explorer mode)
-    pins cwd + exposes ``BUTTERFLY_GUARDIAN_ROOT`` just as before.
+    ``terminal_create`` and ``terminal_use`` are two toolhub tools that
+    share one ``TerminalExecutor`` instance per session (Session owns it;
+    the tool loader injects the same object for both). The class is
+    intentionally NOT a ``BaseExecutor`` — the two verbs have different
+    return shapes, and the ``BaseExecutor.execute`` single-entry-point
+    contract encouraged the old ``reset``-param footgun.
 
-    The `PtyShell` instance is exposed via `.shell` so Phase 3 HTTP routes
-    can write user input directly without going through `execute()`.
+    Public verbs (both async):
+
+    * ``create()`` → ``str``: ensures the pty is alive, snapshots the
+      initial env, returns a 4-line welcome block.
+    * ``use(command, timeout?, idle_threshold?)`` → ``str``: errors when
+      ``create()`` hasn't run; otherwise runs one command and prepends a
+      ``[env: …]`` line when the venv / cwd / git-branch fingerprint
+      changed since the last observation.
+
+    The web-panel user-input path (``user_input``, ``user_interrupt``)
+    and the idle-close housekeeping (``snapshot_and_close``,
+    ``maybe_idle_close``) stay on this class — they operate on the same
+    pty.
     """
 
     def __init__(
@@ -638,6 +722,15 @@ class SessionShellExecutor(BaseExecutor):
         self._lock = asyncio.Lock()
         self._locked_by_agent = False
         self._terminal_logger = terminal_logger
+
+        # "Created" = the agent has explicitly opened this terminal via
+        # ``terminal_create``. ``use`` fails fast when false. The flag
+        # persists as long as the executor lives — a snapshot-and-close
+        # from the idle path leaves it True so the next ``use`` can
+        # transparently re-spawn (the shell is gone; the *terminal
+        # session* the agent knows about is not).
+        self._is_created: bool = False
+        self._last_env: EnvFingerprint | None = None
 
         # If a TerminalLogger was provided, route all pty chunks through it.
         # An explicit on_chunk still wins for callers that want their own
@@ -661,6 +754,14 @@ class SessionShellExecutor(BaseExecutor):
     @property
     def locked_by_agent(self) -> bool:
         return self._locked_by_agent
+
+    @property
+    def is_created(self) -> bool:
+        return self._is_created
+
+    @property
+    def last_env(self) -> EnvFingerprint | None:
+        return self._last_env
 
     def _build_env(self) -> dict[str, str]:
         env: dict[str, str] | None = None
@@ -705,6 +806,230 @@ class SessionShellExecutor(BaseExecutor):
     # Legacy alias used by older tests/cleanup paths.
     _hard_kill = close
 
+    # ── Env fingerprint ──────────────────────────────────────────────
+
+    async def _detect_env(self) -> EnvFingerprint:
+        """Probe ``(venv, cwd, git_branch, git_dirty)`` from inside the pty.
+
+        Emits one 4-line batch boxed by unique start/end markers so we
+        can slice the values even when bash's own output or prior
+        chatter sits in the buffer. Best-effort: any probe failure
+        degrades to ``None`` for that field rather than aborting.
+
+        The ``git_dirty`` line is one of ``clean`` / ``dirty`` / empty.
+        Empty (or missing) means we couldn't determine the state — we
+        treat that as ``None`` at the type level and the HUD won't
+        show the ``*`` modifier.
+        """
+        null_fp = EnvFingerprint(
+            venv=None, cwd=None, git_branch=None, git_dirty=None
+        )
+        if not self._shell.is_alive():
+            return null_fp
+        tag = secrets.token_hex(4)
+        start = f"__BFY_ENV_START_{tag}__"
+        end = f"__BFY_ENV_END_{tag}__"
+        cmd = (
+            f'printf "{start}\\n"; '
+            'printf "%s\\n" "${CONDA_DEFAULT_ENV:-${VIRTUAL_ENV##*/}}"; '
+            'pwd; '
+            "git rev-parse --abbrev-ref HEAD 2>/dev/null || printf '\\n'; "
+            '[ -n "$(git status --porcelain 2>/dev/null)" ] '
+            "&& printf 'dirty\\n' || printf 'clean\\n'; "
+            f'printf "{end}\\n"'
+        )
+        try:
+            result = await self._shell.run_command(
+                cmd, timeout=3.0, idle_threshold=0.4
+            )
+        except RuntimeError:
+            return null_fp
+        text = result.output or ""
+        s_idx = text.find(start)
+        e_idx = text.find(end, s_idx + 1 if s_idx >= 0 else 0)
+        if s_idx < 0 or e_idx < 0:
+            return null_fp
+        body = text[s_idx + len(start):e_idx].strip("\n")
+        lines = body.splitlines()
+        venv = lines[0].strip() if len(lines) >= 1 else ""
+        cwd = lines[1].strip() if len(lines) >= 2 else ""
+        git = lines[2].strip() if len(lines) >= 3 else ""
+        dirty_raw = lines[3].strip() if len(lines) >= 4 else ""
+        # ``git_dirty`` is only meaningful when we're in a repo. Pin it
+        # to None when no branch so the HUD doesn't hang a stray ``*``
+        # off a null path.
+        if not git:
+            dirty: bool | None = None
+        elif dirty_raw == "dirty":
+            dirty = True
+        elif dirty_raw == "clean":
+            dirty = False
+        else:
+            dirty = None
+        return EnvFingerprint(
+            venv=venv or None,
+            cwd=cwd or None,
+            git_branch=git or None,
+            git_dirty=dirty,
+        )
+
+    def _publish_env(self, env: EnvFingerprint) -> None:
+        """Mirror the fingerprint to ``state.json`` so the panel HUD row
+        reflects the current ``env / path / git`` without a separate
+        probe. Silent when the logger isn't wired (tests).
+
+        Publishes both ``cwd`` (raw absolute path, used by snapshot+restore)
+        and ``cwd_display`` (``~``-shortened form the HUD renders).
+        Writes all fields in one patch so the frontend sees one
+        ``terminal_state`` SSE per fingerprint change, not four.
+        """
+        self._last_env = env
+        if self._terminal_logger is None:
+            return
+        cwd_display = _homify(env.cwd)
+        try:
+            self._terminal_logger.update_fingerprint(
+                venv=env.venv,
+                cwd=env.cwd,
+                cwd_display=cwd_display,
+                git_branch=env.git_branch,
+                git_dirty=env.git_dirty,
+            )
+        except AttributeError:
+            # Older logger without fingerprint support — fall back to
+            # the older field-by-field API. Kept for forward-rolling
+            # tests that stub the logger.
+            if hasattr(self._terminal_logger, "update_env"):
+                try:
+                    self._terminal_logger.update_env(
+                        env.venv, env.git_branch
+                    )
+                except Exception:
+                    pass
+            if env.cwd:
+                try:
+                    self._terminal_logger.update_cwd(env.cwd)
+                except Exception:
+                    pass
+
+    # ── Welcome / env-change formatting ──────────────────────────────
+
+    @staticmethod
+    def _format_welcome(env: EnvFingerprint) -> str:
+        """4-line welcome block returned by ``terminal_create``."""
+        return (
+            "[terminal ready]\n"
+            f"env: {env.venv or 'null'}\n"
+            f"path: {env.cwd or 'null'}\n"
+            f"git: {env.git_branch or 'null'}"
+        )
+
+    @staticmethod
+    def _format_env_change(env: EnvFingerprint) -> str:
+        """One-line banner prepended when the env fingerprint changed
+        between two ``terminal_use`` calls."""
+        return (
+            f"[env: {env.venv or 'null'} | "
+            f"path: {env.cwd or 'null'} | "
+            f"git: {env.git_branch or 'null'}]"
+        )
+
+    # ── terminal_create ──────────────────────────────────────────────
+
+    async def create(self, **_kwargs: Any) -> str:
+        """Ensure the pty is alive and return the welcome block.
+
+        Idempotent: calling twice is a no-op on the process (the existing
+        shell stays alive) and just re-reports the current fingerprint.
+        If the process died in between, we respawn silently.
+        """
+        async with self._lock:
+            self._locked_by_agent = True
+            if self._terminal_logger is not None:
+                self._terminal_logger.mark_locked("agent")
+            try:
+                await self._ensure_alive()
+                env = await self._detect_env()
+                self._is_created = True
+                self._publish_env(env)
+                return self._format_welcome(env)
+            finally:
+                self._locked_by_agent = False
+                if self._terminal_logger is not None:
+                    self._terminal_logger.mark_locked(None)
+
+    # ── terminal_use ─────────────────────────────────────────────────
+
+    async def use(self, **kwargs: Any) -> str:
+        """Run one command against the already-created terminal."""
+        if not self._is_created:
+            return _NOT_CREATED_ERROR
+
+        command = kwargs.get("command")
+        if not isinstance(command, str):
+            return "Error: `command` (string) is required.\n[exit unknown]"
+        raw_timeout = kwargs.get("timeout")
+        if raw_timeout is None:
+            timeout = _DEFAULT_TIMEOUT
+        else:
+            try:
+                timeout = float(raw_timeout)
+            except (TypeError, ValueError):
+                timeout = _DEFAULT_TIMEOUT
+        raw_idle = kwargs.get("idle_threshold")
+        if raw_idle is None:
+            idle_threshold = _IDLE_THRESHOLD
+        else:
+            try:
+                idle_threshold = float(raw_idle)
+            except (TypeError, ValueError):
+                idle_threshold = _IDLE_THRESHOLD
+
+        async with self._lock:
+            self._locked_by_agent = True
+            if self._terminal_logger is not None:
+                self._terminal_logger.mark_locked("agent")
+            try:
+                was_restart = await self._ensure_alive()
+                prefix = "[shell restarted]\n" if was_restart else ""
+
+                # Stamp the command for panel replay BEFORE write so it
+                # precedes the output chunks in log ordering.
+                if self._terminal_logger is not None:
+                    self._terminal_logger.append_command("agent_cmd", command)
+
+                try:
+                    result = await self._shell.run_command(
+                        command, timeout=timeout, idle_threshold=idle_threshold
+                    )
+                except RuntimeError as e:
+                    return f"{prefix}[{e}]\n[exit unknown]"
+
+                if self._terminal_logger is not None:
+                    self._terminal_logger.update_foreground(
+                        result.foreground_pid, result.foreground_cmd
+                    )
+                    if not result.shell_alive:
+                        self._terminal_logger.mark_active(False)
+                        self._terminal_logger.append_system("[shell died]")
+
+                # Re-probe env; if changed (or we have no prior), prepend
+                # the banner so the agent notices without extra round-trips.
+                # We only probe when the shell is still alive — no point
+                # opening a second shell just to report "shell died".
+                env_banner = ""
+                if result.shell_alive:
+                    new_env = await self._detect_env()
+                    if self._last_env is None or new_env.as_tuple() != self._last_env.as_tuple():
+                        env_banner = self._format_env_change(new_env) + "\n"
+                    self._publish_env(new_env)
+
+                return prefix + env_banner + _format_result(result)
+            finally:
+                self._locked_by_agent = False
+                if self._terminal_logger is not None:
+                    self._terminal_logger.mark_locked(None)
+
     # ── Phase 5: idle close + restore ─────────────────────────────────
 
     def _snapshot_path(self) -> Path | None:
@@ -726,20 +1051,22 @@ class SessionShellExecutor(BaseExecutor):
         async with self._lock:
             if self._locked_by_agent:
                 return False
-            # Probe `pwd`. Tight timeout — we're about to kill the shell
-            # anyway; a hang here should not stall idle housekeeping.
             cwd: str | None = None
-            try:
-                result = await self._shell.run_command(
-                    "pwd", timeout=2.0, idle_threshold=0.5
-                )
-                for line in (result.output or "").splitlines():
-                    s = line.strip()
-                    if s.startswith("/"):
-                        cwd = s
-                        break
-            except Exception:
-                cwd = None
+            if self._last_env is not None:
+                cwd = self._last_env.cwd
+            if cwd is None:
+                # Fall back to a one-shot `pwd` probe.
+                try:
+                    result = await self._shell.run_command(
+                        "pwd", timeout=2.0, idle_threshold=0.5
+                    )
+                    for line in (result.output or "").splitlines():
+                        s = line.strip()
+                        if s.startswith("/"):
+                            cwd = s
+                            break
+                except Exception:
+                    cwd = None
             snapshot = {
                 "ts": time.time(),
                 "cwd": cwd,
@@ -798,7 +1125,7 @@ class SessionShellExecutor(BaseExecutor):
                 f"[previous session ended {int(age)}s ago — cwd restored: {cwd}]"
             )
 
-    # ── User-input path (Phase 3) ────────────────────────────────────
+    # ── User-input path (web panel) ──────────────────────────────────
 
     async def user_input(self, content: str) -> tuple[bool, str]:
         """Write user-typed text to the pty, then collect resulting output.
@@ -807,7 +1134,7 @@ class SessionShellExecutor(BaseExecutor):
           - ``accepted=False`` → agent holds the lock; caller should 409.
           - ``accepted=True`` → text written; ``output`` is the captured
             pty bytes (ANSI-stripped, capped) until output idled for 1.5s
-            or total 30s elapsed. Phase 6 forwards it to ``context.jsonl``
+            or total 30s elapsed. Session forwards it to ``context.jsonl``
             so the agent sees the ``$ cmd\\n<output>`` transcript.
 
         `content` is written verbatim (include your own trailing newline if
@@ -830,6 +1157,13 @@ class SessionShellExecutor(BaseExecutor):
                     )
                 await self._shell.write_raw(content.encode(), source="user_out")
                 output = await self._shell.collect_until_idle()
+                # A user `cd` / `conda activate` / `git switch` updates the
+                # fingerprint; refresh so the HUD pill reflects it.
+                try:
+                    env = await self._detect_env()
+                    self._publish_env(env)
+                except Exception:
+                    pass
             finally:
                 if self._terminal_logger is not None:
                     self._terminal_logger.mark_locked(None)
@@ -847,71 +1181,6 @@ class SessionShellExecutor(BaseExecutor):
         except OSError:
             return False
         return True
-
-    async def execute(self, **kwargs: Any) -> str:
-        command = kwargs.get("command")
-        if not isinstance(command, str):
-            return "Error: `command` (string) is required.\n[exit unknown]"
-        raw_timeout = kwargs.get("timeout")
-        if raw_timeout is None:
-            timeout = _DEFAULT_TIMEOUT
-        else:
-            try:
-                timeout = float(raw_timeout)
-            except (TypeError, ValueError):
-                timeout = _DEFAULT_TIMEOUT
-        raw_idle = kwargs.get("idle_threshold")
-        if raw_idle is None:
-            idle_threshold = _IDLE_THRESHOLD
-        else:
-            try:
-                idle_threshold = float(raw_idle)
-            except (TypeError, ValueError):
-                idle_threshold = _IDLE_THRESHOLD
-        reset = bool(kwargs.get("reset", False))
-
-        async with self._lock:
-            self._locked_by_agent = True
-            if self._terminal_logger is not None:
-                self._terminal_logger.mark_locked("agent")
-            try:
-                if reset:
-                    await self._shell.hard_kill()
-                    await self._shell.spawn()
-                    if self._terminal_logger is not None:
-                        pid = self._shell._proc.pid if self._shell._proc is not None else None
-                        self._terminal_logger.mark_active(True, shell_pid=pid)
-                        self._terminal_logger.append_system("[shell reset]")
-                    return "[shell reset]\n[exit 0]"
-
-                was_restart = await self._ensure_alive()
-                prefix = "[shell restarted]\n" if was_restart else ""
-
-                # Stamp the command for panel replay BEFORE write so it
-                # precedes the output chunks in log ordering.
-                if self._terminal_logger is not None:
-                    self._terminal_logger.append_command("agent_cmd", command)
-
-                try:
-                    result = await self._shell.run_command(
-                        command, timeout=timeout, idle_threshold=idle_threshold
-                    )
-                except RuntimeError as e:
-                    return f"{prefix}[{e}]\n[exit unknown]"
-
-                if self._terminal_logger is not None:
-                    self._terminal_logger.update_foreground(
-                        result.foreground_pid, result.foreground_cmd
-                    )
-                    if not result.shell_alive:
-                        self._terminal_logger.mark_active(False)
-                        self._terminal_logger.append_system("[shell died]")
-
-                return prefix + _format_result(result)
-            finally:
-                self._locked_by_agent = False
-                if self._terminal_logger is not None:
-                    self._terminal_logger.mark_locked(None)
 
 
 def _format_result(r: RunResult) -> str:
@@ -931,7 +1200,7 @@ def _format_result(r: RunResult) -> str:
             )
         return (
             f"{body}\n[timed out after {_fmt_dur(r.timeout)}s, shell still alive "
-            f"but may be stuck{fg_hint}; consider reset=true]"
+            f"but may be stuck{fg_hint}; call terminal_create again to reset]"
         )
     if r.exit_code is not None:
         return f"{body}\n[exit {r.exit_code}, duration {_fmt_dur(r.duration)}s{fg_hint}]"
@@ -944,3 +1213,11 @@ def _format_result(r: RunResult) -> str:
 
 def _fmt_dur(d: float) -> str:
     return f"{d:.1f}" if d >= 0.1 else f"{d:.2f}"
+
+
+__all__ = [
+    "EnvFingerprint",
+    "PtyShell",
+    "RunResult",
+    "TerminalExecutor",
+]

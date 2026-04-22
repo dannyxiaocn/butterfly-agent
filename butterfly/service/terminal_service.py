@@ -42,6 +42,11 @@ def read_state(sessions_dir: Path, session_id: str) -> dict:
     return {
         "active": False,
         "cwd": None,
+        "cwd_display": None,
+        "home": None,
+        "venv": None,
+        "git_branch": None,
+        "git_dirty": None,
         "last_active_at": None,
         "foreground_pid": None,
         "foreground_cmd": None,

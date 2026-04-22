@@ -124,6 +124,11 @@ export const api = {
     state: {
       active: boolean;
       cwd: string | null;
+      cwd_display: string | null;
+      home: string | null;
+      venv: string | null;
+      git_branch: string | null;
+      git_dirty: boolean | null;
       last_active_at: number | null;
       foreground_pid: number | null;
       foreground_cmd: string | null;

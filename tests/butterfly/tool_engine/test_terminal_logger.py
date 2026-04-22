@@ -1,5 +1,5 @@
 """Phase 2: `TerminalLogger` captures shell I/O + state through
-`SessionShellExecutor`."""
+`TerminalExecutor`."""
 from __future__ import annotations
 
 import json
@@ -9,8 +9,8 @@ from pathlib import Path
 import pytest
 
 from butterfly.session_engine.terminal import TerminalLogger
-from butterfly.tool_engine.executor.pure_context.session_shell import (
-    SessionShellExecutor,
+from butterfly.tool_engine.executor.pure_context.terminal import (
+    TerminalExecutor,
 )
 
 
@@ -23,9 +23,10 @@ def _read_log(term_dir: Path) -> list[dict]:
 @pytest.mark.asyncio
 async def test_logger_records_agent_cmd_and_output(tmp_path: Path) -> None:
     logger = TerminalLogger(tmp_path / "terminal")
-    ex = SessionShellExecutor(workdir=str(tmp_path), terminal_logger=logger)
+    ex = TerminalExecutor(workdir=str(tmp_path), terminal_logger=logger)
     try:
-        out = await ex.execute(command="echo hello-from-agent")
+        await ex.create()
+        out = await ex.use(command="echo hello-from-agent")
         assert "hello-from-agent" in out
 
         entries = _read_log(logger.directory)
@@ -48,13 +49,14 @@ async def test_logger_records_agent_cmd_and_output(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_state_json_tracks_lifecycle_and_lock(tmp_path: Path) -> None:
     logger = TerminalLogger(tmp_path / "terminal")
-    ex = SessionShellExecutor(workdir=str(tmp_path), terminal_logger=logger)
+    ex = TerminalExecutor(workdir=str(tmp_path), terminal_logger=logger)
     try:
-        await ex.execute(command="true")
+        await ex.create()
+        await ex.use(command="true")
         state = logger.read_state()
         assert state["active"] is True
         assert isinstance(state["shell_pid"], int) and state["shell_pid"] > 0
-        # After execute returns the agent lock is released.
+        # After use returns the agent lock is released.
         assert state["locked_by"] is None
         assert state["last_active_at"] is not None
     finally:
@@ -90,13 +92,14 @@ async def test_locked_by_agent_while_executing(tmp_path: Path) -> None:
     import asyncio
 
     logger = TerminalLogger(tmp_path / "terminal")
-    ex = SessionShellExecutor(workdir=str(tmp_path), terminal_logger=logger)
+    ex = TerminalExecutor(workdir=str(tmp_path), terminal_logger=logger)
     try:
         # Warm the shell so spawn cost isn't in the timing window.
-        await ex.execute(command="true")
+        await ex.create()
+        await ex.use(command="true")
 
         # Start a 1-second command; peek state mid-flight.
-        task = asyncio.create_task(ex.execute(command="sleep 1", timeout=5))
+        task = asyncio.create_task(ex.use(command="sleep 1", timeout=5))
         await asyncio.sleep(0.2)
         mid = logger.read_state()
         assert mid["locked_by"] == "agent", mid

@@ -2418,8 +2418,6 @@ button:disabled {
   align-items: center;
 }
 .terminal-lock-pill,
-.terminal-fg-pill,
-.terminal-pid-pill,
 .terminal-status-idle,
 .terminal-status-rejected {
   font-size: 10.5px;
@@ -2440,9 +2438,6 @@ button:disabled {
 .lock-free {
   color: var(--green);
   border-color: var(--green);
-}
-.terminal-fg-pill {
-  color: var(--text2);
 }
 .terminal-status-rejected {
   color: var(--red);
@@ -2478,6 +2473,75 @@ button:disabled {
 .term-line.term-system { color: var(--dimmed); font-style: italic; }
 .term-prompt-agent { color: var(--yellow); opacity: 0.75; }
 .term-prompt-user { color: var(--green); opacity: 0.8; }
+.terminal-hud {
+  padding: 4px 10px;
+  background: #080b11;
+  border-top: 1px solid var(--bg4);
+  font-size: 11px;
+  color: var(--text);
+  /* ``min-width: 0`` lets this flex child shrink below content width
+   * so the collapsed ellipsis kicks in (flex items default to
+   * min-width: auto = content width, which would push the row past
+   * the panel's ``overflow: hidden`` edge). */
+  min-width: 0;
+  cursor: pointer;
+  user-select: none;
+  /* Enter / Space focus ring when tabbed to. */
+  outline: none;
+}
+.terminal-hud:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+.terminal-hud:hover {
+  background: #0b0f18;
+}
+/* Collapsed: one line, ellipsis when too long. */
+.terminal-hud[data-expanded="0"] .terminal-hud-line {
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  line-height: 1.4;
+}
+/* Expanded: full content, wraps across lines. */
+.terminal-hud[data-expanded="1"] .terminal-hud-line {
+  display: block;
+  white-space: pre-wrap;
+  word-break: break-all;
+  line-height: 1.5;
+}
+.terminal-hud-venv {
+  color: var(--accent);
+  font-weight: 600;
+  margin-right: 6px;
+}
+.terminal-hud-path {
+  color: var(--text);
+  opacity: 0.9;
+}
+.terminal-hud-sep {
+  color: var(--dimmed);
+  opacity: 0.65;
+  margin: 0 2px;
+}
+/* "git(" and ")" — soft pink self-label. Inner branch span below. */
+.terminal-hud-git-label {
+  color: #ff9ec7;
+  font-weight: 600;
+}
+/* Branch name + dirty marker — sky blue so the two halves read as
+ * distinct zones even on small screens where the parens nearly touch
+ * the letters. */
+.terminal-hud-git-branch {
+  color: #7cc7ff;
+  font-weight: 500;
+}
+.terminal-hud-empty {
+  color: var(--dimmed);
+  opacity: 0.55;
+  font-style: italic;
+}
 .terminal-inputbar {
   display: flex;
   align-items: center;

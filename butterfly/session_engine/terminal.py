@@ -29,7 +29,12 @@ from typing import Any, Callable
 
 _DEFAULT_STATE: dict[str, Any] = {
     "active": False,
-    "cwd": None,
+    "cwd": None,          # absolute path (used by snapshot + restore)
+    "cwd_display": None,  # ``~``-shortened form rendered by the HUD
+    "home": None,         # $HOME at daemon boot — frontend fallback
+    "venv": None,
+    "git_branch": None,
+    "git_dirty": None,    # None | False | True (None outside a repo)
     "last_active_at": None,
     "foreground_pid": None,
     "foreground_cmd": None,
@@ -59,6 +64,22 @@ class TerminalLogger:
             self._log_path.touch()
         if not self._state_path.exists():
             self._write_state_locked(dict(_DEFAULT_STATE))
+        # Stamp ``$HOME`` at boot so the frontend can homify paths
+        # without needing a backend round-trip. Writes directly instead
+        # of via ``_patch_state`` because the init-time stamp must not
+        # emit a ``terminal_state`` SSE — integration tests assert the
+        # exact events.jsonl sequence per chat/tick and a stray event
+        # here rearranges their expected order.
+        home_dir = os.environ.get("HOME") or os.path.expanduser("~")
+        if home_dir and home_dir != "~":
+            try:
+                with self._lock:
+                    state = self._read_state_locked()
+                    if state.get("home") != home_dir:
+                        state["home"] = home_dir
+                        self._write_state_locked(state)
+            except OSError:
+                pass
         # Monotonic sequence id stamped on every log entry — makes log.jsonl
         # the single source of truth. SSE events carry the same seq so the
         # frontend can (a) dedupe when a `GET /terminal` snapshot races
@@ -184,3 +205,30 @@ class TerminalLogger:
 
     def update_cwd(self, cwd: str | None) -> None:
         self._patch_state({"cwd": cwd})
+
+    def update_env(self, venv: str | None, git_branch: str | None) -> None:
+        """Legacy two-field update path. Preferred surface is
+        ``update_fingerprint`` which covers the full (venv, cwd,
+        cwd_display, git_branch, git_dirty) tuple."""
+        self._patch_state({"venv": venv, "git_branch": git_branch})
+
+    def update_fingerprint(
+        self,
+        *,
+        venv: str | None,
+        cwd: str | None,
+        cwd_display: str | None,
+        git_branch: str | None,
+        git_dirty: bool | None,
+    ) -> None:
+        """Write the full env fingerprint in one patch so the frontend
+        receives a single ``terminal_state`` SSE event per change (not
+        five) — a mid-transition HUD would briefly show, say, the new
+        branch against the old venv otherwise."""
+        self._patch_state({
+            "venv": venv,
+            "cwd": cwd,
+            "cwd_display": cwd_display,
+            "git_branch": git_branch,
+            "git_dirty": git_dirty,
+        })

@@ -1,7 +1,8 @@
 """Built-in bash execution tool for butterfly agents.
 
 One-shot subprocess per call — no PTY, no shared state. For persistent shell
-sessions use `session_shell`. For long-running commands use `run_in_background=true`
+sessions call `terminal_create` once then use `terminal_use`. For long-running
+commands use `run_in_background=true`
 (routed through `BackgroundTaskManager` at the agent-loop layer).
 
 Structured output:
@@ -110,7 +111,7 @@ class BashExecutor(BaseExecutor):
 
     v2.0.5 — subprocess only. PTY mode was removed; interactive prompts are
     handled by (a) the `stdin` parameter (pre-feed answers), (b) the stall
-    watchdog on backgrounded tasks, or (c) `session_shell` for multi-step
+    watchdog on backgrounded tasks, or (c) `terminal_use` for multi-step
     workflows that need persistent state.
     """
 
@@ -204,7 +205,7 @@ def create_bash_tool(
         "Execute a shell command. Each call spawns a fresh subprocess — `cd`, "
         "`export`, and aliases DO NOT persist across calls. Use relative paths "
         "(resolved against your session workdir). For multi-step workflows that "
-        "need shared environment, use `session_shell` instead."
+        "need shared environment, use `terminal_create` + `terminal_use` instead."
     )
 
     return Tool(

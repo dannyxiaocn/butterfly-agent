@@ -158,6 +158,54 @@ class SessionEngineTest(unittest.TestCase):
             status = read_session_status(session.system_dir)
             self.assertEqual(status["status"], "active")
 
+    def test_run_daemon_loop_skips_historical_terminal_input_on_restart(self) -> None:
+        """Pin: terminal input.jsonl offset starts past existing tail on daemon
+        boot, so user commands from a prior run are not re-dispatched to the
+        pty and not re-appended to context.jsonl as ``user_input`` rows.
+        Without this, every server restart would replay the full shell
+        history as tool output into the agent (the v2.0.33 bug)."""
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            session = Session(
+                Agent(provider=None),
+                session_id="demo",
+                base_dir=root / "sessions",
+                system_base=root / "_sessions",
+            )
+            ensure_session_status(session.system_dir)
+
+            # Simulate a prior run's leftover terminal inputs.
+            session.terminal_dir.mkdir(parents=True, exist_ok=True)
+            input_path = session.terminal_dir / "input.jsonl"
+            with input_path.open("w", encoding="utf-8") as f:
+                for i in range(3):
+                    f.write(json.dumps({
+                        "ts": 0.0,
+                        "id": f"old-{i}",
+                        "type": "input",
+                        "content": f"echo old-{i}\n",
+                    }) + "\n")
+
+            ipc = FileIPC(session.system_dir)
+            stop_event = asyncio.Event()
+
+            async def _fake_sleep(_seconds: float) -> None:
+                stop_event.set()
+
+            dispatched: list[dict] = []
+
+            async def _record(entry: dict) -> None:
+                dispatched.append(entry)
+
+            with patch("butterfly.session_engine.session.asyncio.sleep", side_effect=_fake_sleep):
+                with patch.object(session, "_dispatch_terminal_input", side_effect=_record):
+                    asyncio.run(session.run_daemon_loop(ipc, stop_event=stop_event))
+
+            self.assertEqual(
+                dispatched, [],
+                "historical terminal input.jsonl entries must not be replayed",
+            )
+
     def test_session_default_id_uses_uuid_suffix_for_same_second_uniqueness(self) -> None:
         with TemporaryDirectory() as tmp:
             root = Path(tmp)

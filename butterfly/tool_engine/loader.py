@@ -9,7 +9,9 @@ Tool discovery:
 Context injection — executors receive injected context so the agent passes
 only business-intent parameters:
   - bash: workdir + tool_results_dir (for disk spillover)
-  - session_shell: workdir + venv_env_provider + terminal_logger (for panel)
+  - terminal_create / terminal_use: share one TerminalExecutor per session
+    (workdir + venv_env_provider + terminal_logger). The loader dispatches
+    the two tool names to ``.create()`` / ``.use()`` on the shared singleton.
   - read/write/edit/glob/grep: workdir
   - task_*: tasks_dir
   - memory_recall: memory_dir
@@ -112,11 +114,12 @@ class ToolLoader:
         # callback so the web UI can refresh the Tasks tab on-event. Session
         # provides one that appends to events.jsonl; None is a silent no-op.
         on_task_change: "Callable[[str, str], None] | None" = None,
-        # v2.0.30 — session-owned persistent executor for session_shell. When
-        # provided, the loader reuses this instance across capability reloads
-        # so the pty stays alive between agent turns. Tests/CLI can leave
-        # this None and a per-loader instance is created instead.
-        session_shell_executor: Any | None = None,
+        # v2.0.30 — session-owned persistent TerminalExecutor driving both
+        # ``terminal_create`` and ``terminal_use``. When provided, the
+        # loader reuses this instance across capability reloads so the pty
+        # stays alive between agent turns. Tests/CLI can leave this None
+        # and a per-loader instance is created instead.
+        terminal_executor: Any | None = None,
     ) -> None:
         self._default_workdir = default_workdir
         self._skills = list(skills or [])
@@ -134,10 +137,45 @@ class ToolLoader:
         self._system_sessions_base = system_sessions_base
         self._agent_base = agent_base
         self._on_task_change = on_task_change
-        self._session_shell_executor_override = session_shell_executor
-        # Populated by _create_executor('session_shell'); lets the web
-        # Terminal route reach the shell without re-walking the registry.
-        self._session_shell_executor: Any | None = session_shell_executor
+        self._terminal_executor_override = terminal_executor
+        # Populated when the first terminal_create / terminal_use tool is
+        # wired; lets the web Terminal route reach the pty directly.
+        self._terminal_executor: Any | None = terminal_executor
+
+    def _ensure_terminal_executor(self) -> Any | None:
+        """Return the session-scoped TerminalExecutor, building one when
+        the test/CLI path didn't inject an override. Cached so
+        ``terminal_create`` and ``terminal_use`` pick up the same pty."""
+        if self._terminal_executor is not None:
+            return self._terminal_executor
+        if self._terminal_executor_override is not None:
+            self._terminal_executor = self._terminal_executor_override
+            return self._terminal_executor
+        from butterfly.tool_engine.executor.pure_context.terminal import (
+            TerminalExecutor,
+        )
+
+        def _venv_env_provider() -> dict[str, str] | None:
+            try:
+                from butterfly.tool_engine.executor.terminal.bash_terminal import (
+                    _venv_env,
+                )
+                return _venv_env()
+            except Exception:
+                return None
+
+        terminal_logger = None
+        if self._terminal_dir is not None:
+            from butterfly.session_engine.terminal import TerminalLogger
+            terminal_logger = TerminalLogger(self._terminal_dir)
+
+        self._terminal_executor = TerminalExecutor(
+            workdir=self._default_workdir,
+            venv_env_provider=_venv_env_provider,
+            guardian=self._guardian,
+            terminal_logger=terminal_logger,
+        )
+        return self._terminal_executor
 
     def _create_executor(self, tool_name: str) -> Callable | None:
         """Create an executor callable for a toolhub tool."""
@@ -184,38 +222,19 @@ class ToolLoader:
                     return await executor.execute(**kwargs)
                 return _impl
 
-        elif tool_name == "session_shell":
-            executor_cls = getattr(mod, "SessionShellExecutor", None)
-            if executor_cls:
-                if self._session_shell_executor_override is not None:
-                    # Session owns the lifecycle — reuse across reloads.
-                    executor = self._session_shell_executor_override
-                else:
-                    # Tests / CLI: one executor per loader.
-                    def _venv_env_provider() -> dict[str, str] | None:
-                        try:
-                            from butterfly.tool_engine.executor.terminal.bash_terminal import (
-                                _venv_env,
-                            )
-                            return _venv_env()
-                        except Exception:
-                            return None
-
-                    terminal_logger = None
-                    if self._terminal_dir is not None:
-                        from butterfly.session_engine.terminal import TerminalLogger
-                        terminal_logger = TerminalLogger(self._terminal_dir)
-
-                    executor = executor_cls(
-                        workdir=self._default_workdir,
-                        venv_env_provider=_venv_env_provider,
-                        guardian=self._guardian,
-                        terminal_logger=terminal_logger,
-                    )
-                self._session_shell_executor = executor
+        elif tool_name in ("terminal_create", "terminal_use"):
+            # Both verbs share a single TerminalExecutor — lazily create
+            # it on the first reference; subsequent lookups reuse.
+            executor = self._ensure_terminal_executor()
+            if executor is None:
+                return None
+            if tool_name == "terminal_create":
                 async def _impl(**kwargs: Any) -> str:
-                    return await executor.execute(**kwargs)
-                return _impl
+                    return await executor.create(**kwargs)
+            else:
+                async def _impl(**kwargs: Any) -> str:
+                    return await executor.use(**kwargs)
+            return _impl
 
         elif tool_name == "sub_agent":
             executor_cls = getattr(mod, "SubAgentTool", None)

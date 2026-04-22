@@ -291,19 +291,20 @@ class Session:
         )
         self._agent.background_spawn = self._bg_manager.spawn
 
-        # Persistent session_shell — one pty per session that survives
-        # across capability reloads. The TerminalLogger backs the web
-        # Terminal panel (state.json + append-only log.jsonl under
-        # core/terminal/).
+        # Persistent terminal — one pty per session that survives across
+        # capability reloads. The TerminalLogger backs the web Terminal
+        # panel (state.json + append-only log.jsonl under core/terminal/).
+        # The executor is shared between the ``terminal_create`` and
+        # ``terminal_use`` tool entries via ToolLoader.
         from butterfly.session_engine.terminal import TerminalLogger
-        from butterfly.tool_engine.executor.pure_context.session_shell import (
-            SessionShellExecutor,
+        from butterfly.tool_engine.executor.pure_context.terminal import (
+            TerminalExecutor,
         )
         self._terminal_logger = TerminalLogger(
             self.terminal_dir,
             event_sink=self._append_event,
         )
-        self._session_shell_executor = SessionShellExecutor(
+        self._terminal_executor = TerminalExecutor(
             workdir=str(self.session_dir),
             venv_env_provider=_venv_env_provider,
             guardian=self._guardian,
@@ -442,7 +443,7 @@ class Session:
                 system_sessions_base=self._system_base,
                 agent_base=self._base_dir.parent / "agenthub",
                 on_task_change=_emit_task_change,
-                session_shell_executor=self._session_shell_executor,
+                terminal_executor=self._terminal_executor,
             )
             # Load tools from tools.md (toolhub), fallback to legacy tool.md
             tools_md_path = self.core_dir / "tools.md"
@@ -1381,8 +1382,20 @@ class Session:
         # while guaranteeing fresh sessions pick up their seed inputs.
         input_offset = self._initial_input_offset()
         interrupt_offset = ipc.events_size()
-        terminal_input_offset = 0
         terminal_input_path = self.terminal_dir / "input.jsonl"
+        # Start past the current tail of ``input.jsonl`` so historical
+        # user commands (from previous daemon runs) are not re-dispatched
+        # on restart. The pty state itself is never persisted — replaying
+        # those commands would both re-run them in a fresh shell AND
+        # append duplicate ``user_input`` rows to ``context.jsonl``, which
+        # the agent would then ingest as tool output every time the
+        # server started. Inputs enqueued while the daemon was down are
+        # deliberately dropped: there is no live pty to send them to.
+        terminal_input_offset = (
+            terminal_input_path.stat().st_size
+            if terminal_input_path.exists()
+            else 0
+        )
         loop = asyncio.get_running_loop()
         next_housekeeping_at = loop.time()
 
@@ -1422,7 +1435,7 @@ class Session:
 
                 # Terminal input queue — picks up typed lines + ^C from
                 # the web Terminal panel and dispatches through the
-                # session-scoped session_shell executor.
+                # session-scoped TerminalExecutor.
                 from butterfly.service.terminal_service import poll_queue
                 term_entries, terminal_input_offset = poll_queue(
                     terminal_input_path, terminal_input_offset
@@ -1471,14 +1484,14 @@ class Session:
                                 continue
                             await self._enqueue(TaskItem(card=card, seed=seed))
 
-                    # Phase 5: snapshot + close the persistent session_shell
+                    # Phase 5: snapshot + close the persistent terminal
                     # when it's been idle for 10 minutes. Agent lock is
                     # re-checked inside the executor, so a concurrent run
                     # can't be clobbered.
                     try:
-                        await self._session_shell_executor.maybe_idle_close()
+                        await self._terminal_executor.maybe_idle_close()
                     except Exception as exc:
-                        print(f"[session] session_shell idle-close failed: {exc}")
+                        print(f"[session] terminal idle-close failed: {exc}")
 
                     next_housekeeping_at = now + self._TASK_POLL_INTERVAL
 
@@ -1677,20 +1690,20 @@ class Session:
     async def _dispatch_terminal_input(self, entry: dict) -> None:
         """Act on one entry from ``core/terminal/input.jsonl``.
 
-        Routes ``type="input"`` to ``SessionShellExecutor.user_input`` and
+        Routes ``type="input"`` to ``TerminalExecutor.user_input`` and
         ``type="interrupt"`` to ``user_interrupt``. Both reject with a
         ``terminal_rejected`` SSE event when the agent holds the lock so
         the panel can surface "Agent is using terminal…".
 
         On accepted user input, we also append a ``user_input`` row to
         ``context.jsonl`` (``caller=system, source=panel,
-        tool_name=session_shell_user, mode=wait``) so the agent sees the
+        tool_name=terminal_user, mode=wait``) so the agent sees the
         ``$ cmd\\n<output>`` transcript on its next natural break without
         being preempted.
         """
         t = entry.get("type")
         entry_id = entry.get("id")
-        executor = self._session_shell_executor
+        executor = self._terminal_executor
         if t == "input":
             content = entry.get("content", "")
             if not isinstance(content, str):
@@ -1709,7 +1722,7 @@ class Session:
                 "type": "user_input",
                 "caller": "system",
                 "source": "panel",
-                "tool_name": "session_shell_user",
+                "tool_name": "terminal_user",
                 "mode": "wait",
                 "content": transcript,
                 "id": f"terminal-{entry_id}" if entry_id else None,

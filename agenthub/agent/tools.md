@@ -1,5 +1,6 @@
 bash
-session_shell
+terminal_create
+terminal_use
 read
 write
 edit
