@@ -1379,14 +1379,14 @@ async def test_tick_cancel_without_thinking_writes_no_blank_turn(tmp_path):
     assert turns == []
 
 
-# ── v2.0.33: tick-cancel mirrors chat-cancel for tool_use messages ──
+# ── v2.0.34: tick-cancel mirrors chat-cancel for tool_use messages ──
 
 
 @pytest.mark.asyncio
 async def test_tick_cancel_preserves_tool_use_blocks(tmp_path):
     """A TaskCard tick cancelled during tool execution must persist the
     committed tool_use + tool_result messages on disk so reload surfaces
-    the tool cell. Pre-v2.0.33 ``_do_tick``'s CancelledError branch
+    the tool cell. Pre-v2.0.34 ``_do_tick``'s CancelledError branch
     rolled ``self._agent._history`` back to the pre-tick snapshot and
     wrote an empty-``messages`` turn — meta sessions (100% TaskItem
     workload) therefore lost every tool-call cell on refresh after

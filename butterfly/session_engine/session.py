@@ -1087,7 +1087,7 @@ class Session:
         except asyncio.CancelledError:
             # Mirror _do_chat / _save_partial_chat_turn: keep committed
             # history and persist the partial turn so tool_use blocks
-            # survive reload after ⚡ interrupt. Pre-v2.0.33 this branch
+            # survive reload after ⚡ interrupt. Pre-v2.0.34 this branch
             # rolled history back to ``history_snapshot`` and wrote an
             # empty-``messages`` turn, which broke tool-history reload
             # for meta sessions (100% TaskItem workload). Card is marked
