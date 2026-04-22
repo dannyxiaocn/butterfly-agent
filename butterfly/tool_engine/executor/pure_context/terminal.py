@@ -803,9 +803,6 @@ class TerminalExecutor:
         if self._terminal_logger is not None:
             self._terminal_logger.mark_active(False)
 
-    # Legacy alias used by older tests/cleanup paths.
-    _hard_kill = close
-
     # ── Env fingerprint ──────────────────────────────────────────────
 
     async def _detect_env(self) -> EnvFingerprint:
@@ -886,31 +883,13 @@ class TerminalExecutor:
         self._last_env = env
         if self._terminal_logger is None:
             return
-        cwd_display = _homify(env.cwd)
-        try:
-            self._terminal_logger.update_fingerprint(
-                venv=env.venv,
-                cwd=env.cwd,
-                cwd_display=cwd_display,
-                git_branch=env.git_branch,
-                git_dirty=env.git_dirty,
-            )
-        except AttributeError:
-            # Older logger without fingerprint support — fall back to
-            # the older field-by-field API. Kept for forward-rolling
-            # tests that stub the logger.
-            if hasattr(self._terminal_logger, "update_env"):
-                try:
-                    self._terminal_logger.update_env(
-                        env.venv, env.git_branch
-                    )
-                except Exception:
-                    pass
-            if env.cwd:
-                try:
-                    self._terminal_logger.update_cwd(env.cwd)
-                except Exception:
-                    pass
+        self._terminal_logger.update_fingerprint(
+            venv=env.venv,
+            cwd=env.cwd,
+            cwd_display=_homify(env.cwd),
+            git_branch=env.git_branch,
+            git_dirty=env.git_dirty,
+        )
 
     # ── Welcome / env-change formatting ──────────────────────────────
 

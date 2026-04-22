@@ -137,7 +137,6 @@ class ToolLoader:
         self._system_sessions_base = system_sessions_base
         self._agent_base = agent_base
         self._on_task_change = on_task_change
-        self._terminal_executor_override = terminal_executor
         # Populated when the first terminal_create / terminal_use tool is
         # wired; lets the web Terminal route reach the pty directly.
         self._terminal_executor: Any | None = terminal_executor
@@ -147,9 +146,6 @@ class ToolLoader:
         the test/CLI path didn't inject an override. Cached so
         ``terminal_create`` and ``terminal_use`` pick up the same pty."""
         if self._terminal_executor is not None:
-            return self._terminal_executor
-        if self._terminal_executor_override is not None:
-            self._terminal_executor = self._terminal_executor_override
             return self._terminal_executor
         from butterfly.tool_engine.executor.pure_context.terminal import (
             TerminalExecutor,
