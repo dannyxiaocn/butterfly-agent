@@ -8,10 +8,52 @@ export function createSidebar(): HTMLElement {
   el.id = 'sidebar';
 
   let formVisible = false;
-  let pendingDisplayName = '';
   let agentOptions: string[] | null = null;
   let agentOptionsPromise: Promise<string[]> | null = null;
   let selectedAgent = 'agent';
+
+  // Build the sidebar shell ONCE. The form input + static buttons live in
+  // persistent DOM nodes so `store.emit('sessions'/'currentSession'/'weixin')`
+  // (which fires on every task/session event in v2.0.32) only rebuilds the
+  // dynamic list area. Previously the whole aside re-ran `innerHTML = ...`,
+  // destroying the <input> mid-keystroke — the cursor reset to column 0 on
+  // every character and typing a session name was impossible.
+  el.innerHTML = `
+    <div class="sidebar-header">
+      <span class="sidebar-title">Sessions</span>
+      <button class="btn-icon" id="btn-new-session" title="New session">+</button>
+    </div>
+    <div class="session-list">
+      <div id="new-session-form" class="new-session-card hidden">
+        <input
+          id="ns-display-name"
+          class="ns-name-input"
+          type="text"
+          placeholder="Enter session name…"
+          maxlength="40"
+          autocomplete="off"
+        />
+        <div class="new-session-card-row2">
+          <select id="ns-agent" class="ns-agent-select"><option value="">Loading…</option></select>
+          <div class="new-session-card-actions">
+            <button class="btn-sm btn-primary" id="ns-create">Create</button>
+            <button class="btn-sm" id="ns-cancel">Cancel</button>
+          </div>
+        </div>
+      </div>
+      <div id="session-list-items"></div>
+    </div>
+    <div class="sidebar-footer">
+      <button class="btn-sm btn-start" id="btn-start" title="Resume session">▶ Start</button>
+      <button class="btn-sm btn-stop" id="btn-stop" title="Pause session">⏸ Stop</button>
+      <button class="btn-sm btn-danger" id="btn-delete" title="Delete session">🗑</button>
+    </div>
+  `;
+
+  const formEl = el.querySelector('#new-session-form') as HTMLDivElement;
+  const nameInput = el.querySelector('#ns-display-name') as HTMLInputElement;
+  const agentSelect = el.querySelector('#ns-agent') as HTMLSelectElement;
+  const listItemsEl = el.querySelector('#session-list-items') as HTMLDivElement;
 
   function renderAgentOptions(): string {
     if (agentOptions === null) return '<option value="">Loading…</option>';
@@ -19,6 +61,16 @@ export function createSidebar(): HTMLElement {
     return agentOptions
       .map(a => `<option value="${escHtml(a)}">${escHtml(a)}</option>`)
       .join('');
+  }
+
+  function updateAgentOptions() {
+    const prev = agentSelect.value;
+    agentSelect.innerHTML = renderAgentOptions();
+    if (agentOptions && agentOptions.includes(prev)) {
+      agentSelect.value = prev;
+    } else if (agentOptions && agentOptions.includes(selectedAgent)) {
+      agentSelect.value = selectedAgent;
+    }
   }
 
   function ensureAgents(): Promise<string[]> {
@@ -30,15 +82,11 @@ export function createSidebar(): HTMLElement {
         if (!agentOptions.includes(selectedAgent) && agentOptions.length) {
           selectedAgent = agentOptions[0];
         }
-        // Re-render so the dropdown surfaces the fetched options even if
-        // the sidebar was mid-rebuild when the promise resolved.
-        render();
+        updateAgentOptions();
         return r.agents;
       })
       .catch(e => {
         console.error('listAgents failed:', e);
-        // Clear both caches so the next `+` click (or next render) retries
-        // rather than sticking on the failed state forever.
         agentOptions = null;
         agentOptionsPromise = null;
         return [];
@@ -46,7 +94,99 @@ export function createSidebar(): HTMLElement {
     return agentOptionsPromise;
   }
 
-  function render() {
+  function openForm() {
+    formVisible = true;
+    formEl.classList.remove('hidden');
+    ensureAgents();
+    queueMicrotask(() => nameInput.focus());
+  }
+
+  function closeForm() {
+    formVisible = false;
+    formEl.classList.add('hidden');
+    nameInput.value = '';
+  }
+
+  async function submitCreate() {
+    // Agent dropdown (PR #36) holds either "agent" or "agenthub/agent" —
+    // normalize to the fully-qualified form the service expects.
+    const agentName = (agentSelect.value || 'agent').trim();
+    const body: { agent: string; display_name?: string } = {
+      agent: agentName.startsWith('agenthub/') ? agentName : `agenthub/${agentName}`,
+    };
+    const trimmedName = nameInput.value.trim();
+    if (trimmedName) body.display_name = trimmedName;
+    try {
+      const res = await api.createSession(body);
+      closeForm();
+      const sessions = await api.listSessions();
+      store.sessions = sessions;
+      store.emit('sessions');
+      await attachSession(res.id);
+    } catch (e) {
+      alert(`Failed to create session: ${e}`);
+    }
+  }
+
+  el.querySelector('#btn-new-session')!.addEventListener('click', () => {
+    if (formVisible) closeForm();
+    else openForm();
+  });
+  el.querySelector('#ns-cancel')!.addEventListener('click', closeForm);
+  el.querySelector('#ns-create')!.addEventListener('click', submitCreate);
+
+  // Enter submits, Escape cancels — keep keyboard flow fast since the form
+  // auto-focuses on open.
+  nameInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      submitCreate();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      closeForm();
+    }
+  });
+
+  agentSelect.addEventListener('change', () => {
+    selectedAgent = agentSelect.value;
+  });
+
+  el.querySelector('#btn-start')!.addEventListener('click', async () => {
+    if (!store.currentSessionId) return;
+    await api.startSession(store.currentSessionId).catch(console.error);
+    const sessions = await api.listSessions();
+    store.sessions = sessions;
+    store.emit('sessions');
+  });
+
+  el.querySelector('#btn-stop')!.addEventListener('click', async () => {
+    if (!store.currentSessionId) return;
+    // v2.0.24: Stop must also fire interrupt. ``stop_session`` alone only
+    // flips ``status=stopped`` on disk; the daemon's stopped-check runs
+    // when new input arrives, so any in-flight agent loop kept executing
+    // until it hit a natural break. Sending interrupt first cancels the
+    // run + drops the inbox + cascades to background tools / sub-agents
+    // (see Session._handle_explicit_interrupt), then stop pauses the
+    // session so future task wakeups don't auto-resume work.
+    await api.interruptSession(store.currentSessionId).catch(console.error);
+    await api.stopSession(store.currentSessionId).catch(console.error);
+    const sessions = await api.listSessions();
+    store.sessions = sessions;
+    store.emit('sessions');
+  });
+
+  el.querySelector('#btn-delete')!.addEventListener('click', async () => {
+    if (!store.currentSessionId) return;
+    if (!confirm(`Delete session "${store.currentSessionId}"?`)) return;
+    await api.deleteSession(store.currentSessionId).catch(console.error);
+    store.currentSessionId = null;
+    store.emit('currentSession');
+    const sessions = await api.listSessions();
+    store.sessions = sessions;
+    store.emit('sessions');
+  });
+
+  function renderList() {
     const sessions = store.sessions;
     const current = store.currentSessionId;
 
@@ -123,172 +263,9 @@ export function createSidebar(): HTMLElement {
     }
 
     const listHtml = roots.map(s => renderSession(s, 0)).join('');
+    listItemsEl.innerHTML = listHtml || '<div style="padding:12px 8px;font-size:12px;color:var(--dimmed)">No sessions</div>';
 
-    el.innerHTML = `
-      <div class="sidebar-header">
-        <span class="sidebar-title">Sessions</span>
-        <button class="btn-icon" id="btn-new-session" title="New session">+</button>
-      </div>
-      <div class="session-list" id="session-list">
-        <div id="new-session-form" class="new-session-card${formVisible ? '' : ' hidden'}">
-          <input
-            id="ns-display-name"
-            class="ns-name-input"
-            type="text"
-            placeholder="Enter session name…"
-            maxlength="40"
-            autocomplete="off"
-            value="${escHtml(pendingDisplayName)}"
-          />
-          <div class="new-session-card-row2">
-            <select id="ns-agent" class="ns-agent-select">${renderAgentOptions()}</select>
-            <div class="new-session-card-actions">
-              <button class="btn-sm btn-primary" id="ns-create">Create</button>
-              <button class="btn-sm" id="ns-cancel">Cancel</button>
-            </div>
-          </div>
-        </div>
-        ${listHtml || '<div style="padding:12px 8px;font-size:12px;color:var(--dimmed)">No sessions</div>'}
-      </div>
-      <div class="sidebar-footer">
-        <button class="btn-sm btn-start" id="btn-start" title="Resume session">▶ Start</button>
-        <button class="btn-sm btn-stop" id="btn-stop" title="Pause session">⏸ Stop</button>
-        <button class="btn-sm btn-danger" id="btn-delete" title="Delete session">🗑</button>
-      </div>
-    `;
-
-    // Set the select's current value after DOM insertion so the cached
-    // choice survives each re-render (the sidebar refreshes on every
-    // sessions poll).
-    const select = el.querySelector('#ns-agent') as HTMLSelectElement | null;
-    if (select && agentOptions && agentOptions.includes(selectedAgent)) {
-      select.value = selectedAgent;
-    }
-    select?.addEventListener('change', () => {
-      selectedAgent = select.value;
-    });
-
-    // bind events
-    const nameInput = () => el.querySelector('#ns-display-name') as HTMLInputElement | null;
-
-    function openForm() {
-      formVisible = true;
-      el.querySelector('#new-session-form')?.classList.remove('hidden');
-      ensureAgents();
-      // Focus deferred so layout settles after the .hidden flip.
-      queueMicrotask(() => nameInput()?.focus());
-    }
-
-    function closeForm() {
-      formVisible = false;
-      pendingDisplayName = '';
-      el.querySelector('#new-session-form')?.classList.add('hidden');
-      const ni = nameInput();
-      if (ni) ni.value = '';
-    }
-
-    async function submitCreate() {
-      const nameEl = nameInput();
-      const agentEl = el.querySelector('#ns-agent') as HTMLSelectElement | null;
-      if (!nameEl || !agentEl) return;
-      // Agent dropdown (PR #36) holds either "agent" or "agenthub/agent" —
-      // normalize to the fully-qualified form the service expects.
-      const agentName = (agentEl.value || 'agent').trim();
-      // session_id is always server-generated; the form only collects the
-      // user-facing display_name + agent choice.
-      const body: { agent: string; display_name?: string } = {
-        agent: agentName.startsWith('agenthub/') ? agentName : `agenthub/${agentName}`,
-      };
-      const trimmedName = nameEl.value.trim();
-      if (trimmedName) body.display_name = trimmedName;
-      try {
-        const res = await api.createSession(body);
-        closeForm();
-        // Refresh sessions list
-        const sessions = await api.listSessions();
-        store.sessions = sessions;
-        store.emit('sessions');
-        await attachSession(res.id);
-      } catch (e) {
-        alert(`Failed to create session: ${e}`);
-      }
-    }
-
-    el.querySelector('#btn-new-session')?.addEventListener('click', () => {
-      if (formVisible) {
-        closeForm();
-      } else {
-        openForm();
-      }
-    });
-
-    el.querySelector('#ns-cancel')?.addEventListener('click', closeForm);
-    el.querySelector('#ns-create')?.addEventListener('click', submitCreate);
-
-    // Enter submits, Escape cancels — keep keyboard flow fast since the form
-    // auto-focuses on open.
-    nameInput()?.addEventListener('keydown', (e) => {
-      const ke = e as KeyboardEvent;
-      if (ke.key === 'Enter') {
-        ke.preventDefault();
-        submitCreate();
-      } else if (ke.key === 'Escape') {
-        ke.preventDefault();
-        closeForm();
-      }
-    });
-    // Persist in-progress input across re-renders (the sidebar rebuilds on
-    // every `sessions` store event — without this, typing while a sub-agent
-    // emits a wakeup event wipes the field mid-keystroke).
-    nameInput()?.addEventListener('input', (e) => {
-      pendingDisplayName = (e.target as HTMLInputElement).value;
-    });
-
-    // If the form was visible before a re-render (sessions poll, etc.), keep
-    // focus on the name input so typing isn't interrupted.
-    if (formVisible) {
-      queueMicrotask(() => {
-        const ni = nameInput();
-        if (ni && document.activeElement !== ni) ni.focus();
-      });
-    }
-
-    el.querySelector('#btn-start')?.addEventListener('click', async () => {
-      if (!store.currentSessionId) return;
-      await api.startSession(store.currentSessionId).catch(console.error);
-      const sessions = await api.listSessions();
-      store.sessions = sessions;
-      store.emit('sessions');
-    });
-
-    el.querySelector('#btn-stop')?.addEventListener('click', async () => {
-      if (!store.currentSessionId) return;
-      // v2.0.24: Stop must also fire interrupt. ``stop_session`` alone only
-      // flips ``status=stopped`` on disk; the daemon's stopped-check runs
-      // when new input arrives, so any in-flight agent loop kept executing
-      // until it hit a natural break. Sending interrupt first cancels the
-      // run + drops the inbox + cascades to background tools / sub-agents
-      // (see Session._handle_explicit_interrupt), then stop pauses the
-      // session so future task wakeups don't auto-resume work.
-      await api.interruptSession(store.currentSessionId).catch(console.error);
-      await api.stopSession(store.currentSessionId).catch(console.error);
-      const sessions = await api.listSessions();
-      store.sessions = sessions;
-      store.emit('sessions');
-    });
-
-    el.querySelector('#btn-delete')?.addEventListener('click', async () => {
-      if (!store.currentSessionId) return;
-      if (!confirm(`Delete session "${store.currentSessionId}"?`)) return;
-      await api.deleteSession(store.currentSessionId).catch(console.error);
-      store.currentSessionId = null;
-      store.emit('currentSession');
-      const sessions = await api.listSessions();
-      store.sessions = sessions;
-      store.emit('sessions');
-    });
-
-    el.querySelectorAll('.session-item').forEach(item => {
+    listItemsEl.querySelectorAll('.session-item').forEach(item => {
       item.addEventListener('click', () => {
         const id = (item as HTMLElement).dataset.id;
         if (id) attachSession(id);
@@ -296,10 +273,10 @@ export function createSidebar(): HTMLElement {
     });
   }
 
-  store.on('sessions', render);
-  store.on('currentSession', render);
-  store.on('weixin', render);
-  render();
+  store.on('sessions', renderList);
+  store.on('currentSession', renderList);
+  store.on('weixin', renderList);
+  renderList();
   // Warm the agents cache so the "+ New session" dropdown is pre-populated.
   ensureAgents();
   return el;
