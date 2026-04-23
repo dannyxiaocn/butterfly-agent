@@ -43,19 +43,32 @@ def _kill_process_group(proc: asyncio.subprocess.Process) -> None:
         pass
 
 
-async def run_script(script: Path, *, cwd: Path) -> ScriptResult:
+async def run_script(
+    script: Path,
+    *,
+    cwd: Path,
+    env: dict[str, str] | None = None,
+) -> ScriptResult:
     """Run a task script and capture its result.
 
     The single-script model (v2.0.29) makes the parser unconditional —
     one tag set covers every poll. ``parse_script_output`` returns
     ``None`` on fail-closed conditions; the caller decides what to do
     (skip, enqueue, mark_terminal).
+
+    ``env`` (v2.0.36): optional extra environment variables merged on top
+    of ``os.environ`` for the subprocess. Used by the session engine to
+    pass per-card state down to the script — currently just the todo-list
+    card's ``BUTTERFLY_TODO_*`` counters.
     """
     started = time.monotonic()
     stdout_text = ""
     stderr_text = ""
     exit_code: int | None = None
     timed_out = False
+    subprocess_env: dict[str, str] | None = None
+    if env:
+        subprocess_env = {**os.environ, **{k: str(v) for k, v in env.items()}}
     try:
         proc = await asyncio.create_subprocess_exec(
             "bash", str(script),
@@ -64,6 +77,7 @@ async def run_script(script: Path, *, cwd: Path) -> ScriptResult:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             start_new_session=True,
+            env=subprocess_env,
         )
         try:
             out, err = await asyncio.wait_for(

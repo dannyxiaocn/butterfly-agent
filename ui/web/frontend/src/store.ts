@@ -1,4 +1,4 @@
-import type { DisplayEvent, PanelEntry, Params, Session, TaskCard } from './types';
+import type { DisplayEvent, PanelEntry, Params, Session, TaskCard, TodoListSnapshot } from './types';
 
 type Listener = () => void;
 
@@ -8,6 +8,7 @@ class Store {
   currentParams: Params | null = null;
   modelState: { state: string; source: string | null } = { state: 'idle', source: null };
   taskCards: TaskCard[] = [];
+  todoList: TodoListSnapshot | null = null;
   panelEntries: PanelEntry[] = [];
   weixinStatus: { status: string; error?: string; session?: string; account?: string } = { status: 'idle' };
   chatEvents: DisplayEvent[] = [];

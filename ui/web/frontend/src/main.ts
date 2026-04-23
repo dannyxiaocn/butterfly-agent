@@ -179,6 +179,19 @@ export async function attachSession(id: string): Promise<void> {
     console.error('Failed to load tasks:', e);
   }
 
+  // v2.0.37 — load standalone todo list (pinned above the task cards
+  // when present). Decoupled from the Tasks endpoint so task-card
+  // operations don't churn the pinned header, and vice versa.
+  try {
+    const res = await api.getTodoList(id);
+    if (attachVersion !== version) return;
+    store.todoList = res.todo_list;
+    store.emit('todoList');
+  } catch (e) {
+    if (attachVersion !== version) return;
+    console.error('Failed to load todo list:', e);
+  }
+
   // Load config / params
   try {
     const cfg = await api.getConfig(id);
@@ -255,6 +268,22 @@ export async function attachSession(id: string): Promise<void> {
       }).catch(() => {
         // Non-fatal — next event triggers another refresh.
       });
+    }
+
+    // v2.0.37: standalone todo_list — backend emits ``todo_list_changed``
+    // from the todo_list tool AND from the runtime reminder-injection
+    // path. Refetch the snapshot (Tasks pinned header) AND refresh the
+    // HUD row in a single round-trip rather than waiting for the 10 s
+    // HUD poll.
+    if (event.type === 'todo_list_changed') {
+      if (store.currentSessionId === id) {
+        api.getTodoList(id).then(res => {
+          if (store.currentSessionId !== id) return; // stale
+          store.todoList = res.todo_list;
+          store.emit('todoList');
+        }).catch(() => {});
+        getChatEl().refreshHud(store.currentSessionId).catch(() => {});
+      }
     }
 
     // v2.0.30: Panel tab refresh is also on-event. Replaces the old

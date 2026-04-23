@@ -399,3 +399,4 @@ def ensure_card(
     if not script_path(tasks_dir, name).exists():
         write_script(tasks_dir, name, script or f"echo {_FIRE}")
     return card
+

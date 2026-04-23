@@ -66,6 +66,29 @@ export interface PanelEntryDetail extends PanelEntry {
   output_tail: string | null;
 }
 
+// v2.0.37 — standalone todo list (decoupled from task cards). Stored at
+// core/todo_list.json; rendered pinned at the top of the Tasks tab and
+// summarised on the HUD's third row.
+export interface TodoListItem {
+  content: string;
+  status: 'pending' | 'in_progress' | 'completed';
+  activeForm: string;
+}
+
+export interface TodoListSnapshot {
+  progress_line: string;
+  progress: string;
+  comments: string;
+  active_index: number | null;
+  total: number;
+  pending_count: number;
+  all_done: boolean;
+  iters_since_seen: number;
+  threshold: number;
+  updated_at: string | null;
+  items: TodoListItem[];
+}
+
 export interface TaskCard {
   name: string;
   description: string;

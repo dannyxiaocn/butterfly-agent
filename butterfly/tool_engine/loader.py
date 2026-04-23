@@ -114,6 +114,13 @@ class ToolLoader:
         # callback so the web UI can refresh the Tasks tab on-event. Session
         # provides one that appends to events.jsonl; None is a silent no-op.
         on_task_change: "Callable[[str, str], None] | None" = None,
+        # v2.0.37 — todo_list tool writes to core/todo_list.json (NOT a
+        # task card). core_dir is the session's ``core/`` root; the tool
+        # reads / writes ``core/todo_list.json`` through it. Session
+        # provides a change callback that emits ``todo_list_changed``
+        # events for the frontend's Tasks pinned-header refresh.
+        core_dir: Path | None = None,
+        on_todo_list_change: "Callable[[str], None] | None" = None,
         # v2.0.30 — session-owned persistent TerminalExecutor driving both
         # ``terminal_create`` and ``terminal_use``. When provided, the
         # loader reuses this instance across capability reloads so the pty
@@ -137,6 +144,8 @@ class ToolLoader:
         self._system_sessions_base = system_sessions_base
         self._agent_base = agent_base
         self._on_task_change = on_task_change
+        self._core_dir = core_dir
+        self._on_todo_list_change = on_todo_list_change
         # Populated when the first terminal_create / terminal_use tool is
         # wired; lets the web Terminal route reach the pty directly.
         self._terminal_executor: Any | None = terminal_executor
@@ -360,6 +369,17 @@ class ToolLoader:
             executor_cls = getattr(mod, "TaskListExecutor", None)
             if executor_cls:
                 executor = executor_cls(tasks_dir=self._tasks_dir)
+                async def _impl(**kwargs: Any) -> str:
+                    return await executor.execute(**kwargs)
+                return _impl
+
+        elif tool_name == "todo_list":
+            executor_cls = getattr(mod, "TodoListExecutor", None)
+            if executor_cls:
+                executor = executor_cls(
+                    core_dir=self._core_dir,
+                    on_change=self._on_todo_list_change,
+                )
                 async def _impl(**kwargs: Any) -> str:
                     return await executor.execute(**kwargs)
                 return _impl

@@ -41,6 +41,13 @@ export function createChat(): HTMLElement {
         <span class="hud-runners-sep">|</span>
         <span class="hud-runner hud-runner-sub" title="Sub-agents in flight"><span class="hud-runner-sub-count">0</span> sub-agents running</span>
       </div>
+      <details class="hud-row hud-row-todo hidden hud-todo-details" title="Todo-list card — click to expand">
+        <summary class="hud-todo-summary">
+          <span class="hud-todo-caret"></span>
+          <span class="hud-todo-line"></span>
+        </summary>
+        <ol class="hud-todo-list"></ol>
+      </details>
     </div>
     <div id="chat-input-area" class="chat-input-area">
       <textarea id="chat-input" placeholder="Type a message… (Enter = send, Shift+Enter = newline, Alt/⌥+Enter = wait-mode)" rows="3"></textarea>
@@ -901,6 +908,94 @@ export function createChat(): HTMLElement {
     else ctxWrap.classList.add('ctx-low');
   }
 
+  interface HudTodoItem {
+    content: string;
+    status: 'pending' | 'in_progress' | 'completed';
+    activeForm: string;
+  }
+  interface HudTodo {
+    progress_line: string;
+    active_index: number | null;
+    total: number;
+    pending_count: number;
+    all_done: boolean;
+    iters_since_seen: number;
+    threshold: number;
+    items: HudTodoItem[];
+  }
+
+  function updateHudTodo(todo: HudTodo | null | undefined) {
+    const hudBar = el.querySelector('#hud-bar') as HTMLElement | null;
+    if (!hudBar) return;
+    const row = hudBar.querySelector('.hud-row-todo') as HTMLElement | null;
+    if (!row) return;
+    const lineEl = row.querySelector('.hud-todo-line') as HTMLElement | null;
+    const listEl = row.querySelector('.hud-todo-list') as HTMLOListElement | null;
+    if (!lineEl || !listEl) return;
+    if (!todo || !todo.items || todo.items.length === 0) {
+      row.classList.add('hidden');
+      return;
+    }
+    row.classList.remove('hidden');
+    // Split ``[i/N] activeForm`` into two spans so only the prefix gets
+    // the yellow accent; the body text just bolds. Regex tolerates the
+    // all-done shape ``[N/N]`` (no trailing text) and odd strings
+    // (``progress_line`` not matching → falls back to flat render).
+    lineEl.classList.remove('hud-todo-line-active', 'hud-todo-line-done');
+    const m = todo.progress_line.match(/^(\[\d+\/\d+\])\s*(.*)$/);
+    const hasInProgress = todo.items.some(it => it.status === 'in_progress');
+    if (m) {
+      const prefix = m[1];
+      const body = m[2];
+      const prefixClass = todo.all_done
+        ? 'hud-todo-line-prefix-done'
+        : hasInProgress
+          ? 'hud-todo-line-prefix-active'
+          : 'hud-todo-line-prefix';
+      const bodyHtml = body
+        ? ` <span class="hud-todo-line-body${hasInProgress ? ' hud-todo-line-body-active' : ''}">${escapeHtml(body)}</span>`
+        : '';
+      lineEl.innerHTML =
+        `<span class="${prefixClass}">${escapeHtml(prefix)}</span>${bodyHtml}`;
+    } else {
+      lineEl.textContent = todo.progress_line;
+    }
+    // All-done adds strikethrough/dim on the whole row for a quick glance;
+    // the prefix-done class above covers the colour change.
+    if (todo.all_done) {
+      lineEl.classList.add('hud-todo-line-done');
+    }
+    const html: string[] = [];
+    for (const item of todo.items) {
+      let cls: string;
+      let marker: string;
+      let text: string;
+      if (item.status === 'completed') {
+        // v2.0.36: completed marker switched from ☑ to ▤ per design —
+        // same glyph as in_progress but styled dim + strikethrough so
+        // visual weight tells the two states apart instead of the icon.
+        cls = 'hud-todo-item-done';
+        marker = '▤';
+        text = item.content;
+      } else if (item.status === 'in_progress') {
+        cls = 'hud-todo-item-in-progress';
+        marker = '▤';
+        text = item.activeForm || item.content;
+      } else {
+        cls = 'hud-todo-item-pending';
+        marker = '☐';
+        text = item.content;
+      }
+      html.push(
+        `<li class="hud-todo-item ${cls}">` +
+          `<span class="hud-todo-marker">${marker}</span>` +
+          `<span class="hud-todo-text">${escapeHtml(text)}</span>` +
+        `</li>`
+      );
+    }
+    listEl.innerHTML = html.join('');
+  }
+
   function updateHudSpeed(toksPerS: number | null | undefined) {
     const hudBar = el.querySelector('#hud-bar') as HTMLElement | null;
     if (!hudBar) return;
@@ -974,6 +1069,10 @@ export function createChat(): HTMLElement {
       updateHudSubAgents(subAgentsRunning);
       bashRunningCount = data.bash_running ?? 0;
       updateRunnersRow();
+
+      // Todo-list row (v2.0.36). Hidden when the session has no todo-list
+      // card or the card's items list is empty.
+      updateHudTodo(data.todo);
     } catch {
       // ignore — HUD is best-effort
     }

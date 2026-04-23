@@ -27,6 +27,12 @@ from butterfly.session_engine.task_cards import (
     TaskCard, cards_needing_check, clear_all_cards,
     load_card, parse_script_output, save_card, script_path,
 )
+from butterfly.session_engine.todo_list import (
+    format_todo_system_reminder,
+    load_todo_list,
+    save_todo_list,
+    todo_pending_count,
+)
 from butterfly.session_engine.task_runner import run_script
 from butterfly.llm_engine.registry import provider_name, resolve_provider
 from butterfly.session_engine.session_status import ensure_session_status, read_session_status, write_session_status
@@ -428,6 +434,16 @@ class Session:
                 if change == "finished":
                     self._prune_queue_for_task(card_name)
 
+            def _emit_todo_list_change(change: str) -> None:
+                # v2.0.37 — todo list is decoupled from task cards; it has
+                # its own SSE event so the frontend refreshes the pinned
+                # header + HUD without piggy-backing on task_card_changed
+                # (which regressed to task-only semantics).
+                self._append_event({
+                    "type": "todo_list_changed",
+                    "change": change,
+                })
+
             loader = ToolLoader(
                 default_workdir=str(self.session_dir),
                 skills=skills,
@@ -443,6 +459,8 @@ class Session:
                 system_sessions_base=self._system_base,
                 agent_base=self._base_dir.parent / "agenthub",
                 on_task_change=_emit_task_change,
+                core_dir=self.core_dir,
+                on_todo_list_change=_emit_todo_list_change,
                 terminal_executor=self._terminal_executor,
             )
             # Load tools from tools.md (toolhub), fallback to legacy tool.md
@@ -554,6 +572,43 @@ class Session:
 
     # ── Task-card script polling (v2.0.29) ────────────────────────
 
+    def _persist_card_transition(
+        self,
+        name: str,
+        mutate,
+    ) -> "TaskCard | None":
+        """Atomically apply a status-only mutation to a task card.
+
+        Load the card fresh from disk, let ``mutate`` touch only the
+        fields the runtime owns (``status`` / ``last_*_at``), then save.
+        Prevents the pre-v2.0.36 clobber where ``_do_tick`` /
+        ``_poll_card_script`` saved a stale in-memory card at tick end,
+        wiping any ``todo_list`` / ``task_update`` writes the agent
+        made DURING the tick. Returns the fresh card on success, ``None``
+        when the card no longer exists on disk.
+
+        The callback contract is narrow by convention — it must only
+        call one of ``mark_working`` / ``mark_pending`` / ``mark_finished``
+        / ``mark_terminal`` / ``mark_checked`` / ``mark_paused``. Any
+        other mutation risks re-introducing the clobber.
+        """
+        try:
+            disk = load_card(self.tasks_dir, name)
+        except Exception:  # noqa: BLE001 — defensive; disk hiccup
+            return None
+        if disk is None:
+            return None
+        try:
+            mutate(disk)
+        except Exception:  # noqa: BLE001 — mutation bug should not break tick
+            _log.warning("card transition mutation raised for %s", name, exc_info=True)
+            return None
+        try:
+            save_card(self.tasks_dir, disk)
+        except Exception:  # noqa: BLE001 — disk hiccup
+            return None
+        return disk
+
     async def _poll_card_script(self, card: TaskCard) -> str | None:
         """Run ``<name>.sh`` and dispatch on its output.
 
@@ -576,8 +631,13 @@ class Session:
         if not script.is_file():
             return None
         result = await run_script(script, cwd=self.session_dir)
-        card.mark_checked()
-        save_card(self.tasks_dir, card)
+        # Re-read before persisting poll meta — the agent may have written
+        # this card (via todo_list / task_update) during the bash-subprocess
+        # await we just blocked on. The only field the runtime owns at this
+        # point is last_checked_at; everything else stays whatever disk says.
+        latest = self._persist_card_transition(card.name, lambda c: c.mark_checked())
+        if latest is not None:
+            card = latest
         parsed = parse_script_output(result.stdout, result.exit_code)
         event: dict = {
             "type": "task_check",
@@ -609,8 +669,9 @@ class Session:
             # that the *script* is declaring "this card has nothing more
             # to do". No agent_loop_start hook fires either; the script
             # poll itself is the only side-effect.
-            card.mark_terminal()
-            save_card(self.tasks_dir, card)
+            # Transition via the re-read helper so we don't clobber any
+            # field the agent wrote during the bash await.
+            self._persist_card_transition(card.name, lambda c: c.mark_terminal())
             # v2.0.30 — mirror the task_finish tool's cleanup: emit a
             # `task_card_changed` for the frontend's on-event refresh
             # and drop any queued wakeups for this card. Without the
@@ -904,8 +965,13 @@ class Session:
                 try:
                     fresh = load_card(self.tasks_dir, item.card.name)
                     if fresh is None or fresh.status not in ("paused", "finished"):
-                        item.card.mark_pending()
-                        save_card(self.tasks_dir, item.card)
+                        # v2.0.36: re-read-then-mutate so we don't clobber
+                        # agent writes (todos / progress / comments) that
+                        # landed during the cancelled tick.
+                        self._persist_card_transition(
+                            item.card.name,
+                            lambda c: c.mark_pending(),
+                        )
                 except Exception:
                     pass
                 item.reject(asyncio.CancelledError())
@@ -1076,8 +1142,14 @@ class Session:
             "prompt": prompt,
             "ts": trigger_ts,
         })
-        card.mark_working()
-        save_card(self.tasks_dir, card)
+        # v2.0.36: re-read-then-mutate. Between housekeeping's poll (which
+        # produced the ``card`` object we were handed) and this point, a
+        # prior tick's agent may have written this card via todo_list or
+        # task_update — saving the stale in-memory copy would revert
+        # those fields. The helper touches status / last_started_at only.
+        fresh = self._persist_card_transition(card.name, lambda c: c.mark_working())
+        if fresh is not None:
+            card = fresh
         self._set_model_status("running", triggered_by)
         self._current_turn_agent_durations = []
         self._current_turn_agent_usages = []
@@ -1158,8 +1230,10 @@ class Session:
             })
             raise
         except BaseException:
-            card.mark_pending()
-            save_card(self.tasks_dir, card)
+            # v2.0.36: re-read-then-mutate (see _persist_card_transition).
+            # The agent may have written the card inside the (now errored)
+            # turn; blindly saving our stale copy would lose those writes.
+            self._persist_card_transition(card.name, lambda c: c.mark_pending())
             self._set_model_status("idle", triggered_by)
             on_chunk.flush()
             await self._fire_external_hook("agent_loop_end", {
@@ -1189,14 +1263,22 @@ class Session:
             # the next housekeeping scan re-fires the script and queues
             # a fresh wakeup. The terminal-status check leaves any sticky
             # transition the agent made standing.
+            #
+            # v2.0.36: generalised the re-read for ALL transitions (not
+            # just status==finished). Prior code took the stale in-memory
+            # ``card`` and saved it on the non-finished branch, wiping
+            # any fields the agent wrote during this tick (todos,
+            # progress, comments). ``_persist_card_transition`` now
+            # guards the mark_finished branch the same way.
             disk = load_card(self.tasks_dir, card.name)
             if disk is not None and disk.status == "finished":
                 card = disk
                 # No save needed — the disk copy IS the canonical state.
                 self._prune_queue_for_task(card.name)
             else:
-                card.mark_finished()
-                save_card(self.tasks_dir, card)
+                fresh = self._persist_card_transition(card.name, lambda c: c.mark_finished())
+                if fresh is not None:
+                    card = fresh
 
             new_msgs = self._agent._history[old_len:]
             if new_msgs and new_msgs[0].role == "user":
@@ -2321,7 +2403,76 @@ class Session:
                 except Exception:
                     _log.warning("thinking-token attributor raised", exc_info=True)
 
+            # Todo-list reminder ticker. One bump per LLM call regardless
+            # of what triggered the run; when the counter crosses the
+            # configured threshold we enqueue a ``<system-reminder>``
+            # ChatItem to re-show the list and reset the counter. Paired
+            # with ``todo_list`` resetting the counter to 0 when the
+            # agent rewrites the list. Best-effort — disk hiccups / a
+            # missing file must never break the main callback path.
+            self._tick_todo_list_reminder()
+
         return on_llm_call_end
+
+    def _tick_todo_list_reminder(self) -> None:
+        """Increment ``iters_since_seen`` + inject a reminder at threshold.
+
+        The reminder is enqueued as a wait-mode ChatItem so a chat or
+        task in flight completes first; once popped, it runs as a normal
+        agent turn whose user message is the ``<system-reminder>``
+        listing every todo. The counter resets at enqueue time so the
+        next threshold window starts cleanly.
+
+        All failures are swallowed — todo-list telemetry must never take
+        down the main LLM loop.
+        """
+        try:
+            todo = load_todo_list(self.core_dir)
+            if todo is None or not todo.todos:
+                return
+            todo.iters_since_seen = int(todo.iters_since_seen or 0) + 1
+            # Don't fire reminders when every item is already completed —
+            # nothing left to track, and a stale "all done" reminder
+            # would be noise.
+            pending = todo_pending_count(todo.todos)
+            threshold = int(todo.reminder_threshold or 10)
+            should_fire = pending > 0 and todo.iters_since_seen >= threshold
+            if should_fire:
+                todo.iters_since_seen = 0
+                save_todo_list(self.core_dir, todo)
+                self._enqueue_todo_list_reminder(todo.todos)
+            else:
+                save_todo_list(self.core_dir, todo)
+        except Exception:  # noqa: BLE001 — best-effort bookkeeping
+            _log.debug("todo-list reminder tick failed", exc_info=True)
+
+    def _enqueue_todo_list_reminder(self, todos: list[dict]) -> None:
+        """Queue a wait-mode ChatItem carrying the reminder text.
+
+        Fire-and-forget: we schedule via the running loop's
+        ``create_task`` so ``on_llm_call_end`` (a sync callback) doesn't
+        block waiting for the enqueue future. An emit of
+        ``todo_list_changed`` keeps the HUD / Tasks pinned header in
+        step with the counter reset.
+        """
+        content = format_todo_system_reminder(todos)
+        if not content:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        item = ChatItem(
+            content=content,
+            mode="wait",
+            source="todo_reminder",
+            caller_type="system",
+        )
+        loop.create_task(self._enqueue(item))
+        self._append_event({
+            "type": "todo_list_changed",
+            "change": "reminder_injected",
+        })
 
     def _emit_version_notice_if_stale(self) -> None:
         """Emit system_notice if the meta session is at a newer version than this session."""

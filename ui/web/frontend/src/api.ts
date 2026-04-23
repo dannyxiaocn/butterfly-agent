@@ -6,6 +6,7 @@ import type {
   PanelEntryDetail,
   Session,
   TaskCard,
+  TodoListSnapshot,
 } from './types';
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -101,8 +102,25 @@ export const api = {
     usage: { input?: number; output?: number; cache_read?: number; cache_write?: number; reasoning?: number } | null;
     sub_agents_running?: number;
     bash_running?: number;
+    todo?: {
+      progress_line: string;
+      active_index: number | null;
+      total: number;
+      pending_count: number;
+      all_done: boolean;
+      iters_since_seen: number;
+      threshold: number;
+      items: Array<{
+        content: string;
+        status: 'pending' | 'in_progress' | 'completed';
+        activeForm: string;
+      }>;
+    } | null;
   }> =>
     request('GET', `/api/sessions/${encodeURIComponent(id)}/hud`),
+
+  getTodoList: (id: string): Promise<{ todo_list: TodoListSnapshot | null }> =>
+    request('GET', `/api/sessions/${encodeURIComponent(id)}/todo_list`),
 
   getPanel: (id: string): Promise<PanelEntry[]> =>
     request('GET', `/api/sessions/${encodeURIComponent(id)}/panel`),

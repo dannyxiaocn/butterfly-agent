@@ -1824,6 +1824,82 @@ button:disabled {
   line-height: 1.4;
 }
 
+/* Todo-list pinned header (v2.0.37 — standalone, not a task card). The
+ * panel summary mirrors the HUD row's split styling: yellow prefix
+ * counter, bold body text, dim + strikethrough for the all-done
+ * state. */
+.task-summary-snippet-todo-prefix {
+  color: var(--yellow);
+  font-weight: 600;
+}
+.task-summary-snippet-todo-body {
+  font-weight: 600;
+}
+.task-summary-snippet-todo-done {
+  color: var(--dimmed);
+  text-decoration: line-through;
+  opacity: 0.65;
+}
+
+/* Pinned standalone todo list — sits above the regular task cards list.
+ * Margin separates it from the cards below; the card chrome is reused
+ * so it visually reads as "one more card, always at top". */
+.task-todo-pinned {
+  margin-bottom: 12px;
+}
+
+.task-card-todo-list .task-todo-pill {
+  /* Distinguish from the duty pill — grey, not accent. */
+  background: var(--surface-2, rgba(255, 255, 255, 0.05));
+  color: var(--dimmed);
+}
+
+/* Expanded items list inside the pinned todo card. */
+.task-todo-items {
+  list-style: none;
+  padding-left: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.task-todo-item {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  line-height: 1.4;
+}
+.task-todo-marker {
+  display: inline-block;
+  min-width: 1.2em;
+  text-align: center;
+  flex-shrink: 0;
+}
+.task-todo-index {
+  color: var(--dimmed);
+  min-width: 1.8em;
+  flex-shrink: 0;
+}
+.task-todo-text {
+  color: var(--text2);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.task-todo-item-done .task-todo-marker { color: var(--dimmed); }
+.task-todo-item-done .task-todo-text {
+  color: var(--dimmed);
+  text-decoration: line-through;
+  opacity: 0.65;
+}
+.task-todo-item-in-progress .task-todo-marker { color: var(--yellow); }
+.task-todo-item-in-progress .task-todo-text {
+  color: var(--yellow);
+  font-weight: 600;
+}
+.task-todo-item-pending .task-todo-marker { color: var(--dimmed); }
+
 .task-cadence {
   font-family: var(--mono);
 }
@@ -2708,4 +2784,152 @@ button:disabled {
 .terminal-btn-interrupt:disabled {
   color: var(--dimmed);
   cursor: not-allowed;
+}
+
+/* --- Row 3: todo-list (v2.0.36) --------------------------------------- *
+ * A <details>/<summary> row sitting below the runners row. Collapsed by
+ * default, showing only the backend-built ``progress_line`` (e.g.
+ * "[3/5] Implementing Y"). Expanded, it renders a tight ordered list
+ * of todos with status markers (☑ done · ▤ in progress · ☐ pending).
+ * The native disclosure triangle is suppressed in favour of a CSS
+ * ::before caret that flips ▸ → ▾ on [open]. */
+.hud-row-todo {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+  font-size: 11px;
+  color: var(--dimmed);
+  /* Override .hud-row min-height so the summary row sits flush with the
+   * runners row above. The min-height is applied to the summary itself. */
+  min-height: 0;
+}
+
+.hud-row-todo.hidden { display: none; }
+
+.hud-todo-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 18px;
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+  color: var(--dimmed);
+}
+
+.hud-todo-summary::-webkit-details-marker {
+  display: none;
+}
+
+.hud-todo-caret {
+  display: inline-block;
+  width: 1em;
+  color: var(--dimmed);
+  font-family: var(--mono);
+  transition: color 0.15s;
+}
+
+.hud-todo-caret::before {
+  content: '▸';
+}
+
+.hud-todo-details[open] .hud-todo-caret::before {
+  content: '▾';
+}
+
+.hud-todo-details[open] .hud-todo-caret {
+  color: var(--yellow);
+}
+
+.hud-todo-line {
+  flex: 1;
+  color: var(--text2);
+  font-family: var(--mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Collapsed todo line — only the ``[i/N]`` PREFIX carries the yellow
+ * accent; the activeForm body stays default color + bold, so the row
+ * reads as a calm "what's on" line with a single colored counter. */
+.hud-todo-line-prefix {
+  color: var(--text2);
+}
+.hud-todo-line-prefix-active {
+  color: var(--yellow);
+  font-weight: 600;
+}
+.hud-todo-line-prefix-done {
+  color: var(--dimmed);
+}
+.hud-todo-line-body-active {
+  font-weight: 600;
+}
+
+/* All items done → strikethrough + dim on the full line (prefix +
+ * body), so the row reads "closed" at a glance. */
+.hud-todo-line-done {
+  color: var(--dimmed);
+  text-decoration: line-through;
+  opacity: 0.65;
+}
+
+.hud-todo-list {
+  list-style: none;
+  padding-left: 1rem;
+  margin: 0.25rem 0 0.4rem 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.hud-todo-item {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.hud-todo-marker {
+  display: inline-block;
+  min-width: 1.2em;
+  text-align: center;
+  color: var(--dimmed);
+  flex-shrink: 0;
+}
+
+.hud-todo-text {
+  color: var(--text2);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Completed items — same ▤ glyph as in_progress, but dim + strikethrough
+ * (no yellow accent) so styling distinguishes the two identical markers. */
+.hud-todo-item-done .hud-todo-marker {
+  color: var(--dimmed);
+}
+.hud-todo-item-done .hud-todo-text {
+  color: var(--dimmed);
+  text-decoration: line-through;
+  opacity: 0.65;
+}
+
+.hud-todo-item-in-progress .hud-todo-marker {
+  color: var(--yellow);
+}
+.hud-todo-item-in-progress .hud-todo-text {
+  color: var(--yellow);
+  font-weight: 600;
+}
+
+.hud-todo-item-pending .hud-todo-marker {
+  color: var(--dimmed);
+}
+.hud-todo-item-pending .hud-todo-text {
+  color: var(--text2);
 }

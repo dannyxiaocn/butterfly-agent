@@ -1,0 +1,23 @@
+{
+  "name": "todo_list",
+  "description": "Update the session's todo list. To be used proactively and often to track progress and pending tasks for non-trivial multi-step work.\n\nWhole-list replacement — every call must send the COMPLETE new list; the old list is discarded. Only one item should be `in_progress` at a time; mark items `completed` as soon as they're done. Always provide both `content` (imperative, e.g. \"Run tests\") and `activeForm` (present-continuous, e.g. \"Running tests\") for every item.\n\nAfter you call this the runtime will periodically (every ~10 LLM calls by default) re-inject the full list back into your context as a system reminder so you don't lose track. The list is surfaced on the HUD too.\n\nSkip this tool for trivial one-step tasks, purely informational replies, or when you already have a concise mental model of the remaining work.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "todos": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "content": {"type": "string", "description": "Imperative form, e.g. 'Run tests'"},
+            "status": {"type": "string", "enum": ["pending", "in_progress", "completed"]},
+            "activeForm": {"type": "string", "description": "Present-continuous form, e.g. 'Running tests'"}
+          },
+          "required": ["content", "status", "activeForm"]
+        },
+        "description": "The full new todo list. This REPLACES the previous list entirely — send all items, not a diff."
+      }
+    },
+    "required": ["todos"]
+  }
+}

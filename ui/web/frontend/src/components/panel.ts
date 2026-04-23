@@ -1,7 +1,7 @@
 import { store } from '../store';
 import { api } from '../api';
 import { attachSession } from '../main';
-import type { ModelsCatalog, Params, PanelEntry, PanelEntryDetail, PanelEntryStatus, ProviderCatalogEntry, TaskCard } from '../types';
+import type { ModelsCatalog, Params, PanelEntry, PanelEntryDetail, PanelEntryStatus, ProviderCatalogEntry, TaskCard, TodoListSnapshot } from '../types';
 import { formatInterval, formatRelative, renderMarkdown } from '../markdown';
 import { renderTaskEditor } from './taskEditor';
 import { highlightShell } from '../shellHighlight';
@@ -128,20 +128,119 @@ export function createPanel(): HTMLElement {
     if (editingTask !== null) return ''; // replaced by editor below
 
     const cards = store.taskCards;
+    // v2.0.37 — standalone todo list pins at the top of the tab when it
+    // exists. Independent of the task-card list; the agent interacts
+    // with it through the ``todo_list`` tool only.
+    const pinned = store.todoList
+      ? `<div class="task-todo-pinned">${renderTodoListPinned(store.todoList)}</div>`
+      : '';
     if (!cards.length) {
       return `
-        <div class="tasks-empty">No task cards yet.</div>
+        ${pinned}
+        ${pinned ? '' : `<div class="tasks-empty">No task cards yet.</div>`}
         <button class="btn-sm btn-primary" id="btn-new-task">+ New Task</button>
       `;
     }
 
     const cardsHtml = cards.map(card => renderTaskCard(card)).join('');
     return `
+      ${pinned}
       <div class="task-cards">${cardsHtml}</div>
       <div class="tasks-footer">
         <button class="btn-sm btn-primary" id="btn-new-task">+ New Task</button>
         <button class="btn-sm" id="btn-refresh-tasks">↻ Refresh</button>
       </div>
+    `;
+  }
+
+  // Pinned header for the standalone todo list. Visually consistent with
+  // task cards (same <details> chrome + summary snippets) but minus the
+  // status badge and script — the todo list is not status-driven and has
+  // no bash script. Expanded body shows description + progress +
+  // comments (same three sections regular cards have), plus the full
+  // ordered items list with ☑/▤/☐ markers mirroring the HUD.
+  function renderTodoListPinned(todo: TodoListSnapshot): string {
+    const open = expandedTasks.has('__todo_list__') ? ' open' : '';
+    const progressSnippetHtml = todo.progress_line
+      ? (() => {
+          const m = todo.progress_line.match(/^(\[(\d+)\/(\d+)\])\s*(.*)$/);
+          if (!m) return escHtml(todo.progress_line);
+          const prefix = m[1];
+          const body = m[4];
+          if (todo.all_done) {
+            return `<span class="task-summary-snippet-todo-done">${escHtml(todo.progress_line)}</span>`;
+          }
+          const bodyHtml = body
+            ? ` <span class="task-summary-snippet-todo-body">${escHtml(body)}</span>`
+            : '';
+          return `<span class="task-summary-snippet-todo-prefix">${escHtml(prefix)}</span>${bodyHtml}`;
+        })()
+      : '';
+    const commentsSnippet = latestLine(todo.comments);
+    const progressSummary = progressSnippetHtml
+      ? `<div class="task-summary-block">
+           <div class="task-summary-label">progress</div>
+           <div class="task-summary-snippet">${progressSnippetHtml}</div>
+         </div>`
+      : '';
+    const commentsSummary = commentsSnippet
+      ? `<div class="task-summary-block">
+           <div class="task-summary-label">comment</div>
+           <div class="task-summary-snippet">${escHtml(commentsSnippet)}</div>
+         </div>`
+      : '';
+    const summarySnippets = progressSummary || commentsSummary
+      ? `<div class="task-card-summary-snippets">${progressSummary}${commentsSummary}</div>`
+      : '';
+    // Full items list — same marker scheme as the HUD row (▤ for both
+    // completed and in-progress, differentiated by colour + weight).
+    const itemsHtml = todo.items.map((it, i) => {
+      const cls = it.status === 'completed'
+        ? 'task-todo-item task-todo-item-done'
+        : it.status === 'in_progress'
+          ? 'task-todo-item task-todo-item-in-progress'
+          : 'task-todo-item task-todo-item-pending';
+      const marker = it.status === 'completed' || it.status === 'in_progress' ? '▤' : '☐';
+      const text = it.status === 'in_progress' ? (it.activeForm || it.content) : it.content;
+      return `<li class="${cls}"><span class="task-todo-marker">${marker}</span><span class="task-todo-index">${i + 1}.</span><span class="task-todo-text">${escHtml(text)}</span></li>`;
+    }).join('');
+    const itemsBlock = todo.items.length
+      ? `<div class="task-card-section">
+           <div class="task-card-section-label">items</div>
+           <ol class="task-todo-items">${itemsHtml}</ol>
+         </div>`
+      : '';
+    const progressBody = todo.progress && todo.progress.trim()
+      ? `<div class="task-card-section-body">${escHtml(todo.progress)}</div>`
+      : `<div class="task-card-section-body task-card-empty">—</div>`;
+    const progressBlock = `<div class="task-card-section">
+         <div class="task-card-section-label">progress</div>
+         ${progressBody}
+       </div>`;
+    const commentsBody = todo.comments && todo.comments.trim()
+      ? `<div class="task-card-section-body">${escHtml(todo.comments)}</div>`
+      : `<div class="task-card-section-body task-card-empty">—</div>`;
+    const commentsBlock = `<div class="task-card-section">
+         <div class="task-card-section-label">comments</div>
+         ${commentsBody}
+       </div>`;
+    return `
+      <details class="task-card task-card-todo-list" data-name="__todo_list__"${open}>
+        <summary class="task-card-summary">
+          <div class="task-card-summary-top">
+            <span class="task-card-summary-main">
+              <span class="task-name">todo list</span>
+              <span class="hb-pill task-todo-pill">${todo.total} items</span>
+            </span>
+          </div>
+          ${summarySnippets}
+        </summary>
+        <div class="task-card-body">
+          ${itemsBlock}
+          ${progressBlock}
+          ${commentsBlock}
+        </div>
+      </details>
     `;
   }
 
@@ -1221,6 +1320,11 @@ export function createPanel(): HTMLElement {
   // ================= STORE WIRING =================
 
   store.on('tasks', () => {
+    if (activeTab === 'tasks' && editingTask === null) render();
+  });
+  // v2.0.37 — pinned todo list header updates independently of task cards
+  // so a todo_list write doesn't churn the task card list and vice-versa.
+  store.on('todoList', () => {
     if (activeTab === 'tasks' && editingTask === null) render();
   });
   store.on('panel', () => {
