@@ -429,6 +429,77 @@ class ReminderEnqueueTest(unittest.TestCase):
             self.assertEqual(enqueued, [])
 
 
+class ReminderInjectionTest(unittest.IsolatedAsyncioTestCase):
+    """Exercise ``_enqueue_todo_list_reminder`` end-to-end: a ChatItem with
+    the correct source/mode/content is placed on the session's wait
+    queue, and a ``todo_list_changed`` event is written. Complements
+    ``ReminderEnqueueTest`` (which stubs out this method) by pinning the
+    wiring between the tick and the dispatcher queue.
+    """
+
+    def _make_session(self, tmp: Path):
+        from butterfly.session_engine.session import Session
+        base = tmp / "sessions"
+        system = tmp / "_sessions"
+        sid = "s"
+        (base / sid / "core").mkdir(parents=True)
+        (system / sid).mkdir(parents=True)
+        sess = object.__new__(Session)
+        sess._base_dir = base
+        sess._session_id = sid
+        sess._system_base = system
+        sess._ipc = None
+        sess._inbox_lock = None
+        sess._interrupt_queue = []
+        sess._wait_queue = []
+        sess._scheduled_task_names = set()
+        sess._run_task = None
+        # Stub the consumer so the queued reminder sits on the queue for
+        # assertion instead of being dispatched into missing agent state.
+        async def _noop_consumer() -> None:
+            return None
+        sess._consumer_loop = _noop_consumer
+        sess._consumer_task = None
+        return sess
+
+    async def test_reminder_enqueues_chat_item_with_correct_shape(self) -> None:
+        from butterfly.session_engine.pending_inputs import ChatItem
+
+        with TemporaryDirectory() as td:
+            sess = self._make_session(Path(td))
+            todos = [
+                {"content": "Run tests", "status": "in_progress", "activeForm": "Running tests"},
+                {"content": "Review PR", "status": "pending", "activeForm": "Reviewing PR"},
+            ]
+            sess._enqueue_todo_list_reminder(todos)
+            # ``_enqueue`` was scheduled via ``loop.create_task``; yield so it runs.
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            self.assertEqual(len(sess._wait_queue), 1)
+            item = sess._wait_queue[0]
+            self.assertIsInstance(item, ChatItem)
+            self.assertEqual(item.mode, "wait")
+            self.assertEqual(item.source, "todo_reminder")
+            self.assertEqual(item.caller_type, "system")
+            self.assertIn("<system-reminder>", item.content)
+            self.assertIn("1. [in_progress] Run tests", item.content)
+            self.assertIn("2. [pending] Review PR", item.content)
+            # Event was written to events.jsonl so the frontend sees the reset.
+            events_path = sess._events_path
+            self.assertTrue(events_path.exists())
+            lines = [json.loads(l) for l in events_path.read_text().splitlines() if l.strip()]
+            injections = [e for e in lines if e.get("type") == "todo_list_changed"
+                          and e.get("change") == "reminder_injected"]
+            self.assertEqual(len(injections), 1)
+
+    async def test_reminder_empty_todos_is_noop(self) -> None:
+        with TemporaryDirectory() as td:
+            sess = self._make_session(Path(td))
+            sess._enqueue_todo_list_reminder([])
+            await asyncio.sleep(0)
+            self.assertEqual(sess._wait_queue, [])
+
+
 # ── v2.0.36 clobber-fix regression (kept, still applies to real task cards) ──
 
 class PersistCardTransitionTest(unittest.TestCase):
