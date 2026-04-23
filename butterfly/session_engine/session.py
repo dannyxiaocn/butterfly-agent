@@ -576,6 +576,8 @@ class Session:
         self,
         name: str,
         mutate,
+        *,
+        emit_change: str | None = None,
     ) -> "TaskCard | None":
         """Atomically apply a status-only mutation to a task card.
 
@@ -591,6 +593,15 @@ class Session:
         call one of ``mark_working`` / ``mark_pending`` / ``mark_finished``
         / ``mark_terminal`` / ``mark_checked`` / ``mark_paused``. Any
         other mutation risks re-introducing the clobber.
+
+        When ``emit_change`` is non-None, a ``task_card_changed`` event
+        is appended after the save so the frontend can refresh the Tasks
+        tab on-event — matches the live-refresh path agent-driven task
+        CRUD tools already take via their ``on_change`` callback. The
+        tick lifecycle (``mark_working`` / ``mark_finished`` /
+        ``mark_pending``) is otherwise invisible to the UI, so the
+        status badge stays stuck on the pre-tick value until the next
+        poll-less refresh.
         """
         try:
             disk = load_card(self.tasks_dir, name)
@@ -607,6 +618,15 @@ class Session:
             save_card(self.tasks_dir, disk)
         except Exception:  # noqa: BLE001 — disk hiccup
             return None
+        if emit_change:
+            try:
+                self._append_event({
+                    "type": "task_card_changed",
+                    "card": name,
+                    "change": emit_change,
+                })
+            except Exception:  # noqa: BLE001 — best-effort refresh hint
+                pass
         return disk
 
     async def _poll_card_script(self, card: TaskCard) -> str | None:
@@ -971,6 +991,7 @@ class Session:
                         self._persist_card_transition(
                             item.card.name,
                             lambda c: c.mark_pending(),
+                            emit_change="pending",
                         )
                 except Exception:
                     pass
@@ -1147,7 +1168,9 @@ class Session:
         # prior tick's agent may have written this card via todo_list or
         # task_update — saving the stale in-memory copy would revert
         # those fields. The helper touches status / last_started_at only.
-        fresh = self._persist_card_transition(card.name, lambda c: c.mark_working())
+        fresh = self._persist_card_transition(
+            card.name, lambda c: c.mark_working(), emit_change="started",
+        )
         if fresh is not None:
             card = fresh
         self._set_model_status("running", triggered_by)
@@ -1233,7 +1256,9 @@ class Session:
             # v2.0.36: re-read-then-mutate (see _persist_card_transition).
             # The agent may have written the card inside the (now errored)
             # turn; blindly saving our stale copy would lose those writes.
-            self._persist_card_transition(card.name, lambda c: c.mark_pending())
+            self._persist_card_transition(
+                card.name, lambda c: c.mark_pending(), emit_change="pending",
+            )
             self._set_model_status("idle", triggered_by)
             on_chunk.flush()
             await self._fire_external_hook("agent_loop_end", {
@@ -1276,7 +1301,9 @@ class Session:
                 # No save needed — the disk copy IS the canonical state.
                 self._prune_queue_for_task(card.name)
             else:
-                fresh = self._persist_card_transition(card.name, lambda c: c.mark_finished())
+                fresh = self._persist_card_transition(
+                    card.name, lambda c: c.mark_finished(), emit_change="finished",
+                )
                 if fresh is not None:
                     card = fresh
 

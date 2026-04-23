@@ -563,6 +563,43 @@ class PersistCardTransitionTest(unittest.TestCase):
                 raise RuntimeError("boom")
             self.assertIsNone(sess._persist_card_transition("x", bad))
 
+    def test_persist_transition_emits_task_card_changed(self) -> None:
+        """``emit_change`` surfaces a ``task_card_changed`` event so the
+        frontend refreshes the Tasks tab on status transitions driven
+        by ``_do_tick`` (``mark_working`` / ``mark_finished`` /
+        ``mark_pending``). Without it the UI stayed stuck on the
+        pre-tick status until the next manual refresh.
+        """
+        from butterfly.session_engine.task_cards import TaskCard, save_card
+
+        with TemporaryDirectory() as td:
+            sess = self._make_session(Path(td))
+            save_card(sess.tasks_dir, TaskCard(name="x", check_interval=2.0))
+            emitted: list[dict] = []
+            sess._append_event = emitted.append  # type: ignore[method-assign]
+            sess._persist_card_transition(
+                "x", lambda c: c.mark_working(), emit_change="started",
+            )
+            self.assertEqual(
+                emitted,
+                [{"type": "task_card_changed", "card": "x", "change": "started"}],
+            )
+
+    def test_persist_transition_no_emit_when_change_omitted(self) -> None:
+        """Default ``emit_change=None`` stays silent — preserves the
+        ``_poll_card_script`` ``mark_checked`` call-site which has its
+        own ``task_check`` event and doesn't want to double-fire.
+        """
+        from butterfly.session_engine.task_cards import TaskCard, save_card
+
+        with TemporaryDirectory() as td:
+            sess = self._make_session(Path(td))
+            save_card(sess.tasks_dir, TaskCard(name="x", check_interval=2.0))
+            emitted: list[dict] = []
+            sess._append_event = emitted.append  # type: ignore[method-assign]
+            sess._persist_card_transition("x", lambda c: c.mark_checked())
+            self.assertEqual(emitted, [])
+
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

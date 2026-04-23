@@ -638,6 +638,14 @@ def _runtime_event_to_display(event: dict) -> list[dict]:
         "task_card_changed",
         "task_check",
         "task_check_error",
+        # v2.0.37: standalone todo list — emitted by the todo_list tool
+        # and by the runtime reminder-injection path. MUST be in the
+        # pass-through set: ``_runtime_event_to_display`` drops any
+        # event not listed here, so without this line the SSE stream
+        # silently swallows every emission and the pinned Tasks header
+        # + HUD todo row stay stuck on the pre-change snapshot until
+        # the user refreshes the page.
+        "todo_list_changed",
         # v2.0.30: web Terminal panel live stream. Without this pass-through
         # the chunks are logged to terminal/log.jsonl but never reach the
         # frontend over SSE — users only see output after a full page

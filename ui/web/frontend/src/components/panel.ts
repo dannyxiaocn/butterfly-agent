@@ -43,6 +43,13 @@ export function createPanel(): HTMLElement {
   // shut a frame after any live update. Track expansion explicitly so
   // render() can re-assert the `open` attribute.
   const expandedTasks = new Set<string>();
+  // Pinned todo list has INVERTED polarity vs the regular task cards —
+  // defaults to expanded (the agent's working list is what the user
+  // most wants to see), and only collapses when the user explicitly
+  // closes it. ``expandedTasks`` can't model this (it defaults to
+  // not-present = collapsed), so track collapse state in its own
+  // per-panel flag.
+  let todoListCollapsed = false;
   const panelDetails = new Map<string, PanelEntryDetail>(); // tid → latest detail fetch
   // Sub-agent panel cards expand to show the child session's last 5 events.
   // Cached so repeated open/close doesn't refetch.
@@ -153,48 +160,13 @@ export function createPanel(): HTMLElement {
     `;
   }
 
-  // Pinned header for the standalone todo list. Visually consistent with
-  // task cards (same <details> chrome + summary snippets) but minus the
-  // status badge and script — the todo list is not status-driven and has
-  // no bash script. Expanded body shows description + progress +
-  // comments (same three sections regular cards have), plus the full
-  // ordered items list with ☑/▤/☐ markers mirroring the HUD.
+  // Pinned header for the standalone todo list. Body shows only the
+  // ordered item list with ☑/▤/☐ markers mirroring the HUD row — the
+  // list replaces the "progress" + "comments" sections that regular
+  // task cards carry (the list IS the progress).
   function renderTodoListPinned(todo: TodoListSnapshot): string {
-    const open = expandedTasks.has('__todo_list__') ? ' open' : '';
-    const progressSnippetHtml = todo.progress_line
-      ? (() => {
-          const m = todo.progress_line.match(/^(\[(\d+)\/(\d+)\])\s*(.*)$/);
-          if (!m) return escHtml(todo.progress_line);
-          const prefix = m[1];
-          const body = m[4];
-          if (todo.all_done) {
-            return `<span class="task-summary-snippet-todo-done">${escHtml(todo.progress_line)}</span>`;
-          }
-          const bodyHtml = body
-            ? ` <span class="task-summary-snippet-todo-body">${escHtml(body)}</span>`
-            : '';
-          return `<span class="task-summary-snippet-todo-prefix">${escHtml(prefix)}</span>${bodyHtml}`;
-        })()
-      : '';
-    const commentsSnippet = latestLine(todo.comments);
-    const progressSummary = progressSnippetHtml
-      ? `<div class="task-summary-block">
-           <div class="task-summary-label">progress</div>
-           <div class="task-summary-snippet">${progressSnippetHtml}</div>
-         </div>`
-      : '';
-    const commentsSummary = commentsSnippet
-      ? `<div class="task-summary-block">
-           <div class="task-summary-label">comment</div>
-           <div class="task-summary-snippet">${escHtml(commentsSnippet)}</div>
-         </div>`
-      : '';
-    const summarySnippets = progressSummary || commentsSummary
-      ? `<div class="task-card-summary-snippets">${progressSummary}${commentsSummary}</div>`
-      : '';
-    // Full items list — same marker scheme as the HUD row (▤ for both
-    // completed and in-progress, differentiated by colour + weight).
-    const itemsHtml = todo.items.map((it, i) => {
+    const open = todoListCollapsed ? '' : ' open';
+    const itemsHtml = todo.items.map(it => {
       const cls = it.status === 'completed'
         ? 'task-todo-item task-todo-item-done'
         : it.status === 'in_progress'
@@ -202,28 +174,11 @@ export function createPanel(): HTMLElement {
           : 'task-todo-item task-todo-item-pending';
       const marker = it.status === 'completed' || it.status === 'in_progress' ? '▤' : '☐';
       const text = it.status === 'in_progress' ? (it.activeForm || it.content) : it.content;
-      return `<li class="${cls}"><span class="task-todo-marker">${marker}</span><span class="task-todo-index">${i + 1}.</span><span class="task-todo-text">${escHtml(text)}</span></li>`;
+      return `<li class="${cls}"><span class="task-todo-marker">${marker}</span><span class="task-todo-text">${escHtml(text)}</span></li>`;
     }).join('');
     const itemsBlock = todo.items.length
-      ? `<div class="task-card-section">
-           <div class="task-card-section-label">items</div>
-           <ol class="task-todo-items">${itemsHtml}</ol>
-         </div>`
-      : '';
-    const progressBody = todo.progress && todo.progress.trim()
-      ? `<div class="task-card-section-body">${escHtml(todo.progress)}</div>`
-      : `<div class="task-card-section-body task-card-empty">—</div>`;
-    const progressBlock = `<div class="task-card-section">
-         <div class="task-card-section-label">progress</div>
-         ${progressBody}
-       </div>`;
-    const commentsBody = todo.comments && todo.comments.trim()
-      ? `<div class="task-card-section-body">${escHtml(todo.comments)}</div>`
-      : `<div class="task-card-section-body task-card-empty">—</div>`;
-    const commentsBlock = `<div class="task-card-section">
-         <div class="task-card-section-label">comments</div>
-         ${commentsBody}
-       </div>`;
+      ? `<ol class="task-todo-items">${itemsHtml}</ol>`
+      : '<div class="task-card-empty">—</div>';
     return `
       <details class="task-card task-card-todo-list" data-name="__todo_list__"${open}>
         <summary class="task-card-summary">
@@ -233,12 +188,9 @@ export function createPanel(): HTMLElement {
               <span class="hb-pill task-todo-pill">${todo.total} items</span>
             </span>
           </div>
-          ${summarySnippets}
         </summary>
         <div class="task-card-body">
           ${itemsBlock}
-          ${progressBlock}
-          ${commentsBlock}
         </div>
       </details>
     `;
@@ -377,10 +329,17 @@ export function createPanel(): HTMLElement {
 
     // Keep expandedTasks in sync with each card's <details>.open state so
     // re-renders triggered by live SSE updates don't collapse the card.
+    // The pinned todo list has inverted polarity — expanded by default,
+    // user's explicit collapse persists — so its toggle writes to
+    // ``todoListCollapsed`` instead of ``expandedTasks``.
     el.querySelectorAll<HTMLDetailsElement>('details.task-card').forEach(d => {
       d.addEventListener('toggle', () => {
         const name = d.dataset.name;
         if (!name) return;
+        if (name === '__todo_list__') {
+          todoListCollapsed = !d.open;
+          return;
+        }
         if (d.open) expandedTasks.add(name);
         else expandedTasks.delete(name);
       });
@@ -1354,6 +1313,7 @@ export function createPanel(): HTMLElement {
     configMode = 'view';
     expandedPanel.clear();
     expandedTasks.clear();
+    todoListCollapsed = false;
     panelDetails.clear();
     store.panelEntries = [];
     render();
