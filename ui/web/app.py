@@ -37,6 +37,7 @@ from butterfly.service import (
     get_prompt_md as service_get_prompt_md,
     get_session as service_get_session,
     get_tasks as service_get_tasks,
+    get_todo_list as service_get_todo_list,
     interrupt_session as service_interrupt_session,
     is_meta_session as service_is_meta_session,
     list_agents as service_list_agents,
@@ -659,6 +660,14 @@ def create_app(
             return service_get_hud(session_id, sessions_dir, system_sessions_dir)
         except (FileNotFoundError, ValueError) as exc:
             _raise_session_error(exc, session_id)
+
+    @app.get("/api/sessions/{session_id}/todo_list")
+    async def get_session_todo_list(session_id: str):
+        try:
+            payload = service_get_todo_list(session_id, sessions_dir)
+        except ValueError as exc:
+            _raise_session_error(exc, session_id)
+        return {"todo_list": payload}
 
     @app.get("/api/weixin/status")
     async def weixin_status():

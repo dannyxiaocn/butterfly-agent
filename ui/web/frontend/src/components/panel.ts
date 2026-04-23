@@ -1,7 +1,7 @@
 import { store } from '../store';
 import { api } from '../api';
 import { attachSession } from '../main';
-import type { ModelsCatalog, Params, PanelEntry, PanelEntryDetail, PanelEntryStatus, ProviderCatalogEntry, TaskCard } from '../types';
+import type { ModelsCatalog, Params, PanelEntry, PanelEntryDetail, PanelEntryStatus, ProviderCatalogEntry, TaskCard, TodoListSnapshot } from '../types';
 import { formatInterval, formatRelative, renderMarkdown } from '../markdown';
 import { renderTaskEditor } from './taskEditor';
 import { highlightShell } from '../shellHighlight';
@@ -43,6 +43,13 @@ export function createPanel(): HTMLElement {
   // shut a frame after any live update. Track expansion explicitly so
   // render() can re-assert the `open` attribute.
   const expandedTasks = new Set<string>();
+  // Pinned todo list has INVERTED polarity vs the regular task cards —
+  // defaults to expanded (the agent's working list is what the user
+  // most wants to see), and only collapses when the user explicitly
+  // closes it. ``expandedTasks`` can't model this (it defaults to
+  // not-present = collapsed), so track collapse state in its own
+  // per-panel flag.
+  let todoListCollapsed = false;
   const panelDetails = new Map<string, PanelEntryDetail>(); // tid → latest detail fetch
   // Sub-agent panel cards expand to show the child session's last 5 events.
   // Cached so repeated open/close doesn't refetch.
@@ -128,20 +135,64 @@ export function createPanel(): HTMLElement {
     if (editingTask !== null) return ''; // replaced by editor below
 
     const cards = store.taskCards;
+    // v2.0.37 — standalone todo list pins at the top of the tab when it
+    // exists. Independent of the task-card list; the agent interacts
+    // with it through the ``todo_list`` tool only.
+    const pinned = store.todoList
+      ? `<div class="task-todo-pinned">${renderTodoListPinned(store.todoList)}</div>`
+      : '';
     if (!cards.length) {
       return `
-        <div class="tasks-empty">No task cards yet.</div>
+        ${pinned}
+        ${pinned ? '' : `<div class="tasks-empty">No task cards yet.</div>`}
         <button class="btn-sm btn-primary" id="btn-new-task">+ New Task</button>
       `;
     }
 
     const cardsHtml = cards.map(card => renderTaskCard(card)).join('');
     return `
+      ${pinned}
       <div class="task-cards">${cardsHtml}</div>
       <div class="tasks-footer">
         <button class="btn-sm btn-primary" id="btn-new-task">+ New Task</button>
         <button class="btn-sm" id="btn-refresh-tasks">↻ Refresh</button>
       </div>
+    `;
+  }
+
+  // Pinned header for the standalone todo list. Body shows only the
+  // ordered item list with ☑/▤/☐ markers mirroring the HUD row — the
+  // list replaces the "progress" + "comments" sections that regular
+  // task cards carry (the list IS the progress).
+  function renderTodoListPinned(todo: TodoListSnapshot): string {
+    const open = todoListCollapsed ? '' : ' open';
+    const itemsHtml = todo.items.map(it => {
+      const cls = it.status === 'completed'
+        ? 'task-todo-item task-todo-item-done'
+        : it.status === 'in_progress'
+          ? 'task-todo-item task-todo-item-in-progress'
+          : 'task-todo-item task-todo-item-pending';
+      const marker = it.status === 'completed' || it.status === 'in_progress' ? '▤' : '☐';
+      const text = it.status === 'in_progress' ? (it.activeForm || it.content) : it.content;
+      return `<li class="${cls}"><span class="task-todo-marker">${marker}</span><span class="task-todo-text">${escHtml(text)}</span></li>`;
+    }).join('');
+    const itemsBlock = todo.items.length
+      ? `<ol class="task-todo-items">${itemsHtml}</ol>`
+      : '<div class="task-card-empty">—</div>';
+    return `
+      <details class="task-card task-card-todo-list" data-name="__todo_list__"${open}>
+        <summary class="task-card-summary">
+          <div class="task-card-summary-top">
+            <span class="task-card-summary-main">
+              <span class="task-name">todo list</span>
+              <span class="hb-pill task-todo-pill">${todo.total} items</span>
+            </span>
+          </div>
+        </summary>
+        <div class="task-card-body">
+          ${itemsBlock}
+        </div>
+      </details>
     `;
   }
 
@@ -278,10 +329,17 @@ export function createPanel(): HTMLElement {
 
     // Keep expandedTasks in sync with each card's <details>.open state so
     // re-renders triggered by live SSE updates don't collapse the card.
+    // The pinned todo list has inverted polarity — expanded by default,
+    // user's explicit collapse persists — so its toggle writes to
+    // ``todoListCollapsed`` instead of ``expandedTasks``.
     el.querySelectorAll<HTMLDetailsElement>('details.task-card').forEach(d => {
       d.addEventListener('toggle', () => {
         const name = d.dataset.name;
         if (!name) return;
+        if (name === '__todo_list__') {
+          todoListCollapsed = !d.open;
+          return;
+        }
         if (d.open) expandedTasks.add(name);
         else expandedTasks.delete(name);
       });
@@ -1223,6 +1281,11 @@ export function createPanel(): HTMLElement {
   store.on('tasks', () => {
     if (activeTab === 'tasks' && editingTask === null) render();
   });
+  // v2.0.37 — pinned todo list header updates independently of task cards
+  // so a todo_list write doesn't churn the task card list and vice-versa.
+  store.on('todoList', () => {
+    if (activeTab === 'tasks' && editingTask === null) render();
+  });
   store.on('panel', () => {
     if (activeTab === 'panel') render();
   });
@@ -1250,6 +1313,7 @@ export function createPanel(): HTMLElement {
     configMode = 'view';
     expandedPanel.clear();
     expandedTasks.clear();
+    todoListCollapsed = false;
     panelDetails.clear();
     store.panelEntries = [];
     render();

@@ -18,6 +18,7 @@ task_finish
 task_pause
 task_resume
 task_list
+todo_list
 subagent_new
 subagent_list
 subagent_resume

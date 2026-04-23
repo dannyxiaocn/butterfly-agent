@@ -7,6 +7,13 @@ from pathlib import Path
 
 from butterfly.llm_engine.model_catalog import get_max_context_tokens
 from butterfly.session_engine.session_config import read_config
+from butterfly.session_engine.todo_list import (
+    format_todo_progress,
+    is_todo_all_done,
+    load_todo_list,
+    todo_active_index,
+    todo_pending_count,
+)
 from .sessions_service import _validate_session_id
 
 
@@ -117,6 +124,34 @@ def get_hud(session_id: str, sessions_dir: Path, system_sessions_dir: Path) -> d
     # model name as-is. Null when thinking is off or value is unknown.
     raw_effort = params.get('thinking_effort')
     thinking_effort = raw_effort if raw_effort in ('high', 'medium', 'low') else None
+    # v2.0.x: summarise the singleton ``todo-list`` card (if any) so the
+    # HUD can render a third row showing ``▸ [i/N] activeForm``. Wrapped
+    # in a broad try/except so a malformed card JSON / IO hiccup never
+    # 500s the HUD endpoint.
+    todo_payload: dict | None = None
+    try:
+        core_dir = session_dir / 'core'
+        todo = load_todo_list(core_dir) if core_dir.is_dir() else None
+        if todo is not None and todo.todos:
+            todo_payload = {
+                'progress_line': format_todo_progress(todo.todos),
+                'active_index': todo_active_index(todo.todos),
+                'total': len(todo.todos),
+                'pending_count': todo_pending_count(todo.todos),
+                'all_done': is_todo_all_done(todo.todos),
+                'iters_since_seen': todo.iters_since_seen,
+                'threshold': todo.reminder_threshold,
+                'items': [
+                    {
+                        'content': t['content'],
+                        'status': t['status'],
+                        'activeForm': t['activeForm'],
+                    }
+                    for t in todo.todos
+                ],
+            }
+    except Exception:
+        todo_payload = None
     return {
         'cwd': git_root or str(project_root),
         'context_bytes': ipc.context_size(),  # kept for legacy fallback in frontend
@@ -130,4 +165,5 @@ def get_hud(session_id: str, sessions_dir: Path, system_sessions_dir: Path) -> d
         'usage': latest_usage,
         'sub_agents_running': sub_agents_running,
         'bash_running': bash_running,
+        'todo': todo_payload,
     }

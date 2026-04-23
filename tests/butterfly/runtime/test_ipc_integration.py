@@ -134,6 +134,16 @@ def test_runtime_event_to_display_passes_through():
     assert _runtime_event_to_display(loop_start) == [loop_start]
     assert _runtime_event_to_display(loop_end) == [loop_end]
 
+    # v2.0.37 regression: on-event refresh signals must pass through or
+    # the SSE stream silently drops them and the frontend never notices
+    # until the user hits reload. ``task_card_changed`` covers the
+    # Tasks tab; ``todo_list_changed`` covers the pinned todo header +
+    # HUD todo row.
+    task_ev = {"type": "task_card_changed", "card": "x", "change": "started", "ts": "T"}
+    todo_ev = {"type": "todo_list_changed", "change": "updated", "ts": "T"}
+    assert _runtime_event_to_display(task_ev) == [task_ev]
+    assert _runtime_event_to_display(todo_ev) == [todo_ev]
+
 
 @pytest.mark.asyncio
 async def test_session_chat_writes_turn_to_context_and_status_to_events(tmp_path):
@@ -467,6 +477,35 @@ async def test_tool_done_event_caps_huge_result_and_sets_truncation_flag(tmp_pat
     assert tool_done["result_truncated"] is True
     assert len(tool_done["result"]) == 8000
     assert tool_done["result"] == "A" * 8000
+
+
+@pytest.mark.asyncio
+async def test_todo_list_changed_reaches_iter_events(tmp_path):
+    """End-to-end pin: when Session._emit_todo_list_change fires, the
+    ``todo_list_changed`` event must actually reach the SSE consumer
+    through ``BridgeSession.iter_events``. Regression for the v2.0.37
+    bug where the event was correctly appended to events.jsonl but
+    ``_runtime_event_to_display`` silently dropped it (not in the
+    pass-through whitelist), so the frontend only learned about the
+    new list on full page reload.
+    """
+    from butterfly.runtime.bridge import BridgeSession
+
+    agent = Agent(provider=MockProvider([]))
+    session = make_session(tmp_path, agent)
+    session._ipc = FileIPC(session.system_dir)
+
+    # Directly exercise the callback the ToolLoader wires into the
+    # todo_list executor so the test doesn't depend on the rest of the
+    # agent loop.
+    session._append_event({"type": "todo_list_changed", "change": "updated"})
+
+    bridge = BridgeSession(session.system_dir)
+    delivered = [ev for ev, _ctx, _evt in bridge.iter_events(0, 0)]
+    assert any(e.get("type") == "todo_list_changed" for e in delivered), (
+        "todo_list_changed was written to events.jsonl but never surfaced "
+        "through iter_events — _runtime_event_to_display whitelist is broken."
+    )
 
 
 def test_context_event_to_display_suppresses_inline_thinking_for_live_when_streamed(tmp_path):

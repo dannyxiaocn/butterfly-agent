@@ -22,6 +22,7 @@ from .config_service import (
 )
 from .hud_service import get_hud
 from .models_service import get_models_catalog
+from .todo_list_service import get_todo_list
 
 __all__ = [
     "create_session",
@@ -53,4 +54,5 @@ __all__ = [
     "update_prompt_md",
     "get_hud",
     "get_models_catalog",
+    "get_todo_list",
 ]
