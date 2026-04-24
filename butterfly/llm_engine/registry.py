@@ -13,6 +13,11 @@ _REGISTRY: dict[str, tuple[str, str]] = {
     # should pin this key explicitly.
     "kimi-coding-plan-anthropic":  ("butterfly.llm_engine.providers.kimi",             "KimiAnthropicProvider"),
     "codex-oauth":                 ("butterfly.llm_engine.providers.codex",            "CodexProvider"),
+    # DeepSeek: OpenAI-compatible chat completions at api.deepseek.com. V4
+    # family supports thinking mode (``reasoning_effort``), tool calls inside
+    # thinking mode, and prompt cache hit/miss accounting. Key resolution is
+    # strict — ``DEEPSEEK_API_KEY`` is the only env var consulted.
+    "deepseek":                    ("butterfly.llm_engine.providers.deepseek",         "DeepSeekProvider"),
 }
 
 
