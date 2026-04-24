@@ -270,3 +270,63 @@ def test_append_accepts_ts_for_determinism(tmp_path: Path) -> None:
     line = path.read_text(encoding="utf-8").strip()
     d = json.loads(line)
     assert d["ts"] == 1234.5
+
+
+# ── Exhaustive taxonomy (DESIGN.md §3) ───────────────────────────────────────
+#
+# Every key in ``_FOR_LLM_DEFAULTS`` must round-trip through append +
+# read with its taxonomy flag intact. This pin catches the drift failure
+# mode where a new event type is added to the dict but its default isn't
+# consciously set — the test fails with a clear list of offenders instead
+# of each consumer learning about the mismatch at runtime.
+
+
+def test_every_event_type_in_defaults_round_trips(tmp_path: Path) -> None:
+    """For each entry in ``_FOR_LLM_DEFAULTS``, write one event and read
+    it back; type, payload, and for_llm flag must survive verbatim."""
+    from butterfly.runtime.events import _FOR_LLM_DEFAULTS
+
+    # Event payload is deliberately minimal — we're testing the envelope,
+    # not domain schema. A single marker field confirms round-trip.
+    for i, (event_type, expected_for_llm) in enumerate(_FOR_LLM_DEFAULTS.items()):
+        ev = append_event(
+            tmp_path, event_type, {"_probe": i}, ts=1000.0 + i,
+        )
+        assert ev.type == event_type
+        assert ev.for_llm is expected_for_llm
+        assert ev.payload == {"_probe": i}
+
+    all_events = list(read_events(tmp_path))
+    assert len(all_events) == len(_FOR_LLM_DEFAULTS)
+    for ev, (event_type, expected_for_llm) in zip(all_events, _FOR_LLM_DEFAULTS.items()):
+        assert ev.type == event_type
+        assert ev.for_llm is expected_for_llm
+
+
+def test_for_llm_flag_matches_design_taxonomy() -> None:
+    """DESIGN.md §3.3-§3.5 table: user-side + agent-side events are
+    for_llm=True; system-side are False. Enforce that partition rather
+    than hand-picking each type (catches the flip-a-default bug)."""
+    from butterfly.runtime.events import (
+        _FOR_LLM_DEFAULTS,
+        EVENT_AGENT_TEXT,
+        EVENT_AGENT_THINKING,
+        EVENT_AGENT_TOOL_CALL,
+        EVENT_AGENT_TOOL_RESULT,
+        EVENT_USER_INPUT,
+        EVENT_USER_INTERRUPT,
+    )
+    llm_types = {
+        EVENT_USER_INPUT,
+        EVENT_USER_INTERRUPT,
+        EVENT_AGENT_TEXT,
+        EVENT_AGENT_THINKING,
+        EVENT_AGENT_TOOL_CALL,
+        EVENT_AGENT_TOOL_RESULT,
+    }
+    # Every in-list type is True; every other registered type is False.
+    for t, flag in _FOR_LLM_DEFAULTS.items():
+        if t in llm_types:
+            assert flag is True, f"{t!r} should be for_llm=True"
+        else:
+            assert flag is False, f"{t!r} should be for_llm=False"
