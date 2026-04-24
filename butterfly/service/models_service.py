@@ -43,6 +43,12 @@ _PROVIDER_META: list[dict[str, Any]] = [
         "supports_thinking": True,
     },
     {
+        "provider": "kimi",
+        "label": "Moonshot Kimi (public API)",
+        "env": ["MOONSHOT_API_KEY", "KIMI_API_KEY"],
+        "supports_thinking": True,
+    },
+    {
         "provider": "kimi-coding-plan",
         "label": "Moonshot Kimi (for coding)",
         "env": ["KIMI_FOR_CODING_API_KEY"],

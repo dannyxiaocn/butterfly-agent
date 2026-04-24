@@ -6,6 +6,7 @@ from butterfly.llm_engine.providers.kimi import (
     KimiForCodingProvider,
     KimiOpenAIProvider,
 )
+from butterfly.llm_engine.providers.kimi_api import KimiProvider
 
 __all__ = [
     "resolve_provider",
@@ -15,4 +16,5 @@ __all__ = [
     "KimiAnthropicProvider",
     "KimiForCodingProvider",
     "KimiOpenAIProvider",
+    "KimiProvider",
 ]

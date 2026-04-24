@@ -86,6 +86,16 @@ providers:
         exposes_reasoning_tokens: true
         default: true
 
+  kimi:
+    # FOUNDER'S MESSAGE: only expose kimi-k2.6 here. The older kimi-k2.5 /
+    # kimi-k2-thinking / moonshot-v1-* families are considered outdated and
+    # add complexity without benefit — do not re-introduce them.
+    models:
+      - name: kimi-k2.6
+        max_context_tokens: 256000
+        exposes_reasoning_tokens: true
+        default: true
+
   kimi-coding-plan:
     models:
       - name: kimi-for-coding

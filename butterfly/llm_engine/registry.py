@@ -5,8 +5,12 @@ _REGISTRY: dict[str, tuple[str, str]] = {
     "anthropic":                   ("butterfly.llm_engine.providers.anthropic",        "AnthropicProvider"),
     "openai":                      ("butterfly.llm_engine.providers.openai_api",       "OpenAIProvider"),
     "openai-responses":            ("butterfly.llm_engine.providers.openai_responses", "OpenAIResponsesProvider"),
-    # Default Kimi entry — OpenAI-compatible surface; returns cached_tokens +
-    # reasoning_tokens in usage. Matches kimi-cli's default path.
+    # Public Moonshot Kimi API at api.moonshot.ai — billed against a
+    # platform.moonshot.ai key. Distinct from the Kimi For Coding plan
+    # below which uses a different credential and a different gateway.
+    "kimi":                        ("butterfly.llm_engine.providers.kimi_api",         "KimiProvider"),
+    # Default Kimi For Coding entry — OpenAI-compatible surface; returns
+    # cached_tokens + reasoning_tokens in usage. Matches kimi-cli's default path.
     "kimi-coding-plan":            ("butterfly.llm_engine.providers.kimi",             "KimiOpenAIProvider"),
     # Opt-in alias for the Anthropic-compatible surface. Existing sessions or
     # callers that need the old behavior (Anthropic-shape messages + usage)
