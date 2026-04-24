@@ -15,14 +15,10 @@ class UiSurfaceTest(unittest.TestCase):
         self.assertIn("Web", ui.__doc__ or "")
         self.assertIn("CLI", ui.__doc__ or "")
 
-    def test_ui_docs_describe_cli_and_web(self) -> None:
-        text = (DOCS_UI / "impl.md").read_text(encoding="utf-8")
-        self.assertIn("cli/", text)
-        self.assertIn("web/", text)
-
-    def test_ui_subdir_docs_exist(self) -> None:
-        self.assertTrue((DOCS_UI / "cli" / "impl.md").exists())
-        self.assertTrue((DOCS_UI / "web" / "impl.md").exists())
+    def test_ui_subdir_design_docs_exist(self) -> None:
+        # Phase 10 kept design.md per subdir; impl.md/todo.md were purged.
+        self.assertTrue((DOCS_UI / "cli" / "design.md").exists())
+        self.assertTrue((DOCS_UI / "web" / "design.md").exists())
 
 
 if __name__ == "__main__":
