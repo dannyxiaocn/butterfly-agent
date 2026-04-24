@@ -109,3 +109,25 @@ providers:
         max_context_tokens: 250000
         exposes_reasoning_tokens: true
         default: true
+
+  deepseek:
+    # DeepSeek V4 family — 1M-token context, OpenAI-compatible API.
+    # ``deepseek-v4-pro`` is the top-tier thinking model (tool calls inside
+    # reasoning supported); ``deepseek-v4-flash`` is the cost-optimised
+    # variant sharing the same wire contract.
+    #
+    # NOTE — this is from founder's opinion: the legacy ``deepseek-chat``
+    # and ``deepseek-reasoner`` aliases are intentionally NOT listed. They
+    # are obsolete, add complexity (e.g. reasoner-specific scrubbing of
+    # ``reasoning_content`` / tool_use blocks — the reasoner has no tool
+    # support and refuses inbound reasoning), and DeepSeek itself deprecates
+    # them in 2026-07. V4 is the only supported surface here.
+    models:
+      - name: deepseek-v4-pro
+        max_context_tokens: 1000000
+        exposes_reasoning_tokens: true
+        default: true
+      - name: deepseek-v4-flash
+        max_context_tokens: 1000000
+        exposes_reasoning_tokens: true
+        default: false

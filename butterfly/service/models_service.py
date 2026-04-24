@@ -60,6 +60,12 @@ _PROVIDER_META: list[dict[str, Any]] = [
         "env": [],  # uses ~/.butterfly/auth.json
         "supports_thinking": True,
     },
+    {
+        "provider": "deepseek",
+        "label": "DeepSeek V4",
+        "env": ["DEEPSEEK_API_KEY"],
+        "supports_thinking": True,
+    },
 ]
 
 
