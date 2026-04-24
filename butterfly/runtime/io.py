@@ -66,6 +66,9 @@ from butterfly.runtime.events import (
 from butterfly.runtime.events import (
     read_events as _events_read_events,
 )
+from butterfly.runtime.events import (
+    tail_events as _events_tail_events,
+)
 from butterfly.runtime.llm_context import (
     Message,
     build_llm_context,
@@ -156,13 +159,16 @@ def list_sessions(include_archived: bool = False) -> list[SessionInfo]:
     """
     from butterfly.service.sessions_service import list_sessions as _svc_list
 
-    live = _svc_list(_SESSIONS_DIR, _SYSTEM_SESSIONS_DIR)
+    # exclude_meta=False to mirror the pre-refactor web contract. CLI
+    # aliases that want to hide meta sessions (e.g. ``butterfly sessions``)
+    # filter at their own layer.
+    live = _svc_list(_SESSIONS_DIR, _SYSTEM_SESSIONS_DIR, exclude_meta=False)
     if not include_archived or not _ARCHIVED_DIR.is_dir():
         return live
     # Archived sessions mirror the system-dir layout. We reuse the service
     # reader by pointing both base dirs at the archive path — it only
     # cares about manifest.json + status.json existence.
-    archived = _svc_list(_ARCHIVED_DIR, _ARCHIVED_DIR)
+    archived = _svc_list(_ARCHIVED_DIR, _ARCHIVED_DIR, exclude_meta=False)
     # Stamp an ``archived=True`` flag so callers can visually distinguish.
     for info in archived:
         info["archived"] = True
@@ -237,6 +243,32 @@ def latest_event_id(session_id: str) -> int:
     """Return the largest event id in ``events_v1.jsonl`` (0 when empty)."""
     system_dir = _resolve_session_dir(session_id)
     return _events_latest_event_id(system_dir)
+
+
+def tail_events(
+    session_id: str,
+    *,
+    cursor: int | None = None,
+    timeout: float = 30.0,
+    poll_interval: float = 0.1,
+):
+    """Async-yield events with id > ``cursor`` as they land on disk.
+
+    Thin session_id wrapper over the Phase 1 primitive
+    ``butterfly.runtime.events.tail_events`` (DESIGN.md §5.2). Used by
+    the web SSE endpoint to turn appended events into live pushes.
+
+    Returns an ``AsyncIterator[Event]`` — see the primitive docstring
+    for semantics (cursor=None yields everything from the start, timeout
+    resets on each yield, poll_interval gates the file re-scan).
+    """
+    system_dir = _resolve_session_dir(session_id)
+    return _events_tail_events(
+        system_dir,
+        cursor=cursor,
+        timeout=timeout,
+        poll_interval=poll_interval,
+    )
 
 
 # ── Derived reads ─────────────────────────────────────────────────────────────
@@ -1164,6 +1196,7 @@ __all__ = [
     # events
     "read_events",
     "latest_event_id",
+    "tail_events",
     # input
     "send_message",
     "interrupt_session",
