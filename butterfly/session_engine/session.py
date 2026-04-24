@@ -245,6 +245,17 @@ class Session:
         # just-finished LLM call as an EVENT_AGENT_TEXT event into
         # events_v1.jsonl. None outside a run.
         self._pending_agent_text_drain = None
+        # Phase 3b / F2: map from ``BackgroundTaskManager`` tid → the
+        # originating ``tool_use_id`` captured at ``on_tool_done`` (the
+        # placeholder fire). ``_drain_background_events`` reads this map
+        # to stamp the final ``EVENT_AGENT_TOOL_RESULT`` / ``EVENT_TOOL_PROGRESS``
+        # with the real tool_use_id so LLM-context pairing matches the
+        # ``EVENT_AGENT_TOOL_CALL`` emitted at spawn time. Without this
+        # the two events key on different ids (original tool_use_id vs
+        # tid) and reading ``events_v1.jsonl`` produces an unpaired tool
+        # call. Phase 3a used ``tid`` as a best-effort stand-in; Phase 3b
+        # threads the real id through.
+        self._tid_to_tool_use_id: dict[str, str] = {}
 
         # Idempotent directory creation — safe for both new and resumed sessions
         self.session_dir.mkdir(parents=True, exist_ok=True)
@@ -547,36 +558,115 @@ class Session:
         return cleaned
 
     def load_history(self) -> None:
-        """Restore agent._history from context.jsonl on resume.
+        """Restore agent._history on resume.
 
-        Reads "turn" events in order, flattening their messages into
-        agent._history. Preserves full Anthropic-format content including
-        tool_use IDs and tool_result blocks.
+        Phase 3b (invariant I3): events_v1.jsonl is the source of truth for
+        LLM context. Rather than re-reading the legacy context.jsonl turn
+        stream, we rebuild from the new-format event log. This is now a
+        thin wrapper over :meth:`_rebuild_history_from_events` so any
+        non-obvious caller (tests, server startup, explicit reload)
+        continues to work; the body used to walk context.jsonl directly.
+
+        Pre-3b behaviour: flattened context.jsonl ``turn`` events into
+        ``_agent._history`` using Anthropic-format blocks. The first tick
+        of a resumed session would now do the same rebuild automatically,
+        but keeping ``load_history`` around avoids surprising callers that
+        relied on the history being populated BEFORE ``_do_chat`` /
+        ``_do_tick`` runs.
         """
-        if not self._context_path.exists():
-            return
-        from butterfly.core.types import Message
-        history: list[Message] = []
+        self._rebuild_history_from_events()
+
+    def _rebuild_history_from_events(self) -> None:
+        """Phase 3b: rebuild the agent's in-memory LLM context from events_v1.
+
+        events_v1.jsonl is authoritative (DESIGN.md I3). The agent's
+        ``_history`` attribute is an ephemeral tool-loop accumulator within
+        one ``Agent.run()``; between ticks we rebuild it from disk so every
+        tick sees the latest persisted state and there is no drift between
+        what the LLM saw last time and what the event log says happened.
+
+        Cancel rollback (``_handle_explicit_interrupt`` and the tick
+        snapshot restore) still touches ``_history`` to clean up in-memory
+        state after an interrupt. That's fine — the next tick's rebuild
+        will realign against whatever events_v1 holds at that moment.
+
+        The runtime ``Message`` / ``Block`` IR is converted to
+        ``butterfly.core.types.Message`` + provider-ready content
+        (``str`` for a single text block, ``list[dict]`` for multi-block
+        messages) so the rest of session.py + Agent + providers can keep
+        reading ``msg.content`` as they did pre-3b. Without this coercion
+        a reshape-history path (``self._agent._history[-1].content``
+        checks) would break against the foreign IR.
+
+        Swallows exceptions on purpose: a disk hiccup on rebuild MUST NOT
+        prevent the daemon from running the tick. Whatever ``_history``
+        held before the rebuild stays in place and the tick falls back to
+        pre-3b semantics.
+        """
         try:
-            with self._context_path.open("r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        event = json.loads(line)
-                        if event.get("type") == "turn":
-                            for m in event.get("messages", []):
-                                raw_content = m.get("content")
-                                if raw_content is None:
-                                    continue
-                                content = self._clean_content_for_api(raw_content)
-                                history.append(Message(role=m["role"], content=content))
-                    except json.JSONDecodeError:
-                        pass
-        except Exception:
+            from butterfly.runtime.events import read_events
+            from butterfly.runtime.llm_context import build_llm_context
+            from butterfly.core.types import Message as CoreMessage
+            built = build_llm_context(read_events(self.system_dir))
+            # Pre-3b semantics: ``_history`` held the COMMITTED conversation
+            # prefix only; the currently-dispatched user_input was passed
+            # to Agent.run as the ``input`` arg (which Agent then appended
+            # in line 197 of core/agent.py). Trim any trailing user-role
+            # message(s) off the rebuild so the dispatcher's pending
+            # user_input doesn't get double-counted when Agent.run
+            # re-composes ``[*self._history, Message(role="user", content=input)]``.
+            # The reshape-history / interrupt-merge tests pin this.
+            while built and built[-1].role == "user":
+                built = built[:-1]
+            coerced: list[CoreMessage] = []
+            for m in built:
+                blocks = list(m.content)
+                # One-text-block messages collapse to a bare string — the
+                # ``_reshape_history`` + turn-writer paths key on
+                # ``isinstance(content, str)`` for the orphan-user merge,
+                # and providers accept both shapes transparently.
+                if len(blocks) == 1 and blocks[0].type == "text":
+                    coerced.append(
+                        CoreMessage(role=m.role, content=blocks[0].text)
+                    )
+                else:
+                    coerced.append(
+                        CoreMessage(
+                            role=m.role,
+                            content=[b.to_dict() for b in blocks],
+                        )
+                    )
+            self._agent._history = coerced
+        except Exception as exc:  # noqa: BLE001 — diagnostic swallow
+            _log.warning(
+                "_rebuild_history_from_events failed (keeping in-memory _history): %s",
+                exc,
+            )
+
+    def _check_history_alignment(self, where: str) -> None:
+        """Phase 3b: grace-period alignment check (observability only).
+
+        events_v1.jsonl is the source of truth (I3); in-memory ``_history``
+        should match after every ``Agent.run()`` settles. A size mismatch
+        reveals either a missed emit site or a rollback that failed to
+        reflect to events. We log WARN to surface it without breaking
+        behaviour — Phase 4+ work can convert to an assertion once the
+        known asymmetries are driven to zero. Exception handling is
+        best-effort; the check itself must never impact the daemon.
+        """
+        try:
+            from butterfly.runtime.events import read_events
+            from butterfly.runtime.llm_context import build_llm_context
+            on_disk = build_llm_context(read_events(self.system_dir))
+            in_memory = list(self._agent._history)
+            if len(on_disk) != len(in_memory):
+                _log.warning(
+                    "Phase 3b drift at %s: on-disk LLM context has %d messages, "
+                    "in-memory _history has %d. Investigate missed emits.",
+                    where, len(on_disk), len(in_memory),
+                )
+        except Exception:  # noqa: BLE001 — diagnostic only
             pass
-        self._agent._history = history
 
     # ── Activation ────────────────────────────────────────────────
 
@@ -1097,6 +1187,11 @@ class Session:
     async def _do_chat(self, item: ChatItem) -> AgentResult:
         """Execute a chat item end-to-end (capabilities → agent.run → write turn)."""
         message = self._expand_slash_command(item.content)
+        # Phase 3b: realign the agent's in-memory history from events_v1
+        # before composing the provider input. Any mutations `Agent.run`
+        # made in the previous tick are ephemeral; the persisted event
+        # log is the single source of truth (I3).
+        self._rebuild_history_from_events()
         # Last-line defence against an orphan trailing user/task marker that
         # somehow survived (e.g. crash recovery between a turn and its next
         # input). The dispatcher's uncommitted-merge handles new arrivals,
@@ -1181,6 +1276,8 @@ class Session:
             "reason": loop_end_reason,
             "iterations": getattr(result, "iterations", 0) if result else 0,
         })
+        # Phase 3b: post-run alignment check. See `_check_history_alignment`.
+        self._check_history_alignment("_do_chat")
         return result
 
     async def _do_tick(self, card: TaskCard, seed: str = "") -> AgentResult | None:
@@ -1198,6 +1295,14 @@ class Session:
 
         triggered_by = f"task:{card.name}"
         task_info = card.description or card.name
+
+        # Phase 3b: rebuild from events_v1 before composing the prompt so
+        # the task tick starts from the canonical persisted state. The
+        # SESSION_FINISHED rollback below still snapshots after the
+        # rebuild — the snapshot remains the correct pre-tick baseline
+        # for this particular run (rolling back to the NEW canonical
+        # state is the intent).
+        self._rebuild_history_from_events()
 
         # Snapshot history so we can roll back on SESSION_FINISHED
         history_snapshot = list(self._agent._history)
@@ -1330,6 +1435,10 @@ class Session:
                     turn["per_iteration_usages"] = list(self._current_turn_iteration_usages)
                 self._append_context(turn)
 
+            # Phase 3b (F4 fix): mirror interrupted thinking into events_v1
+            # on the tick cancel path too.
+            self._emit_interrupted_thinking_blocks(_tick_thinking_blocks)
+
             await self._fire_external_hook("agent_loop_end", {
                 "source": "task", "card": card.name, "reason": "cancelled",
             })
@@ -1434,6 +1543,8 @@ class Session:
             "reason": loop_end_reason,
             "iterations": getattr(result, "iterations", 0) if result else 0,
         })
+        # Phase 3b: post-run alignment check. See `_check_history_alignment`.
+        self._check_history_alignment("_do_tick")
         return result
 
     # ── Turn writers (success + interrupted-with-commit) ───────────
@@ -1472,6 +1583,41 @@ class Session:
         if result.usage and result.usage.total_tokens > 0:
             turn["usage"] = result.usage.as_dict()
         self._append_context(turn)
+
+    def _emit_interrupted_thinking_blocks(self, thinking_blocks: list[dict] | None) -> None:
+        """Phase 3b (F4 fix): emit EVENT_AGENT_THINKING for interrupted placeholders.
+
+        ``on_thinking_start`` seeds the collected list with
+        ``{interrupted: True, text: ""}``. ``on_thinking_end`` upgrades
+        the entry in place on a clean close. When a run is cancelled
+        mid-thought, the placeholder survives — the cancel handler
+        persists it to ``turn["thinking_blocks"]`` in the legacy log,
+        but Phase 3a never mirrored the interrupted case into
+        events_v1.jsonl (only the on_thinking_end close path emitted).
+
+        This helper walks the captured thinking_blocks at cancel time
+        and emits one ``EVENT_AGENT_THINKING`` per still-interrupted
+        entry so events_v1 carries the full reasoning timeline — even
+        a zero-text placeholder — for history replay and LLM context
+        reconstruction.
+        """
+        if not thinking_blocks:
+            return
+        for entry in thinking_blocks:
+            if not entry.get("interrupted"):
+                continue
+            self._emit_event(
+                rt_events.EVENT_AGENT_THINKING,
+                {
+                    "text": entry.get("text") or "",
+                    "signature": entry.get("signature"),
+                    "summary": entry.get("summary"),
+                    "redacted": bool(entry.get("redacted", False)),
+                    "interrupted": True,
+                    "reasoning_tokens": entry.get("reasoning_tokens"),
+                    "duration_ms": entry.get("duration_ms"),
+                },
+            )
 
     def _save_partial_chat_turn(
         self,
@@ -1527,6 +1673,11 @@ class Session:
         if self._current_turn_iteration_usages:
             turn["per_iteration_usages"] = list(self._current_turn_iteration_usages)
         self._append_context(turn)
+        # Phase 3b (F4 fix): mirror interrupted thinking placeholders into
+        # events_v1 so history replay can reconstruct the "Thinking
+        # interrupted" cells without having to read the legacy
+        # ``turn["thinking_blocks"]`` field.
+        self._emit_interrupted_thinking_blocks(thinking_blocks)
 
     # ── Stop / Start ───────────────────────────────────────────────
 
@@ -2253,7 +2404,7 @@ class Session:
                     rt_events.EVENT_USER_INPUT,
                     {
                         "text": msg,
-                        "source": ("sub_agent" if is_sub_agent else "cli"),
+                        "source": (rt_events.SOURCE_SUBAGENT if is_sub_agent else rt_events.SOURCE_CLI),
                         "caller": entry.tool_name,
                         "display_name": (entry.meta or {}).get("display_name") if is_sub_agent else None,
                     },
@@ -2294,15 +2445,16 @@ class Session:
                     "name": entry.tool_name,
                     "summary": summary,
                 })
-                # Phase 3a dual-write (§3.5). In the new schema tool_progress
-                # is keyed by tool_use_id; we use tid as the closest analog
-                # (bg tools don't carry the original tool_use_id here — the
-                # sync tool_done at call-time was marked is_background=true
-                # and the panel frontend pairs them by tid). Phase 3b needs
-                # to thread the real tool_use_id through; flagging.
+                # Phase 3b (F2 fix): pair progress back to the originating
+                # tool_use_id via the ``_tid_to_tool_use_id`` map populated
+                # at ``on_tool_done`` placeholder time. Falls back to tid
+                # for any stray progress event that arrives before the
+                # placeholder (shouldn't happen in practice but keeps the
+                # event well-formed).
+                _bg_tool_use_id = self._tid_to_tool_use_id.get(entry.tid, entry.tid)
                 self._emit_event(
                     rt_events.EVENT_TOOL_PROGRESS,
-                    {"tool_use_id": entry.tid, "text": summary, "kind": "stdout"},
+                    {"tool_use_id": _bg_tool_use_id, "text": summary, "kind": "stdout"},
                 )
             elif evt.kind in ("completed", "stalled", "killed", "killed_by_restart"):
                 # tool_finalize tells the chat cell to leave the working
@@ -2346,17 +2498,21 @@ class Session:
                     if truncated:
                         payload["result_truncated"] = True
                 self._append_event(payload)
-                # Phase 3a dual-write (§3.4). Background tool completion is
-                # an agent_tool_result in the new schema. We key on tid
-                # because the original tool_use_id isn't threaded into the
-                # BackgroundTaskManager entry today (Phase 3b TODO).
+                # Phase 3b (F2 fix): background completion is the ONE and
+                # only ``EVENT_AGENT_TOOL_RESULT`` emitted for a
+                # backgrounded tool — the on_tool_done placeholder skip
+                # (F1) means no earlier entry exists to dedupe against.
+                # Pair with the originating tool_use_id via
+                # ``_tid_to_tool_use_id`` (populated at on_tool_done);
+                # falls back to tid only for orphan completions.
                 _bg_result = final_result if final_result is not None else ""
                 if final_result is not None and len(final_result) > _TOOL_OUTPUT_INLINE_CAP:
                     _bg_result = final_result[:_TOOL_OUTPUT_INLINE_CAP]
+                _bg_tool_use_id = self._tid_to_tool_use_id.pop(entry.tid, entry.tid)
                 self._emit_event(
                     rt_events.EVENT_AGENT_TOOL_RESULT,
                     {
-                        "tool_use_id": entry.tid,
+                        "tool_use_id": _bg_tool_use_id,
                         "tool_name": entry.tool_name,
                         "result": _bg_result,
                         "is_error": evt.kind in ("stalled", "killed", "killed_by_restart"),
@@ -2373,12 +2529,16 @@ class Session:
     def _set_model_status(self, state: str, source: str) -> str:
         ts = datetime.now().isoformat()
         self._append_event({"type": "model_status", "state": state, "source": source, "ts": ts})
-        # Phase 3a dual-write (§3.5). status in the new schema is
-        # "running"/"idle"; model-name isn't known at this site, so it's
-        # None — Phase 3b can plumb the currently-selected model through.
+        # Phase 3b (F3 fix): thread the currently-configured model through.
+        # The v1 schema expects ``{status, model}`` and the UI keys the HUD
+        # "running on <model>" badge off this field. Pre-3b the payload
+        # carried ``model=None`` which the frontend had to fall back on
+        # ``/api/hud``-derived defaults for. ``model_status`` is for_llm=False
+        # so this is a UI-only signal — no LLM-context impact.
+        model_name = getattr(self._agent, "model", None)
         self._emit_event(
             rt_events.EVENT_MODEL_STATUS,
-            {"status": state, "model": None, "source": source},
+            {"status": state, "model": model_name, "source": source},
         )
         updates: dict = {"model_state": state, "model_source": source}
         if state == "idle":
@@ -2497,27 +2657,36 @@ class Session:
             if tid is not None:
                 payload["is_background"] = True
                 payload["tid"] = tid
+                # Phase 3b (F2 fix): stash the tid → tool_use_id mapping so
+                # the deferred ``EVENT_AGENT_TOOL_RESULT`` / ``EVENT_TOOL_PROGRESS``
+                # fired later from ``_drain_background_events`` can use the
+                # REAL tool_use_id (paired with the ``EVENT_AGENT_TOOL_CALL``
+                # emitted at spawn time) instead of tid as a best-effort
+                # stand-in. Without this the event log has an unpaired
+                # tool_use block for every backgrounded tool.
+                self._tid_to_tool_use_id[tid] = tool_use_id
             self._append_event(payload)
-            # Phase 3a dual-write (§3.4). For background tools the
-            # *final* tool_result arrives later via _drain_background_events'
-            # tool_finalize path; this is the inline placeholder (same as
-            # today's inline semantics for is_background=True). Readers
-            # of the new log will see TWO agent_tool_result events for
-            # background tool calls (one placeholder, one final) — Phase 3b
-            # needs to dedupe by filtering out is_background placeholders.
-            _payload_result = payload.get("result", "")
-            _duration = payload.get("duration_ms", 0)
-            self._emit_event(
-                rt_events.EVENT_AGENT_TOOL_RESULT,
-                {
-                    "tool_use_id": tool_use_id,
-                    "tool_name": name,
-                    "result": _payload_result,
-                    "is_error": bool(payload.get("is_error", False)),
-                    "is_background": bool(payload.get("is_background", False)),
-                    "duration_ms": _duration,
-                },
-            )
+            # Phase 3b (F1 fix): for background tools the *final*
+            # ``EVENT_AGENT_TOOL_RESULT`` arrives later from the
+            # ``_drain_background_events`` completion path with the real
+            # output; we must NOT emit a placeholder result here or the
+            # event log would carry two agent_tool_results for one
+            # agent_tool_call (and the LLM would see both). Inline
+            # (non-background) tools still emit here, as before.
+            if tid is None:
+                _payload_result = payload.get("result", "")
+                _duration = payload.get("duration_ms", 0)
+                self._emit_event(
+                    rt_events.EVENT_AGENT_TOOL_RESULT,
+                    {
+                        "tool_use_id": tool_use_id,
+                        "tool_name": name,
+                        "result": _payload_result,
+                        "is_error": bool(payload.get("is_error", False)),
+                        "is_background": False,
+                        "duration_ms": _duration,
+                    },
+                )
             # Newly-spawned sub_agent → bump HUD count immediately. Final
             # decrement happens in _drain_background_events when the runner
             # emits the terminal event.

@@ -69,6 +69,17 @@ EVENT_CONTROL_START = "control_start"
 EVENT_CONTROL_STOP = "control_stop"
 
 
+# ── user_input `source` enum (DESIGN.md §3.3) ─────────────────────────────────
+
+# Callers should reference these constants rather than the raw string literals
+# so renames sweep cleanly and `test_subagent_rename_sweep` doesn't flag the
+# schema enum (distinct from the retired `sub_agent` tool-name literal).
+SOURCE_CLI = "cli"
+SOURCE_WEB = "web"
+SOURCE_TASK = "task"
+SOURCE_SUBAGENT = "sub_agent"  # noqa: Q000 - schema enum value, not tool name
+
+
 # ── `for_llm` default taxonomy ────────────────────────────────────────────────
 
 # Mirrors DESIGN.md §3.3-§3.5. Callers of `append_event` do not need to pass
