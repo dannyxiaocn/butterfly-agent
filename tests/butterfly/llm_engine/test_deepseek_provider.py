@@ -27,8 +27,11 @@ import pytest
 
 from butterfly.core.types import Message, TokenUsage
 from butterfly.llm_engine.errors import AuthError
+from butterfly.llm_engine.providers.anthropic import AnthropicProvider
 from butterfly.llm_engine.providers.deepseek import (
+    DeepSeekAnthropicProvider,
     DeepSeekProvider,
+    _DEEPSEEK_ANTHROPIC_BASE_URL,
     _DEEPSEEK_BASE_URL,
 )
 from butterfly.llm_engine.providers.openai_api import OpenAIProvider
@@ -483,3 +486,155 @@ def test_deepseek_advertises_thinking_support():
     """The base class inspects ``_supports_thinking`` to decide whether to
     expose thinking toggles in the UI — DeepSeek must advertise True."""
     assert DeepSeekProvider._supports_thinking is True
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# DeepSeekAnthropicProvider — the Anthropic-compatible /anthropic surface.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+# ── 10. Class hierarchy & capability flags ────────────────────────────────────
+
+
+def test_deepseek_anthropic_is_subclass_of_anthropic_provider():
+    """The Anthropic variant must subclass the base ``AnthropicProvider`` so
+    all message shaping / tool encoding / streaming flows through the
+    Anthropic SDK path verbatim."""
+    assert issubclass(DeepSeekAnthropicProvider, AnthropicProvider)
+
+
+def test_deepseek_anthropic_class_flags():
+    """Upstream quirks captured as class flags:
+
+    * cache_control is ignored by the DeepSeek gateway → ``supports_cache=False``.
+    * anthropic-beta header is ignored → ``thinking_uses_betas=False``.
+    * adaptive thinking shape is not recognised → ``supports_adaptive=False``.
+    """
+    assert DeepSeekAnthropicProvider._supports_cache_control is False
+    assert DeepSeekAnthropicProvider._supports_thinking is True
+    assert DeepSeekAnthropicProvider._thinking_uses_betas is False
+    assert DeepSeekAnthropicProvider._supports_adaptive_thinking is False
+
+
+# ── 11. Constructor: API key resolution ───────────────────────────────────────
+
+
+def test_deepseek_anthropic_fails_fast_without_any_key(monkeypatch):
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+
+    with pytest.raises(AuthError) as exc_info:
+        DeepSeekAnthropicProvider()
+    assert "DEEPSEEK_API_KEY" in str(exc_info.value)
+
+
+def test_deepseek_anthropic_env_key(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "env-key")
+    captured: dict[str, Any] = {}
+
+    def _fake_init(self, *, api_key=None, max_tokens=8096, base_url=None,
+                   default_headers=None):
+        captured["api_key"] = api_key
+
+    monkeypatch.setattr(AnthropicProvider, "__init__", _fake_init)
+    DeepSeekAnthropicProvider()
+    assert captured["api_key"] == "env-key"
+
+
+def test_deepseek_anthropic_explicit_key_overrides_env(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "env-key")
+    captured: dict[str, Any] = {}
+
+    def _fake_init(self, *, api_key=None, max_tokens=8096, base_url=None,
+                   default_headers=None):
+        captured["api_key"] = api_key
+
+    monkeypatch.setattr(AnthropicProvider, "__init__", _fake_init)
+    DeepSeekAnthropicProvider(api_key="explicit")
+    assert captured["api_key"] == "explicit"
+
+
+# ── 12. Constructor: base URL pinning ─────────────────────────────────────────
+
+
+def test_deepseek_anthropic_default_base_url(monkeypatch):
+    """Default base URL is the /anthropic endpoint. Unlike the OpenAI variant,
+    there is no ``DEEPSEEK_BASE_URL`` env override — keeps auth narrow and
+    avoids the "which env var actually got used?" debugging rabbit hole."""
+    captured: dict[str, object] = {}
+
+    def _fake_init(self, *, api_key=None, max_tokens=8096, base_url=None,
+                   default_headers=None):
+        captured["base_url"] = base_url
+
+    monkeypatch.setattr(AnthropicProvider, "__init__", _fake_init)
+    DeepSeekAnthropicProvider(api_key="k")
+    assert captured["base_url"] == _DEEPSEEK_ANTHROPIC_BASE_URL
+    assert _DEEPSEEK_ANTHROPIC_BASE_URL == "https://api.deepseek.com/anthropic"
+
+
+def test_deepseek_anthropic_explicit_base_url(monkeypatch):
+    """Constructor ``base_url`` kwarg is honoured — e.g. for gateways."""
+    captured: dict[str, object] = {}
+
+    def _fake_init(self, *, api_key=None, max_tokens=8096, base_url=None,
+                   default_headers=None):
+        captured["base_url"] = base_url
+
+    monkeypatch.setattr(AnthropicProvider, "__init__", _fake_init)
+    DeepSeekAnthropicProvider(api_key="k", base_url="https://gateway.example/anth")
+    assert captured["base_url"] == "https://gateway.example/anth"
+
+
+def test_deepseek_anthropic_ignores_deepseek_base_url_env(monkeypatch):
+    """The Anthropic variant deliberately does NOT honour ``DEEPSEEK_BASE_URL``
+    so the OpenAI-surface override doesn't silently redirect Anthropic traffic
+    to a gateway that only speaks OpenAI. Mirrors the Kimi split behaviour."""
+    monkeypatch.setenv("DEEPSEEK_BASE_URL", "https://openai-only.example")
+    captured: dict[str, object] = {}
+
+    def _fake_init(self, *, api_key=None, max_tokens=8096, base_url=None,
+                   default_headers=None):
+        captured["base_url"] = base_url
+
+    monkeypatch.setattr(AnthropicProvider, "__init__", _fake_init)
+    DeepSeekAnthropicProvider(api_key="k")
+    assert captured["base_url"] == _DEEPSEEK_ANTHROPIC_BASE_URL
+
+
+# ── 13. Registry wiring for the opt-in key ────────────────────────────────────
+
+
+def test_registry_deepseek_anthropic_resolves_to_anthropic_variant(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "k")
+    from butterfly.llm_engine.registry import resolve_provider
+
+    p = resolve_provider("deepseek-anthropic")
+    assert isinstance(p, DeepSeekAnthropicProvider)
+    assert isinstance(p, AnthropicProvider)
+
+
+def test_registry_default_deepseek_is_still_openai_variant(monkeypatch):
+    """Adding the Anthropic opt-in must not change the default ``deepseek``
+    key — it should continue to resolve to the OpenAI-shape provider."""
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "k")
+    from butterfly.llm_engine.registry import resolve_provider
+
+    p = resolve_provider("deepseek")
+    assert isinstance(p, DeepSeekProvider)
+    assert not isinstance(p, DeepSeekAnthropicProvider)
+
+
+def test_deepseek_anthropic_exported_from_llm_engine():
+    """Both variants are top-level importable from ``butterfly.llm_engine``."""
+    from butterfly import llm_engine
+
+    assert hasattr(llm_engine, "DeepSeekAnthropicProvider")
+    assert llm_engine.DeepSeekAnthropicProvider is DeepSeekAnthropicProvider
+
+
+def test_provider_name_reverse_lookup_for_anthropic(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "k")
+    from butterfly.llm_engine.registry import provider_name, resolve_provider
+
+    p = resolve_provider("deepseek-anthropic")
+    assert provider_name(p) == "deepseek-anthropic"

@@ -1,49 +1,79 @@
-"""DeepSeek provider.
+"""DeepSeek provider (OpenAI- and Anthropic-compatible surfaces).
 
-DeepSeek's public API is OpenAI-compatible: the Chat Completions endpoint
-lives at ``https://api.deepseek.com/chat/completions`` and accepts the same
-message / tool / streaming shapes as OpenAI. We therefore subclass
-:class:`OpenAIProvider` and only layer on the handful of fields that are
-DeepSeek-specific:
+DeepSeek exposes two equivalent wire surfaces for the same V4 models:
 
-* **Thinking mode** — enabled via ``extra_body={"thinking": {"type": "enabled"}}``
-  and controllable per-request with ``reasoning_effort`` (``high`` | ``max``).
-  Mirrors the Kimi / Moonshot shape.
-* **reasoning_content** — the CoT body streams back as
-  ``delta.reasoning_content`` and is also present on non-streaming
-  ``message.reasoning_content``. The OpenAI base class already captures both
-  channels into ``_pending_reasoning_content`` and surfaces the body through
-  ``consume_extra_blocks()``, so the agent loop round-trips it to the next
-  turn automatically. V4-family models require this round-trip whenever a
-  tool call is involved.
-* **Prompt cache** — DeepSeek reports cache hit/miss at the top level
-  (``prompt_cache_hit_tokens`` / ``prompt_cache_miss_tokens``) rather than
-  under ``prompt_tokens_details.cached_tokens``. We extend usage extraction
-  to read from either shape so downstream accounting stays correct whether
-  DeepSeek tweaks the wire format or standardises on the OpenAI-shape.
+* **OpenAI-compatible** at ``https://api.deepseek.com`` — Chat Completions
+  shape; messages carry ``role`` + ``tool_calls``; thinking streams as
+  ``delta.reasoning_content``. This is the default and the one most
+  callers want.
+* **Anthropic-compatible** at ``https://api.deepseek.com/anthropic`` —
+  Messages API shape; content is a list of typed blocks
+  (``text`` / ``tool_use`` / ``tool_result`` / ``thinking``). Auth is
+  ``x-api-key`` via the upstream Anthropic SDK. Useful for callers
+  that already depend on Anthropic-shape usage fields
+  (``cache_read_input_tokens`` / ``cache_creation_input_tokens``) or
+  want to swap DeepSeek in behind existing Anthropic SDK code.
+
+Both surfaces share the same set of models (``deepseek-v4-pro`` /
+``deepseek-v4-flash``) and return identical content; they differ only
+in wire contract.
+
+Shared provider contract (both classes)
+---------------------------------------
+* API key resolution: explicit kwarg → ``DEEPSEEK_API_KEY``.
+* Base URL defaults pinned to the two DeepSeek hosts; overridable per
+  class via a constructor ``base_url`` kwarg (no env override — the
+  OpenAI surface supports ``DEEPSEEK_BASE_URL`` for historical
+  compatibility, the Anthropic surface does not).
+* Thinking mode is enabled via the vendor-specific shape; the caller
+  simply toggles ``thinking=True``.
+
+OpenAI-surface specifics
+------------------------
+Handled in :class:`DeepSeekProvider` below. Thinking enables via
+``extra_body={"thinking": {"type": "enabled"}}`` with a
+``reasoning_effort`` knob (``high`` | ``max``). Prompt cache hit/miss
+is read from DeepSeek's top-level ``prompt_cache_hit_tokens``.
+
+Anthropic-surface specifics
+---------------------------
+Handled in :class:`DeepSeekAnthropicProvider`. Notable upstream caveats
+(captured as class flags so the base class takes the right branch):
+
+* ``cache_control`` breakpoints are **ignored** by the server. We flip
+  ``_supports_cache_control = False`` so no ``cache_control`` blocks
+  leak into the request body, avoiding wasted tokens on a server
+  that discards them anyway.
+* ``anthropic-beta`` / ``anthropic-version`` headers are ignored. We
+  flip ``_thinking_uses_betas = False`` so the base doesn't send the
+  dated interleaved-thinking header, and routes the thinking payload
+  through the ``extra_body`` shape DeepSeek accepts.
+* Adaptive thinking shape is not recognised — flip
+  ``_supports_adaptive_thinking = False`` to force the legacy
+  ``{type: "enabled"}`` branch.
+* ``budget_tokens`` inside the thinking block is silently ignored by
+  the server; we still pass it (no harm) so the legacy branch stays
+  uniform across providers.
 
 **Scope — this is from founder's opinion**
-    Only the **DeepSeek V4 family** (``deepseek-v4-pro`` and
-    ``deepseek-v4-flash``) is supported. The legacy ``deepseek-chat`` and
-    ``deepseek-reasoner`` aliases are intentionally out of scope: they are
-    obsolete (DeepSeek itself deprecates them in 2026-07), they lack
-    features the V4 contract ships with, and supporting them would require
-    carrying around reasoner-specific scrubbing code (no tool support,
-    refuses inbound ``reasoning_content``). Cutting the legacy surface
-    keeps the provider small and keeps the wire contract uniform.
+    Only the DeepSeek V4 family (``deepseek-v4-pro`` /
+    ``deepseek-v4-flash``) is supported. Legacy ``deepseek-chat`` /
+    ``deepseek-reasoner`` aliases are intentionally out of scope.
 
 Environment
 -----------
-``DEEPSEEK_API_KEY``    — bearer token (required; no legacy fallback).
-``DEEPSEEK_BASE_URL``   — optional base URL override for gateways /
-                          self-hosted deployments. Defaults to
-                          ``https://api.deepseek.com``.
+``DEEPSEEK_API_KEY``    — bearer token (required by both surfaces).
+``DEEPSEEK_BASE_URL``   — optional OpenAI-surface base override. The
+                          Anthropic surface ignores this env var by
+                          design; override via constructor kwarg if
+                          needed.
 
 References
 ----------
 * https://api-docs.deepseek.com/api/create-chat-completion
 * https://api-docs.deepseek.com/guides/thinking_mode
 * https://api-docs.deepseek.com/guides/function_calling
+* https://api-docs.deepseek.com/guides/anthropic_api
 """
 from __future__ import annotations
 
@@ -52,19 +82,22 @@ from typing import Any, ClassVar
 
 from butterfly.core.types import TokenUsage
 from butterfly.llm_engine.errors import AuthError
+from butterfly.llm_engine.providers.anthropic import AnthropicProvider
 from butterfly.llm_engine.providers.openai_api import (
     OpenAIProvider,
     _extract_usage_from_obj,
 )
 
 
-# Default public endpoint. The OpenAI SDK appends ``chat/completions`` itself
-# so we stop at the host. Kept without the ``/v1`` suffix because DeepSeek's
-# gateway rejects the double-prefix some alt clients accidentally produce.
+# Default public endpoints. The OpenAI SDK appends ``chat/completions`` to its
+# base URL and the Anthropic SDK appends ``/v1/messages``, so we stop at the
+# host / path prefix the respective SDK expects.
 _DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+_DEEPSEEK_ANTHROPIC_BASE_URL = "https://api.deepseek.com/anthropic"
 
-# Efforts accepted by DeepSeek's thinking mode. ``max`` is documented as the
-# auto-applied value for long agent tasks; ``high`` is the interactive default.
+# Efforts accepted by DeepSeek's thinking mode (OpenAI surface). ``max`` is
+# documented as the auto-applied value for long agent tasks; ``high`` is the
+# interactive default.
 _DEEPSEEK_EFFORTS: frozenset[str] = frozenset({"high", "max"})
 
 
@@ -202,8 +235,60 @@ class DeepSeekProvider(OpenAIProvider):
         )
 
 
+class DeepSeekAnthropicProvider(AnthropicProvider):
+    """LLM provider for DeepSeek's Anthropic-compatible surface.
+
+    Thin subclass of :class:`AnthropicProvider` pointing at DeepSeek's
+    ``/anthropic`` endpoint. The upstream Anthropic SDK is used verbatim
+    (``anthropic.AsyncAnthropic(base_url=..., api_key=...)``); we only
+    flip class-level capability flags to match what DeepSeek's gateway
+    actually honours:
+
+    * ``_supports_cache_control = False`` — DeepSeek explicitly documents
+      ``cache_control`` as *ignored* on every content variant, so emitting
+      breakpoints wastes tokens and confuses the reader. The base class's
+      ``_apply_cache_strategy`` helpers degrade gracefully when this flag
+      is False, producing no-cache-breakpoint payloads.
+    * ``_thinking_uses_betas = False`` — DeepSeek ignores
+      ``anthropic-beta`` / ``anthropic-version`` headers. The base routes
+      the thinking payload through the vendor-agnostic ``extra_body``
+      shape when this flag is False, matching what DeepSeek accepts.
+    * ``_supports_adaptive_thinking = False`` — adaptive thinking is an
+      Anthropic-proper feature (4.6+ server-side depth picking). The
+      DeepSeek server does not recognise the ``{type: "adaptive"}``
+      request shape, so we force the legacy ``enabled + budget_tokens``
+      branch even if a ModelSpec lists ``thinking_mode: adaptive``.
+      ``budget_tokens`` is silently ignored by the server (documented)
+      but we still emit it so the legacy branch stays uniform.
+
+    **Supported models (founder's opinion)**
+        Only ``deepseek-v4-pro`` and ``deepseek-v4-flash``.
+    """
+
+    _supports_cache_control: ClassVar[bool] = False
+    _supports_thinking: ClassVar[bool] = True
+    _thinking_uses_betas: ClassVar[bool] = False
+    _supports_adaptive_thinking: ClassVar[bool] = False
+
+    def __init__(
+        self,
+        api_key: str | None = None,
+        max_tokens: int = 8096,
+        base_url: str | None = None,
+    ) -> None:
+        resolved_key = _resolve_deepseek_api_key(api_key)
+        resolved_base = base_url or _DEEPSEEK_ANTHROPIC_BASE_URL
+        super().__init__(
+            api_key=resolved_key,
+            max_tokens=max_tokens,
+            base_url=resolved_base,
+        )
+
+
 __all__ = [
     "DeepSeekProvider",
+    "DeepSeekAnthropicProvider",
     "_DEEPSEEK_BASE_URL",
+    "_DEEPSEEK_ANTHROPIC_BASE_URL",
     "_DEEPSEEK_EFFORTS",
 ]

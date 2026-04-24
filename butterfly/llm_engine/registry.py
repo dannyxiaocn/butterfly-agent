@@ -18,6 +18,12 @@ _REGISTRY: dict[str, tuple[str, str]] = {
     # thinking mode, and prompt cache hit/miss accounting. Key resolution is
     # strict — ``DEEPSEEK_API_KEY`` is the only env var consulted.
     "deepseek":                    ("butterfly.llm_engine.providers.deepseek",         "DeepSeekProvider"),
+    # Opt-in alias for DeepSeek's Anthropic-compatible surface
+    # (``api.deepseek.com/anthropic``). Same models, same auth, Anthropic
+    # message/usage shape. Not exposed in the web UI dropdown — callers who
+    # want this must pin the registry key explicitly (mirrors the
+    # ``kimi-coding-plan-anthropic`` opt-in pattern).
+    "deepseek-anthropic":          ("butterfly.llm_engine.providers.deepseek",         "DeepSeekAnthropicProvider"),
 }
 
 

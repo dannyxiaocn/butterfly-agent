@@ -21,10 +21,16 @@ from butterfly.service.models_service import _PROVIDER_META, get_models_catalog
 
 
 # Registry keys that are intentionally not exposed in the web UI — keep them
-# out of _PROVIDER_META on purpose. The ``kimi-coding-plan-anthropic`` alias
-# is opt-in for legacy sessions and shares its UI surface with the default
-# ``kimi-coding-plan`` entry, so the UI does not list it separately.
-_UI_OMITTED_REGISTRY_KEYS: frozenset[str] = frozenset({"kimi-coding-plan-anthropic"})
+# out of _PROVIDER_META on purpose. Both listed keys are opt-in aliases for
+# the Anthropic-compatible surface of their provider and share their UI
+# surface with the default OpenAI-shape entry, so the UI does not list them
+# separately (selecting "DeepSeek V4" / "Moonshot Kimi" in the dropdown
+# implicitly picks the OpenAI surface; callers who specifically want the
+# Anthropic shape pin these keys in YAML directly).
+_UI_OMITTED_REGISTRY_KEYS: frozenset[str] = frozenset({
+    "kimi-coding-plan-anthropic",
+    "deepseek-anthropic",
+})
 
 
 def test_every_yaml_provider_has_ui_metadata() -> None:
