@@ -522,18 +522,21 @@ async def test_stream_captures_reasoning_content_for_round_trip():
 # ── 9. Model catalog registration ────────────────────────────────────────────
 
 
-def test_model_catalog_has_kimi_entries():
-    """The ``kimi`` provider key must be populated with at least the k2.6 default."""
+def test_model_catalog_has_kimi_k2_6_only():
+    """Per founder directive, the catalog exposes only ``kimi-k2.6``.
+
+    Older k2.5 / k2-thinking / moonshot-v1-* families are deliberately
+    omitted to keep the surface small. Test locks the invariant so a
+    future YAML edit re-introducing them is caught in review.
+    """
     from butterfly.llm_engine.model_catalog import (
         get_provider_default,
         get_provider_models,
     )
 
     specs = get_provider_models("kimi")
-    assert specs, "expected kimi provider to have models registered"
     names = {s.model for s in specs}
-    assert "kimi-k2.6" in names
-    assert "moonshot-v1-auto" in names
+    assert names == {"kimi-k2.6"}
 
     default = get_provider_default("kimi")
     assert default is not None

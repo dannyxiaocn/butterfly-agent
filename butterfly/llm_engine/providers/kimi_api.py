@@ -100,10 +100,12 @@ class KimiProvider(OpenAIProvider):
     credential, separate gateway), use ``KimiOpenAIProvider`` from
     ``butterfly.llm_engine.providers.kimi``.
 
-    Supported models include ``kimi-k2.6`` (default, thinking-capable),
-    ``kimi-k2.5``, ``kimi-k2-thinking`` / ``kimi-k2-thinking-turbo``
-    (native reasoning), and the ``moonshot-v1-{8k,32k,128k,auto}`` family
-    plus their ``-vision-preview`` counterparts.
+    The only model registered in the catalog today is ``kimi-k2.6`` —
+    per founder directive, the older ``kimi-k2.5`` / ``kimi-k2-thinking``
+    / ``moonshot-v1-*`` families are considered outdated and
+    deliberately omitted to keep the surface small. The provider itself
+    accepts any model string the Moonshot backend supports, but the
+    catalog (and therefore the web-UI dropdown) shows only k2.6.
 
     Parameters
     ----------
