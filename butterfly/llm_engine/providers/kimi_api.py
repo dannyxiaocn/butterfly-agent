@@ -175,6 +175,12 @@ class KimiProvider(OpenAIProvider):
     ) -> dict[str, Any] | None:
         """Inject Kimi's thinking payload plus the optional prompt_cache_key.
 
+        Despite the name, this hook is called unconditionally by the base
+        class (``OpenAIProvider.complete`` — ``openai_api.py``) on every
+        request, not just when thinking is on. That makes it the natural
+        place to stamp the optional ``prompt_cache_key`` so the Moonshot
+        server-side cache keys every call, thinking or not.
+
         Kimi's thinking API does not expose ``budget_tokens`` or
         ``reasoning_effort`` on Chat Completions — the only knob is the
         binary enable flag plus ``keep`` for multi-turn behavior. The
