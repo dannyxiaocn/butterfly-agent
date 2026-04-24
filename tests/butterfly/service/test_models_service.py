@@ -61,16 +61,13 @@ def test_deepseek_is_enumerated_in_catalog() -> None:
     assert entry["supports_thinking"] is True
     assert entry["default_model"] == "deepseek-v4-pro"
 
+    # Scope — from founder's opinion: only the V4 family is surfaced. The
+    # legacy ``deepseek-chat`` / ``deepseek-reasoner`` aliases are explicitly
+    # out of scope (obsolete, add complexity, deprecated 2026-07 upstream).
     model_names = [m["name"] for m in entry["models"]]
-    for expected in (
-        "deepseek-v4-pro",
-        "deepseek-v4-flash",
-        "deepseek-chat",
-        "deepseek-reasoner",
-    ):
-        assert expected in model_names, (
-            f"Expected '{expected}' to be surfaced in the DeepSeek UI catalog."
-        )
+    assert model_names == ["deepseek-v4-pro", "deepseek-v4-flash"], (
+        f"DeepSeek UI catalog must expose only the V4 family; got {model_names}."
+    )
 
 
 def test_provider_meta_keys_all_resolvable() -> None:

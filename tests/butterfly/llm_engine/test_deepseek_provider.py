@@ -13,8 +13,10 @@ base class:
   mapped onto DeepSeek's two-level ``high``/``max`` scale.
 - Extract cache tokens from DeepSeek's top-level ``prompt_cache_hit_tokens``
   when the standard ``prompt_tokens_details.cached_tokens`` is absent.
-- Scrub ``reasoning_content`` blocks + tool turns when talking to the legacy
-  ``deepseek-reasoner`` alias, which rejects both.
+
+Scope — from founder's opinion: only the DeepSeek V4 family is supported.
+``deepseek-chat`` / ``deepseek-reasoner`` are out of scope, so there are no
+reasoner-scrubbing tests in this file (the provider does not ship that code).
 """
 from __future__ import annotations
 
@@ -28,8 +30,6 @@ from butterfly.llm_engine.errors import AuthError
 from butterfly.llm_engine.providers.deepseek import (
     DeepSeekProvider,
     _DEEPSEEK_BASE_URL,
-    _is_reasoner_only,
-    _scrub_reasoning_for_reasoner,
 )
 from butterfly.llm_engine.providers.openai_api import OpenAIProvider
 
@@ -353,135 +353,7 @@ async def test_deepseek_complete_returns_usage_via_override():
     assert usage.output_tokens == 12
 
 
-# ── 6. Reasoner-only model detection ──────────────────────────────────────────
-
-
-def test_is_reasoner_only_matches_legacy_alias():
-    assert _is_reasoner_only("deepseek-reasoner")
-    assert _is_reasoner_only("deepseek-reasoner-0925")
-    assert _is_reasoner_only("DeepSeek-Reasoner")  # case-insensitive
-
-
-def test_is_reasoner_only_skips_v4_family():
-    """V4 Pro / Flash are thinking-capable but support tool calls and
-    accept reasoning_content round-trips, so they must NOT be scrubbed."""
-    assert not _is_reasoner_only("deepseek-v4-pro")
-    assert not _is_reasoner_only("deepseek-v4-flash")
-    assert not _is_reasoner_only("deepseek-chat")
-    assert not _is_reasoner_only("")
-
-
-# ── 7. Reasoner scrubbing: reasoning_content + tool_use blocks dropped ────────
-
-
-def test_scrub_reasoning_removes_reasoning_blocks():
-    """``reasoning_content`` blocks are stripped before reasoner sees them."""
-    messages = [
-        Message(role="user", content="hi"),
-        Message(role="assistant", content=[
-            {"type": "reasoning_content", "text": "pondering"},
-            {"type": "text", "text": "Hello"},
-        ]),
-    ]
-    scrubbed = _scrub_reasoning_for_reasoner(messages)
-    assert len(scrubbed) == 2
-    assert scrubbed[0] is messages[0]  # user untouched
-    assert scrubbed[1].content == [{"type": "text", "text": "Hello"}]
-
-
-def test_scrub_reasoning_drops_tool_use_blocks():
-    """Reasoner has no tool support, so tool_use blocks must not round-trip."""
-    messages = [
-        Message(role="assistant", content=[
-            {"type": "text", "text": "I'll search"},
-            {"type": "tool_use", "id": "t1", "name": "search", "input": {"q": "x"}},
-        ]),
-    ]
-    scrubbed = _scrub_reasoning_for_reasoner(messages)
-    assert scrubbed[0].content == [{"type": "text", "text": "I'll search"}]
-
-
-def test_scrub_reasoning_drops_empty_assistant_turns():
-    """An assistant turn that collapses to empty after scrubbing is dropped
-    entirely — otherwise the reasoner 400s on a content-less message."""
-    messages = [
-        Message(role="user", content="hi"),
-        Message(role="assistant", content=[
-            {"type": "reasoning_content", "text": "only reasoning"},
-            {"type": "tool_use", "id": "t1", "name": "bash", "input": {}},
-        ]),
-        Message(role="user", content="follow-up"),
-    ]
-    scrubbed = _scrub_reasoning_for_reasoner(messages)
-    assert [m.role for m in scrubbed] == ["user", "user"]
-    assert scrubbed[1].content == "follow-up"
-
-
-def test_scrub_reasoning_passes_through_string_assistant_messages():
-    """Plain-string assistant content (no list-of-blocks) is not wastefully copied."""
-    msg = Message(role="assistant", content="Hello")
-    scrubbed = _scrub_reasoning_for_reasoner([msg])
-    assert scrubbed[0] is msg
-
-
-def test_scrub_reasoning_leaves_tool_role_untouched():
-    """Tool-role messages are passed through — the scrubbing only concerns
-    assistant-side blocks. The base class will still render them, but the
-    reasoner's refusal of tool roles surfaces as a 400 (by design); we
-    don't silently drop legitimate tool results."""
-    messages = [
-        Message(role="tool", content=[
-            {"type": "tool_result", "tool_use_id": "t1", "content": "ok"},
-        ]),
-    ]
-    scrubbed = _scrub_reasoning_for_reasoner(messages)
-    assert scrubbed == messages
-
-
-# ── 8. End-to-end reasoner path drops tools + reasoning before API call ──────
-
-
-@pytest.mark.asyncio
-async def test_complete_on_reasoner_strips_tools_and_reasoning():
-    """When ``model=deepseek-reasoner``, the provider scrubs tools + reasoning
-    blocks before delegating to the base ``complete``. Verified by inspecting
-    what hits ``chat.completions.create``.
-    """
-    from butterfly.core.tool import Tool
-
-    provider = _make_provider()
-    captured: list = []
-    provider._client = _fake_chat_client(captured)
-
-    async def _noop(**_kw):
-        return ""
-
-    tool = Tool(
-        name="search", description="Search", func=_noop,
-        schema={"type": "object", "properties": {}},
-    )
-
-    await provider.complete(
-        messages=[
-            Message(role="user", content="hi"),
-            Message(role="assistant", content=[
-                {"type": "reasoning_content", "text": "should be dropped"},
-                {"type": "text", "text": "previous answer"},
-            ]),
-            Message(role="user", content="now go"),
-        ],
-        tools=[tool],
-        system_prompt="sys",
-        model="deepseek-reasoner",
-    )
-
-    call = captured[0]
-    # Tool list dropped entirely.
-    assert "tools" not in call
-    # Assistant turn in api_messages contains only "previous answer".
-    assistant_entries = [m for m in call["messages"] if m["role"] == "assistant"]
-    assert len(assistant_entries) == 1
-    assert assistant_entries[0]["content"] == "previous answer"
+# ── 6. V4 tool-call round-trip preserves reasoning_content ────────────────────
 
 
 @pytest.mark.asyncio
@@ -531,7 +403,7 @@ async def test_complete_on_v4_preserves_tools_and_reasoning_roundtrip():
     assert entry["reasoning_content"] == "need to search"
 
 
-# ── 9. Registry wiring ────────────────────────────────────────────────────────
+# ── 7. Registry wiring ────────────────────────────────────────────────────────
 
 
 def test_registry_deepseek_resolves_to_deepseek_provider(monkeypatch):
@@ -568,7 +440,7 @@ def test_provider_name_reverse_lookup(monkeypatch):
     assert provider_name(p) == "deepseek"
 
 
-# ── 10. Model catalog wiring ──────────────────────────────────────────────────
+# ── 8. Model catalog wiring — V4 only (founder's opinion) ─────────────────────
 
 
 def test_catalog_has_deepseek_v4_pro_as_default():
@@ -578,10 +450,8 @@ def test_catalog_has_deepseek_v4_pro_as_default():
 
     models = get_provider_models("deepseek")
     names = [spec.model for spec in models]
-    # All four documented identifiers are registered.
-    for expected in ("deepseek-v4-pro", "deepseek-v4-flash",
-                     "deepseek-chat", "deepseek-reasoner"):
-        assert expected in names
+    # Only the V4 family — founder's opinion keeps legacy aliases out.
+    assert names == ["deepseek-v4-pro", "deepseek-v4-flash"]
 
     default = get_provider_default("deepseek")
     assert default is not None
@@ -596,7 +466,17 @@ def test_catalog_has_deepseek_v4_pro_as_default():
     assert spec.max_context_tokens == 1_000_000
 
 
-# ── 11. Supports-thinking class flag ──────────────────────────────────────────
+def test_catalog_excludes_legacy_deepseek_aliases():
+    """Legacy ``deepseek-chat`` / ``deepseek-reasoner`` must not be registered
+    — per founder's opinion the provider is V4-only and ships no scrubbing
+    path for the legacy reasoner."""
+    from butterfly.llm_engine.model_catalog import get_model_spec
+
+    assert get_model_spec("deepseek-chat") is None
+    assert get_model_spec("deepseek-reasoner") is None
+
+
+# ── 9. Supports-thinking class flag ───────────────────────────────────────────
 
 
 def test_deepseek_advertises_thinking_support():

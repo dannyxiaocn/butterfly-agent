@@ -14,15 +14,23 @@ DeepSeek-specific:
   ``message.reasoning_content``. The OpenAI base class already captures both
   channels into ``_pending_reasoning_content`` and surfaces the body through
   ``consume_extra_blocks()``, so the agent loop round-trips it to the next
-  turn automatically. DeepSeek's reasoner refuses inputs that echo
-  ``reasoning_content`` back — see :func:`_scrub_reasoning_for_reasoner`
-  below — so we strip it on the reasoner surface and keep it on the V4
-  family (which DOES require round-tripping when tool calls are involved).
+  turn automatically. V4-family models require this round-trip whenever a
+  tool call is involved.
 * **Prompt cache** — DeepSeek reports cache hit/miss at the top level
   (``prompt_cache_hit_tokens`` / ``prompt_cache_miss_tokens``) rather than
   under ``prompt_tokens_details.cached_tokens``. We extend usage extraction
   to read from either shape so downstream accounting stays correct whether
   DeepSeek tweaks the wire format or standardises on the OpenAI-shape.
+
+**Scope — this is from founder's opinion**
+    Only the **DeepSeek V4 family** (``deepseek-v4-pro`` and
+    ``deepseek-v4-flash``) is supported. The legacy ``deepseek-chat`` and
+    ``deepseek-reasoner`` aliases are intentionally out of scope: they are
+    obsolete (DeepSeek itself deprecates them in 2026-07), they lack
+    features the V4 contract ships with, and supporting them would require
+    carrying around reasoner-specific scrubbing code (no tool support,
+    refuses inbound ``reasoning_content``). Cutting the legacy surface
+    keeps the provider small and keeps the wire contract uniform.
 
 Environment
 -----------
@@ -31,25 +39,15 @@ Environment
                           self-hosted deployments. Defaults to
                           ``https://api.deepseek.com``.
 
-Model identifiers
------------------
-The catalog (``models.yaml``) ships with the DeepSeek V4 family — both the
-``deepseek-v4-pro`` top-tier model and the ``deepseek-v4-flash`` cost-
-optimised variant. The legacy ``deepseek-chat`` and ``deepseek-reasoner``
-aliases keep working (upstream keeps them until 2026-07-24) and route to
-the V4-flash non-thinking and thinking modes respectively.
-
 References
 ----------
 * https://api-docs.deepseek.com/api/create-chat-completion
 * https://api-docs.deepseek.com/guides/thinking_mode
 * https://api-docs.deepseek.com/guides/function_calling
-* https://api-docs.deepseek.com/guides/reasoning_model
 """
 from __future__ import annotations
 
 import os
-import re
 from typing import Any, ClassVar
 
 from butterfly.core.types import TokenUsage
@@ -68,24 +66,6 @@ _DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 # Efforts accepted by DeepSeek's thinking mode. ``max`` is documented as the
 # auto-applied value for long agent tasks; ``high`` is the interactive default.
 _DEEPSEEK_EFFORTS: frozenset[str] = frozenset({"high", "max"})
-
-# Reasoner models don't accept tool calls and refuse ``reasoning_content`` on
-# inbound messages. The anchor matches the legacy ``deepseek-reasoner`` alias
-# exactly; ``deepseek-v4-pro`` / ``-flash`` are treated as general-purpose
-# thinking-capable chat models (which DO round-trip reasoning_content with
-# tool calls per the V3.2+ thinking-mode guide).
-_DEEPSEEK_REASONER_ONLY_RE = re.compile(r"^deepseek-reasoner(?:$|-)", re.IGNORECASE)
-
-
-def _is_reasoner_only(model: str) -> bool:
-    """True when the model is the legacy pure-reasoning variant.
-
-    The legacy ``deepseek-reasoner`` is a thinking-only model with no tool
-    support and an explicit ban on echoing ``reasoning_content`` back. Tool
-    support was added in the V4 family (``deepseek-v4-pro`` / ``-flash``),
-    so only the legacy alias is subject to scrubbing.
-    """
-    return bool(_DEEPSEEK_REASONER_ONLY_RE.match((model or "").strip()))
 
 
 def _resolve_deepseek_api_key(explicit: str | None) -> str:
@@ -106,7 +86,7 @@ def _resolve_deepseek_api_key(explicit: str | None) -> str:
 
 
 class DeepSeekProvider(OpenAIProvider):
-    """LLM provider for the DeepSeek Chat Completions API.
+    """LLM provider for the DeepSeek V4 Chat Completions API.
 
     Thin subclass of :class:`OpenAIProvider` — DeepSeek's public surface is
     OpenAI-compatible so all message-building, tool-encoding, streaming and
@@ -120,10 +100,11 @@ class DeepSeekProvider(OpenAIProvider):
     * Usage extraction that reads DeepSeek's top-level
       ``prompt_cache_hit_tokens`` / ``prompt_cache_miss_tokens`` when the
       standard ``prompt_tokens_details.cached_tokens`` slot is absent.
-    * Legacy ``deepseek-reasoner`` scrubbing: the reasoner rejects inbound
-      ``reasoning_content`` and does not support tool calls, so we strip
-      tools + cached reasoning blocks before handing off to the base
-      ``complete``.
+
+    **Supported models (this is from founder's opinion)**
+        Only ``deepseek-v4-pro`` and ``deepseek-v4-flash``. Legacy
+        ``deepseek-chat`` / ``deepseek-reasoner`` aliases are deliberately
+        out of scope — see the module docstring for the rationale.
     """
 
     # DeepSeek fully supports thinking mode; the base class picks this up so
@@ -148,32 +129,6 @@ class DeepSeekProvider(OpenAIProvider):
             base_url=resolved_base,
             max_tokens=max_tokens,
             max_retries=max_retries,
-        )
-
-    # ------------------------------------------------------------------
-    # complete: scrub legacy reasoner inputs before delegating to base
-    # ------------------------------------------------------------------
-
-    async def complete(  # type: ignore[override]
-        self,
-        messages,
-        tools,
-        system_prompt,
-        model,
-        **kwargs: Any,
-    ):
-        if _is_reasoner_only(model):
-            # Reasoner refuses inbound reasoning_content and doesn't support
-            # tool calls. Strip both so a mixed history (e.g. upgraded from a
-            # V4 session) still round-trips cleanly.
-            messages = _scrub_reasoning_for_reasoner(messages)
-            tools = []
-        return await super().complete(
-            messages=messages,
-            tools=tools,
-            system_prompt=system_prompt,
-            model=model,
-            **kwargs,
         )
 
     # ------------------------------------------------------------------
@@ -247,54 +202,8 @@ class DeepSeekProvider(OpenAIProvider):
         )
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _scrub_reasoning_for_reasoner(messages: list) -> list:
-    """Strip ``reasoning_content`` blocks and tool turns for ``deepseek-reasoner``.
-
-    The legacy reasoner returns 400 on any inbound ``reasoning_content`` and
-    does not support tool calls at all. We return a shallow copy of each
-    assistant message with the offending blocks filtered out so a session
-    that previously ran on a tool-capable DeepSeek / Kimi model can be
-    replayed on the reasoner without rewriting history.
-
-    Non-assistant messages and plain-string assistant messages are passed
-    through untouched to avoid paying the copy cost on every turn.
-    """
-    from butterfly.core.types import Message  # local import: avoid cycle
-
-    scrubbed: list = []
-    for msg in messages:
-        if getattr(msg, "role", None) != "assistant":
-            scrubbed.append(msg)
-            continue
-        content = getattr(msg, "content", None)
-        if not isinstance(content, list):
-            scrubbed.append(msg)
-            continue
-        filtered = [
-            block
-            for block in content
-            if not (
-                isinstance(block, dict)
-                and block.get("type") in {"reasoning_content", "tool_use"}
-            )
-        ]
-        # If the assistant turn collapses to empty, drop it entirely — the
-        # reasoner would otherwise 400 on a content-less turn.
-        if not filtered:
-            continue
-        scrubbed.append(Message(role="assistant", content=filtered))
-    return scrubbed
-
-
 __all__ = [
     "DeepSeekProvider",
     "_DEEPSEEK_BASE_URL",
     "_DEEPSEEK_EFFORTS",
-    "_is_reasoner_only",
-    "_scrub_reasoning_for_reasoner",
 ]
