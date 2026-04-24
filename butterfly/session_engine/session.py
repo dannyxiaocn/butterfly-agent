@@ -14,6 +14,7 @@ from butterfly.core.guardian import Guardian
 from butterfly.core.hook import OnLoopEnd, OnLoopStart, OnTextChunk, OnToolCall, OnToolDone
 from butterfly.core.tool import Tool
 from butterfly.core.types import AgentResult, TokenUsage
+from butterfly.runtime import events as rt_events
 
 _log = logging.getLogger(__name__)
 from butterfly.session_engine.pending_inputs import (
@@ -239,6 +240,11 @@ class Session:
         # has entries for text-producing calls; this one is aligned 1:1
         # with turn.messages[assistant].
         self._current_turn_iteration_usages: list[dict] = []
+        # Phase 3a: `_make_text_chunk_callback` installs a per-run drain here
+        # so `_make_llm_call_end_callback` can flush the full text of the
+        # just-finished LLM call as an EVENT_AGENT_TEXT event into
+        # events_v1.jsonl. None outside a run.
+        self._pending_agent_text_drain = None
 
         # Idempotent directory creation — safe for both new and resumed sessions
         self.session_dir.mkdir(parents=True, exist_ok=True)
@@ -426,13 +432,25 @@ class Session:
                     "card": card_name,
                     "change": change,
                 })
-                # v2.0.30 — task_finish retires the card; any queued
-                # wakeups for it are now stale. Drop them so the agent
-                # doesn't wake up seconds later from a card it just
-                # declared done. Other cards' queued items are
-                # untouched.
+                # Phase 3a dual-write: new schema carries the card dict
+                # loaded from disk (None when absent). Live with legacy.
+                try:
+                    disk_card = load_card(self.tasks_dir, card_name)
+                    card_dict = disk_card.__dict__ if disk_card is not None else None
+                except Exception:  # noqa: BLE001 — best-effort
+                    card_dict = None
+                self._emit_event(
+                    rt_events.EVENT_TASK_CARD_CHANGED,
+                    {"name": card_name, "card": card_dict, "change": change},
+                )
                 if change == "finished":
+                    # v2.0.30 task_finish retires the card; any queued
+                    # wakeups for it are now stale.
                     self._prune_queue_for_task(card_name)
+                    self._emit_event(
+                        rt_events.EVENT_TASK_FINISHED,
+                        {"name": card_name, "reason": "tool"},
+                    )
 
             def _emit_todo_list_change(change: str) -> None:
                 # v2.0.37 — todo list is decoupled from task cards; it has
@@ -443,6 +461,17 @@ class Session:
                     "type": "todo_list_changed",
                     "change": change,
                 })
+                # Phase 3a dual-write: best-effort load of the current list
+                # from disk so the new event carries structured payload.
+                try:
+                    todo = load_todo_list(self.core_dir)
+                    todo_dict = todo.__dict__ if todo is not None else None
+                except Exception:  # noqa: BLE001 — best-effort
+                    todo_dict = None
+                self._emit_event(
+                    rt_events.EVENT_TODO_LIST_CHANGED,
+                    {"todo_list": todo_dict, "change": change},
+                )
 
             loader = ToolLoader(
                 default_workdir=str(self.session_dir),
@@ -627,6 +656,13 @@ class Session:
                 })
             except Exception:  # noqa: BLE001 — best-effort refresh hint
                 pass
+            # Phase 3a dual-write: mirror into events_v1.jsonl with the
+            # freshly-persisted card body so readers don't need a second
+            # disk hit to learn the new state.
+            self._emit_event(
+                rt_events.EVENT_TASK_CARD_CHANGED,
+                {"name": name, "card": disk.__dict__, "change": emit_change},
+            )
         return disk
 
     async def _poll_card_script(self, card: TaskCard) -> str | None:
@@ -671,14 +707,29 @@ class Session:
         if result.timed_out:
             event["timed_out"] = True
         self._append_event(event)
+        # Phase 3a dual-write: new schema collapses tag + stdout into a
+        # single payload; see DESIGN.md §3.5.
+        self._emit_event(
+            rt_events.EVENT_TASK_SCRIPT_CHECK,
+            {
+                "name": card.name,
+                "action": (parsed[0] if parsed else None),
+                "output": result.stdout[-_TASK_STDOUT_CAP:],
+            },
+        )
         if parsed is None:
+            reason = "timed_out" if result.timed_out else (
+                "non_zero_exit" if result.exit_code not in (0, None) else "unparseable"
+            )
             self._append_event({
                 "type": "task_check_error",
                 "card": card.name,
-                "reason": "timed_out" if result.timed_out else (
-                    "non_zero_exit" if result.exit_code not in (0, None) else "unparseable"
-                ),
+                "reason": reason,
             })
+            self._emit_event(
+                rt_events.EVENT_TASK_SCRIPT_ERROR,
+                {"name": card.name, "error": reason},
+            )
             return None
         tag, message = parsed
         if tag == "[start]":
@@ -702,6 +753,22 @@ class Session:
                 "card": card.name,
                 "change": "finished",
             })
+            # Phase 3a dual-write: mirror the script-driven finish onto the
+            # new log. Load fresh from disk since _persist_card_transition
+            # was called just above and the in-memory `card` is stale.
+            try:
+                fresh = load_card(self.tasks_dir, card.name)
+                card_dict = fresh.__dict__ if fresh is not None else None
+            except Exception:  # noqa: BLE001
+                card_dict = None
+            self._emit_event(
+                rt_events.EVENT_TASK_CARD_CHANGED,
+                {"name": card.name, "card": card_dict, "change": "finished"},
+            )
+            self._emit_event(
+                rt_events.EVENT_TASK_FINISHED,
+                {"name": card.name, "reason": "script_done"},
+            )
             self._prune_queue_for_task(card.name)
         return None
 
@@ -1100,6 +1167,9 @@ class Session:
             # stamp ``turn["agent_output_durations"]``. It's reset at the
             # START of the next _do_chat / _do_tick.
             self._text_output_started_at = None
+            # Phase 3a: drop the agent_text drain reference so the next
+            # run's fresh drain is never stepped on by a stale call.
+            self._pending_agent_text_drain = None
 
         self._save_chat_turn(
             item, old_len, result, get_tool_call_count(), had_thinking(),
@@ -1163,6 +1233,18 @@ class Session:
             "prompt": prompt,
             "ts": trigger_ts,
         })
+        # Phase 3a dual-write (§3.3). Task wakeup is just a user_input with
+        # source="task"; the legacy "task_wakeup" type is being retired
+        # per DESIGN.md §3.6.
+        self._emit_event(
+            rt_events.EVENT_USER_INPUT,
+            {
+                "text": prompt,
+                "source": "task",
+                "caller": card.name,
+                "display_name": None,
+            },
+        )
         # v2.0.36: re-read-then-mutate. Between housekeeping's poll (which
         # produced the ``card`` object we were handed) and this point, a
         # prior tick's agent may have written this card via todo_list or
@@ -1279,6 +1361,12 @@ class Session:
             clear_all_cards(self.tasks_dir)
             self._agent._history = history_snapshot
             self._append_event({"type": "task_finished", "card": card.name, "ts": trigger_ts})
+            # Phase 3a dual-write (§3.5). Agent emitted SESSION_FINISHED —
+            # all cards cleared, this one specifically reported.
+            self._emit_event(
+                rt_events.EVENT_TASK_FINISHED,
+                {"name": card.name, "reason": "session_finished"},
+            )
         else:
             # v2.0.30 — re-read the card from disk before flipping back to
             # pending. If the agent called ``task_finish`` during this
@@ -1553,12 +1641,38 @@ class Session:
                         if self.is_stopped():
                             self.set_status("active")
                             self._append_event({"type": "status", "value": "resumed"})
+                            # Phase 3a dual-write (§3.5) — resume is a
+                            # session_started event in the new schema.
+                            self._emit_event(
+                                rt_events.EVENT_SESSION_STARTED,
+                                {"reason": "resumed"},
+                            )
                         item = ChatItem(
                             content=content,
                             mode=mode,
                             source=source,
                             caller_type=caller_type,
                             user_input_ids=[msg_id] if msg_id else [],
+                        )
+                        # Phase 3a dual-write (§3.3). The user_input already
+                        # landed in context.jsonl upstream (web / CLI writer);
+                        # we mirror it into events_v1.jsonl at the point it
+                        # enters the dispatcher so both logs stay in sync.
+                        # `source` is the caller-layer string (user / panel
+                        # / task) — it mostly overlaps with DESIGN.md §3.3's
+                        # enum but "user" isn't in the schema; we map "user"
+                        # → "cli" (operator came from the CLI) and pass
+                        # everything else through so "task" / "sub_agent"
+                        # / "panel" survive.
+                        _new_source = "cli" if source == "user" else source
+                        self._emit_event(
+                            rt_events.EVENT_USER_INPUT,
+                            {
+                                "text": content,
+                                "source": _new_source,
+                                "caller": msg.get("tool_name") or msg.get("caller"),
+                                "display_name": msg.get("display_name"),
+                            },
                         )
                         await self._enqueue(item)
 
@@ -1586,6 +1700,12 @@ class Session:
                                     clear_all_cards(self.tasks_dir)
                                     write_session_status(self.system_dir, status="active", stopped_at=None)
                                     self._append_event({"type": "status", "value": "auto-expired after 5h stopped"})
+                                    # Phase 3a dual-write — auto-resume
+                                    # after stale stop is a session_started.
+                                    self._emit_event(
+                                        rt_events.EVENT_SESSION_STARTED,
+                                        {"reason": "auto_expired_after_5h_stopped"},
+                                    )
                             except Exception:
                                 pass
 
@@ -1631,6 +1751,11 @@ class Session:
         except asyncio.CancelledError:
             self._set_model_status("idle", "system")
             self._append_event({"type": "status", "value": "cancelled"})
+            # Phase 3a dual-write (§3.5). A cancel of the daemon loop is
+            # session_stopped with reason="cancelled".
+            self._emit_event(
+                rt_events.EVENT_SESSION_STOPPED, {"reason": "cancelled"}
+            )
             await self._shutdown_consumer()
             await self._shutdown_background_manager()
             await self._shutdown_terminal()
@@ -1639,6 +1764,10 @@ class Session:
 
         self._set_model_status("idle", "system")
         self._append_event({"type": "status", "value": "stopped"})
+        # Phase 3a dual-write (§3.5). Natural exit — stop_event fired.
+        self._emit_event(
+            rt_events.EVENT_SESSION_STOPPED, {"reason": "stopped"}
+        )
         await self._shutdown_consumer()
         await self._shutdown_background_manager()
         await self._shutdown_terminal()
@@ -1685,6 +1814,13 @@ class Session:
             "cancelled_run": cancelled_run,
             "killed_background": killed_background,
         })
+        # Phase 3a dual-write (§3.3). Bare ⚡ — text is None. An operator
+        # interrupt WITH text enters through _enqueue (ChatItem mode=
+        # interrupt) and fires user_input instead; that site has its own
+        # dual-write.
+        self._emit_event(
+            rt_events.EVENT_USER_INTERRUPT, {"text": None}
+        )
 
     async def _cascade_interrupt_background(self) -> int:
         """Best-effort kill of every running background runner.
@@ -1741,6 +1877,11 @@ class Session:
             await self._bg_manager.shutdown()
         except Exception as exc:
             self._append_event({"type": "error", "content": f"bg_manager shutdown: {exc}"})
+            # Phase 3a dual-write (§3.5).
+            self._emit_event(
+                rt_events.EVENT_ERROR,
+                {"text": f"bg_manager shutdown: {exc}", "context": "bg_shutdown"},
+            )
 
     async def _shutdown_terminal(self) -> None:
         """Snapshot cwd + hard-kill the persistent pty on daemon exit.
@@ -1759,6 +1900,11 @@ class Session:
         except (asyncio.TimeoutError, Exception) as exc:
             self._append_event(
                 {"type": "error", "content": f"terminal shutdown: {exc}"}
+            )
+            # Phase 3a dual-write (§3.5).
+            self._emit_event(
+                rt_events.EVENT_ERROR,
+                {"text": f"terminal shutdown: {exc}", "context": "terminal_shutdown"},
             )
 
     # ── Properties ─────────────────────────────────────────────────
@@ -1837,6 +1983,38 @@ class Session:
             with self._events_path.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(event, ensure_ascii=False) + "\n")
 
+    def _emit_event(
+        self,
+        event_type: str,
+        payload: dict | None = None,
+        *,
+        for_llm: bool | None = None,
+    ) -> None:
+        """Write one event to the session's ``events_v1.jsonl``.
+
+        Phase 3a side-channel emitter: every legacy ``_append_event`` /
+        ``_append_context`` write is paired with a call to this helper so the
+        new-format log accumulates alongside the old files without changing
+        any runtime behavior. Phase 3b flips ``Agent._history`` to read from
+        this log and retires the legacy writers.
+
+        ``payload`` is copied shallowly. ``for_llm`` defaults per the event
+        taxonomy in ``butterfly.runtime.events`` — callers almost never pass
+        it explicitly. OSError is swallowed with a WARNING so a transient
+        disk failure on the new path never masks a legacy write.
+        """
+        try:
+            rt_events.append_event(
+                self.system_dir,
+                event_type,
+                payload or {},
+                for_llm=for_llm,
+            )
+        except OSError as exc:
+            _log.warning(
+                "Session._emit_event failed for %s: %s", event_type, exc
+            )
+
     async def _dispatch_terminal_input(self, entry: dict) -> None:
         """Act on one entry from ``core/terminal/input.jsonl``.
 
@@ -1865,6 +2043,12 @@ class Session:
                     "id": entry_id,
                     "reason": "locked_by_agent",
                 })
+                # Phase 3a dual-write — surfaced via system_notice as there
+                # is no dedicated terminal_rejected type in the new schema.
+                self._emit_event(
+                    rt_events.EVENT_SYSTEM_NOTICE,
+                    {"text": "terminal input rejected: locked_by_agent", "level": "warn"},
+                )
                 return
             cmd_line = content.rstrip("\n")
             transcript = f"$ {cmd_line}\n{output}" if output else f"$ {cmd_line}"
@@ -1877,6 +2061,25 @@ class Session:
                 "content": transcript,
                 "id": f"terminal-{entry_id}" if entry_id else None,
             })
+            # Phase 3a dual-write (§3.3). source="task" and "sub_agent" are
+            # the two named sources in the schema; the panel's terminal
+            # wrapper is neither — surface it under the generic "cli" bucket
+            # with caller=terminal_user for disambiguation.
+            self._emit_event(
+                rt_events.EVENT_USER_INPUT,
+                {
+                    "text": transcript,
+                    "source": "cli",
+                    "caller": "terminal_user",
+                    "display_name": None,
+                },
+            )
+            # Also fire a terminal_input event for UI-side tracking (not
+            # for LLM — this is a system-side telemetry duplicate).
+            self._emit_event(
+                rt_events.EVENT_TERMINAL_INPUT,
+                {"text": content, "source": "web"},
+            )
         elif t == "interrupt":
             ok = await executor.user_interrupt()
             if not ok:
@@ -1885,6 +2088,11 @@ class Session:
                     "id": entry_id,
                     "reason": "locked_by_agent",
                 })
+                # Phase 3a dual-write — system_notice fallback (see above).
+                self._emit_event(
+                    rt_events.EVENT_SYSTEM_NOTICE,
+                    {"text": "terminal interrupt rejected: locked_by_agent", "level": "warn"},
+                )
 
     def _drain_background_events(self) -> None:
         """Non-blocking drain of the BackgroundTaskManager event queue.
@@ -2038,12 +2246,37 @@ class Session:
                     if _md:
                         event["sub_agent_mode"] = _md
                 self._append_context(event)
+                # Phase 3a dual-write (§3.3). Background-tool completions land
+                # with one of the four source enum values: cli / web / task /
+                # sub_agent.
+                self._emit_event(
+                    rt_events.EVENT_USER_INPUT,
+                    {
+                        "text": msg,
+                        "source": ("sub_agent" if is_sub_agent else "cli"),
+                        "caller": entry.tool_name,
+                        "display_name": (entry.meta or {}).get("display_name") if is_sub_agent else None,
+                    },
+                )
             self._append_event({
                 "type": "panel_update",
                 "tid": entry.tid,
                 "kind": evt.kind,
                 "status": entry.status,
             })
+            # Phase 3a dual-write (§3.5). panel_update maps onto
+            # panel_entry_changed — we ship the full entry.
+            self._emit_event(
+                rt_events.EVENT_PANEL_ENTRY_CHANGED,
+                {
+                    "entry": {
+                        "tid": entry.tid,
+                        "tool_name": entry.tool_name,
+                        "status": entry.status,
+                        "kind": evt.kind,
+                    }
+                },
+            )
 
             # Bridge events for the chat-side tool cell: progress keeps the
             # cell yellow with a refreshed summary; terminal kinds flip it
@@ -2061,6 +2294,16 @@ class Session:
                     "name": entry.tool_name,
                     "summary": summary,
                 })
+                # Phase 3a dual-write (§3.5). In the new schema tool_progress
+                # is keyed by tool_use_id; we use tid as the closest analog
+                # (bg tools don't carry the original tool_use_id here — the
+                # sync tool_done at call-time was marked is_background=true
+                # and the panel frontend pairs them by tid). Phase 3b needs
+                # to thread the real tool_use_id through; flagging.
+                self._emit_event(
+                    rt_events.EVENT_TOOL_PROGRESS,
+                    {"tool_use_id": entry.tid, "text": summary, "kind": "stdout"},
+                )
             elif evt.kind in ("completed", "stalled", "killed", "killed_by_restart"):
                 # tool_finalize tells the chat cell to leave the working
                 # state and render terminal styling.
@@ -2103,6 +2346,24 @@ class Session:
                     if truncated:
                         payload["result_truncated"] = True
                 self._append_event(payload)
+                # Phase 3a dual-write (§3.4). Background tool completion is
+                # an agent_tool_result in the new schema. We key on tid
+                # because the original tool_use_id isn't threaded into the
+                # BackgroundTaskManager entry today (Phase 3b TODO).
+                _bg_result = final_result if final_result is not None else ""
+                if final_result is not None and len(final_result) > _TOOL_OUTPUT_INLINE_CAP:
+                    _bg_result = final_result[:_TOOL_OUTPUT_INLINE_CAP]
+                self._emit_event(
+                    rt_events.EVENT_AGENT_TOOL_RESULT,
+                    {
+                        "tool_use_id": entry.tid,
+                        "tool_name": entry.tool_name,
+                        "result": _bg_result,
+                        "is_error": evt.kind in ("stalled", "killed", "killed_by_restart"),
+                        "is_background": True,
+                        "duration_ms": duration_ms,
+                    },
+                )
 
             # HUD sub-agent counter: any sub_agent state change re-broadcasts
             # the running tally (panel is the source of truth).
@@ -2112,6 +2373,13 @@ class Session:
     def _set_model_status(self, state: str, source: str) -> str:
         ts = datetime.now().isoformat()
         self._append_event({"type": "model_status", "state": state, "source": source, "ts": ts})
+        # Phase 3a dual-write (§3.5). status in the new schema is
+        # "running"/"idle"; model-name isn't known at this site, so it's
+        # None — Phase 3b can plumb the currently-selected model through.
+        self._emit_event(
+            rt_events.EVENT_MODEL_STATUS,
+            {"status": state, "model": None, "source": source},
+        )
         updates: dict = {"model_state": state, "model_source": source}
         if state == "idle":
             updates["last_run_at"] = ts
@@ -2151,6 +2419,12 @@ class Session:
                 "input": input,
                 "tool_use_id": tool_use_id,
             })
+            # Phase 3a dual-write (§3.4). Matches DESIGN.md exactly:
+            # {tool_use_id, tool_name, args}.
+            self._emit_event(
+                rt_events.EVENT_AGENT_TOOL_CALL,
+                {"tool_use_id": tool_use_id, "tool_name": name, "args": input},
+            )
             if ext:
                 # External hooks are 2-arg (pre-v2.0.19). Call with 2 positional
                 # args to preserve that contract; integrators that want the id
@@ -2224,6 +2498,26 @@ class Session:
                 payload["is_background"] = True
                 payload["tid"] = tid
             self._append_event(payload)
+            # Phase 3a dual-write (§3.4). For background tools the
+            # *final* tool_result arrives later via _drain_background_events'
+            # tool_finalize path; this is the inline placeholder (same as
+            # today's inline semantics for is_background=True). Readers
+            # of the new log will see TWO agent_tool_result events for
+            # background tool calls (one placeholder, one final) — Phase 3b
+            # needs to dedupe by filtering out is_background placeholders.
+            _payload_result = payload.get("result", "")
+            _duration = payload.get("duration_ms", 0)
+            self._emit_event(
+                rt_events.EVENT_AGENT_TOOL_RESULT,
+                {
+                    "tool_use_id": tool_use_id,
+                    "tool_name": name,
+                    "result": _payload_result,
+                    "is_error": bool(payload.get("is_error", False)),
+                    "is_background": bool(payload.get("is_background", False)),
+                    "duration_ms": _duration,
+                },
+            )
             # Newly-spawned sub_agent → bump HUD count immediately. Final
             # decrement happens in _drain_background_events when the runner
             # emits the terminal event.
@@ -2284,6 +2578,11 @@ class Session:
             "type": "sub_agent_count",
             "running": running,
         })
+        # Phase 3a dual-write (§3.5).
+        self._emit_event(
+            rt_events.EVENT_SUB_AGENT_COUNT,
+            {"count": running},
+        )
 
     def _make_loop_start_callback(self):
         """Return a composed on_loop_start callback.
@@ -2368,6 +2667,28 @@ class Session:
                 "toks_per_s": toks_per_s,
             }
             self._append_event(payload)
+            # Phase 3a dual-write (§3.5). Shape matches the new schema
+            # exactly.
+            self._emit_event(
+                rt_events.EVENT_LLM_CALL_USAGE,
+                {
+                    "iteration": iteration,
+                    "usage": usage.as_dict(),
+                    "context_tokens": ctx,
+                    "toks_per_s": toks_per_s,
+                    "duration_ms": duration_ms,
+                },
+            )
+            # Phase 3a dual-write (§3.4). Drain this call's accumulated
+            # assistant text to events_v1.jsonl as ONE agent_text event.
+            # No-op when the call produced no text (tool-only / thinking-
+            # only iterations).
+            drain = getattr(self, "_pending_agent_text_drain", None)
+            if drain is not None:
+                try:
+                    drain()
+                except Exception:  # noqa: BLE001 — best-effort
+                    _log.warning("agent_text drain raised", exc_info=True)
             # v2.0.23 round-7: emit ``iteration_usage`` so the LIVE frontend
             # can stamp the token footer on this iteration's tool cells + the
             # streaming agent cell. History replay already gets the footer via
@@ -2500,6 +2821,11 @@ class Session:
             "type": "todo_list_changed",
             "change": "reminder_injected",
         })
+        # Phase 3a dual-write (§3.5). Payload carries the list snapshot.
+        self._emit_event(
+            rt_events.EVENT_TODO_LIST_CHANGED,
+            {"todo_list": {"todos": todos}, "change": "reminder_injected"},
+        )
 
     def _emit_version_notice_if_stale(self) -> None:
         """Emit system_notice if the meta session is at a newer version than this session."""
@@ -2523,16 +2849,22 @@ class Session:
             return
         session_version = read_session_status(self.system_dir).get("agent_version")
         if meta_version and session_version and meta_version != session_version:
+            _notice_text = (
+                f"Agent updated to v{meta_version} "
+                f"(this session is on v{session_version}). "
+                "Start a new session to get the latest configuration."
+            )
             self._append_event({
                 "type": "system_notice",
-                "message": (
-                    f"Agent updated to v{meta_version} "
-                    f"(this session is on v{session_version}). "
-                    "Start a new session to get the latest configuration."
-                ),
+                "message": _notice_text,
                 "meta_version": meta_version,
                 "session_version": session_version,
             })
+            # Phase 3a dual-write (§3.5).
+            self._emit_event(
+                rt_events.EVENT_SYSTEM_NOTICE,
+                {"text": _notice_text, "level": "info"},
+            )
 
     def _reshape_history(self, new_content: str) -> str:
         """Clean up orphaned trailing user message before processing new user input.
@@ -2642,6 +2974,25 @@ class Session:
                 "text": text or "",
                 "duration_ms": duration_ms,
             })
+            # Phase 3a dual-write (§3.4). One event per closed block, as
+            # DESIGN.md §3.6 retires separate start/end events. Normal
+            # (non-interrupted) close path; the interrupted-placeholder
+            # that on_thinking_start seeds will be emitted from
+            # _do_chat/_do_tick's cancel handlers via the persisted
+            # thinking_blocks list (Phase 3b will formalise — for now
+            # we only mirror successful closes).
+            self._emit_event(
+                rt_events.EVENT_AGENT_THINKING,
+                {
+                    "text": text or "",
+                    "signature": None,
+                    "summary": None,
+                    "redacted": False,
+                    "interrupted": False,
+                    "reasoning_tokens": None,
+                    "duration_ms": duration_ms,
+                },
+            )
             # Upgrade the placeholder seeded by on_thinking_start (clear the
             # interrupted flag, fill body + duration). Falls back to append
             # for the synthesized/defensive path so the persisted list still
@@ -2718,8 +3069,36 @@ class Session:
 
         buf: list[str] = []
         buf_len: list[int] = [0]
+        # Phase 3a: per-LLM-call accumulator. Unlike `buf` (which is drained
+        # to partial_text events at each 150-char threshold), this one
+        # accumulates the FULL text of one LLM call and is drained once
+        # (as an agent_text event into events_v1.jsonl) on demand via
+        # `emit_agent_text_if_any()`. Exposed via an attribute on the
+        # returned callback so on_llm_call_end can invoke it per-call,
+        # keeping §3.4's "one agent_text per call that produced text"
+        # invariant. flush() (called at turn termination) drains anything
+        # left over that on_llm_call_end didn't fire for (e.g. cancelled
+        # mid-stream before the call-end hook).
+        full_buf: list[str] = []
         ext = self.on_text_chunk
         FLUSH_THRESHOLD = 150
+
+        def _emit_agent_text_if_any() -> None:
+            if not full_buf:
+                return
+            full_text = "".join(full_buf)
+            full_buf.clear()
+            self._emit_event(
+                rt_events.EVENT_AGENT_TEXT,
+                {"text": full_text, "model": getattr(self._agent, "model", None)},
+            )
+
+        # Expose the per-call drain on `self` so _make_llm_call_end_callback
+        # can invoke it without a cross-closure reference. Each new
+        # _make_text_chunk_callback installs a fresh one; the llm_call_end
+        # closure reads `self._pending_agent_text_drain` at fire time so a
+        # follow-up run's drain is never called against a stale buffer.
+        self._pending_agent_text_drain = _emit_agent_text_if_any
 
         def on_chunk(chunk: str) -> None:
             # v2.0.20: stamp the "first chunk of this LLM call" timestamp so
@@ -2734,6 +3113,7 @@ class Session:
                 self._append_event({"type": "agent_output_start"})
             buf.append(chunk)
             buf_len[0] += len(chunk)
+            full_buf.append(chunk)
             if buf_len[0] >= FLUSH_THRESHOLD:
                 accumulated = "".join(buf)
                 self._append_event({"type": "partial_text", "content": accumulated})
@@ -2748,8 +3128,13 @@ class Session:
                 self._append_event({"type": "partial_text", "content": "".join(buf)})
                 buf.clear()
                 buf_len[0] = 0
+            # Phase 3a dual-write (§3.4). Drain anything on_llm_call_end
+            # didn't emit (typically only happens when a turn is cancelled
+            # before the call-end hook fires).
+            _emit_agent_text_if_any()
 
         on_chunk.flush = flush  # type: ignore[attr-defined]
+        on_chunk.emit_agent_text_if_any = _emit_agent_text_if_any  # type: ignore[attr-defined]
         return on_chunk
 
     def _serialize_turn_messages(self, messages: list) -> list[dict]:
