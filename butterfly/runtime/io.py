@@ -31,22 +31,34 @@ from typing import Any, Iterable, Iterator
 from butterfly.runtime.events import (
     EVENT_ASSET_CHANGED,
     EVENT_CONFIG_CHANGED,
+    EVENT_CONTROL_START,
+    EVENT_CONTROL_STOP,
     EVENT_ERROR,
     EVENT_LLM_CALL_USAGE,
     EVENT_MODEL_STATUS,
     EVENT_PANEL_ENTRY_CHANGED,
     EVENT_PROMPT_CHANGED,
+    EVENT_SESSION_CREATED,
+    EVENT_SESSION_DELETED,
     EVENT_SUB_AGENT_COUNT,
     EVENT_SYSTEM_NOTICE,
     EVENT_TASK_CARD_CHANGED,
     EVENT_TASK_FINISHED,
     EVENT_TASK_SCRIPT_CHECK,
     EVENT_TASK_SCRIPT_ERROR,
+    EVENT_TERMINAL_INPUT,
     EVENT_TERMINAL_LOG,
     EVENT_TERMINAL_STATE,
     EVENT_TODO_LIST_CHANGED,
     EVENT_TOOL_PROGRESS,
+    EVENT_USER_INPUT,
+    EVENT_USER_INTERRUPT,
     Event,
+    SOURCE_CLI,
+    SOURCE_SUBAGENT,
+    SOURCE_TASK,
+    SOURCE_WEB,
+    append_event as _events_append_event,
 )
 from butterfly.runtime.events import (
     latest_event_id as _events_latest_event_id,
@@ -483,6 +495,661 @@ def list_agents() -> list[str]:
     return _svc_agents(agenthub_dir)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# WRITERS — Phase 5
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Every function below is a mutating operation on a session's state.
+# DESIGN.md §5.5 (API) + §5.6 (write semantics) + §5.7 (writer-derived
+# state) spell out the contract:
+#
+#   1. Validate inputs. Raise ``ValueError`` / ``FileNotFoundError`` with
+#      a clear message on bad input.
+#   2. Resolve the session dir (via :func:`_resolve_session_dir`).
+#   3. **Append the event to events_v1.jsonl FIRST** using the Phase 1
+#      :func:`append_event` primitive. The event log is leading truth
+#      (§5.6) — if a side-effect fails later, a future
+#      ``rebuild_views(session_id)`` can reconcile.
+#   4. Perform the side-effect (write task card, update config.yaml,
+#      notify the live daemon, etc.).
+#   5. Return the Event.
+#
+# Daemon-interacting writers (send_message / interrupt / stop / start /
+# terminal_input) delegate the daemon-notify to existing service or
+# bridge functions AFTER the event is written. Phase 11 removes those
+# delegations once the daemon watches events_v1 natively. Each delegation
+# is flagged with a TODO(phase11) comment.
+#
+# Invariant I5: the web UI (and CLI) writes through these functions only
+# — no direct file IO elsewhere. Invariant I6: every function here is
+# CLI-callable (Phase 6 wires ``butterfly io <name>`` reflection).
+
+
+# ── Validators ────────────────────────────────────────────────────────────────
+
+# Prompt / asset names — mirror butterfly.service.config_service so a
+# writer behaves identically to its reader peer. Keeping the whitelist
+# local avoids a reader-time import of config_service.
+_ALLOWED_PROMPT_NAMES: frozenset[str] = frozenset({"system", "task", "env"})
+_ALLOWED_ASSET_NAMES: frozenset[str] = frozenset({"tools", "skills"})
+
+
+def _require_existing_session(session_id: str) -> Path:
+    """Resolve + confirm the session exists. Mirrors reader behaviour but
+    surfaces ``FileNotFoundError`` at the writer surface so the §5.6
+    "validate first, then append" order is explicit.
+    """
+    return _resolve_session_dir(session_id)
+
+
+# ── Session lifecycle ────────────────────────────────────────────────────────
+
+
+def create_session(
+    session_id: str,
+    *,
+    agent: str = "default",
+    display_name: str | None = None,
+    init_from: str | None = None,
+) -> Event:
+    """Create a fresh session and log the creation event.
+
+    Order (§5.6):
+      1. Validate inputs.
+      2. Initialise the session directory structure (manifest, core/,
+         events_v1.jsonl) via
+         :func:`butterfly.service.sessions_service.create_session`, which
+         materialises the canonical layout.
+      3. Append ``EVENT_SESSION_CREATED`` to the new session's
+         events_v1.jsonl. The event logically leads the session — it is
+         always the id=1 entry.
+      4. Return the Event.
+
+    Rationale for the directory-first ordering: events_v1.jsonl lives
+    INSIDE the session dir; we cannot append before the dir exists. Step
+    2 is a controlled, idempotent setup that doesn't invoke the daemon
+    or any derived write on peer sessions, so the "event-first" principle
+    (§5.6) is preserved in spirit — it still precedes the side-effect
+    that the event describes (i.e. notification to a consumer; the
+    session dir is merely a prerequisite).
+
+    ``init_from`` is reserved for the "fork an existing session" feature;
+    Phase 5 does NOT implement it. Passing a non-None value raises
+    ``NotImplementedError`` so callers don't silently get a fresh
+    session when they asked for a clone.
+    """
+    _validate_session_id(session_id)
+    if init_from is not None:
+        raise NotImplementedError(
+            "create_session: init_from=<id> (fork) is reserved for a future phase"
+        )
+
+    # Duplicate-id rejection before we touch any filesystem state.
+    live = _SYSTEM_SESSIONS_DIR / session_id
+    if live.is_dir():
+        raise FileExistsError(f"session {session_id!r} already exists")
+
+    from butterfly.service.sessions_service import create_session as _svc_create
+
+    manifest = _svc_create(
+        session_id,
+        agent,
+        _SESSIONS_DIR,
+        _SYSTEM_SESSIONS_DIR,
+        display_name=display_name,
+    )
+    system_dir = _SYSTEM_SESSIONS_DIR / session_id
+    return _events_append_event(
+        system_dir,
+        EVENT_SESSION_CREATED,
+        {"manifest": manifest},
+    )
+
+
+def delete_session(session_id: str) -> Event:
+    """Log a deletion event then rmtree the session dirs.
+
+    The event is appended BEFORE the directory is removed (§5.6) so a
+    process reading events_v1 in the narrow window between event-write
+    and rmtree observes the deletion signal. The event itself disappears
+    with the directory — that's fine: the FUNCTIONAL signal is
+    ``list_sessions()`` no longer returning the id.
+    """
+    system_dir = _require_existing_session(session_id)
+
+    # Event first.
+    event = _events_append_event(system_dir, EVENT_SESSION_DELETED, {})
+
+    # Side-effect: remove both sibling dirs. Delegates to the service so
+    # the status-file flip (write_session_status stopped) happens too.
+    # TODO(phase11): inline the directory teardown here once the service
+    # layer is retired.
+    from butterfly.service.sessions_service import delete_session as _svc_delete
+
+    _svc_delete(session_id, _SESSIONS_DIR, _SYSTEM_SESSIONS_DIR)
+    return event
+
+
+def start_session(session_id: str) -> Event:
+    """Emit ``control_start`` + flip daemon status to active.
+
+    Phase 5 dual-write: the event is the forward-looking signal (Phase
+    11 has the daemon watching events_v1 natively) and the service call
+    keeps today's status.json / pause-card behaviour intact.
+    """
+    system_dir = _require_existing_session(session_id)
+    event = _events_append_event(system_dir, EVENT_CONTROL_START, {})
+
+    # TODO(phase11): remove the service delegation once the daemon
+    # reacts to EVENT_CONTROL_START directly.
+    from butterfly.service.sessions_service import start_session as _svc_start
+
+    _svc_start(session_id, _SYSTEM_SESSIONS_DIR)
+    return event
+
+
+def stop_session(session_id: str, *, reason: str = "user") -> Event:
+    """Emit ``control_stop`` + flip daemon status to stopped."""
+    system_dir = _require_existing_session(session_id)
+    event = _events_append_event(
+        system_dir, EVENT_CONTROL_STOP, {"reason": str(reason)}
+    )
+
+    # TODO(phase11): remove the service delegation once the daemon
+    # reacts to EVENT_CONTROL_STOP directly.
+    from butterfly.service.sessions_service import stop_session as _svc_stop
+
+    _svc_stop(session_id, _SYSTEM_SESSIONS_DIR)
+    return event
+
+
+# ── Input ────────────────────────────────────────────────────────────────────
+
+
+def send_message(
+    session_id: str,
+    text: str,
+    *,
+    source: str = "cli",
+    caller: str | None = None,
+    display_name: str | None = None,
+) -> Event:
+    """Append ``user_input`` then notify the live daemon (if any).
+
+    ``source`` ∈ schema enum (cli / web / task / parent-agent). ``caller``
+    carries the task card name (for the ``task`` source) or parent tool
+    name (for the parent-agent source); ``None`` otherwise.
+
+    Event is appended first (§5.6). Daemon notification (via
+    :class:`BridgeSession`) is a best-effort post-event side-effect;
+    failures don't suppress the event because the event itself is the
+    canonical record — a daemon restart will pick up the pending input
+    via ``Session._rebuild_history_from_events``.
+    """
+    if not isinstance(text, str):
+        raise ValueError("send_message: text must be a string")
+    _valid_sources = {SOURCE_CLI, SOURCE_WEB, SOURCE_TASK, SOURCE_SUBAGENT}
+    if source not in _valid_sources:
+        raise ValueError(
+            f"send_message: unknown source {source!r}; "
+            f"expected one of {sorted(_valid_sources)}"
+        )
+    system_dir = _require_existing_session(session_id)
+
+    event = _events_append_event(
+        system_dir,
+        EVENT_USER_INPUT,
+        {
+            "text": text,
+            "source": source,
+            "caller": caller,
+            "display_name": display_name,
+        },
+    )
+
+    # TODO(phase11): daemon watches events_v1 natively — drop this call.
+    # Today it writes a companion ``user_input`` entry to context.jsonl
+    # and wakes the daemon via FileIPC; both are legacy channels.
+    try:
+        from butterfly.service.messages_service import send_message as _svc_send
+
+        _svc_send(
+            session_id,
+            text,
+            _SYSTEM_SESSIONS_DIR,
+            caller=caller or "human",
+            mode="interrupt",
+        )
+    except (FileNotFoundError, ValueError):
+        # Daemon-notify is best-effort; event is already persisted.
+        pass
+    return event
+
+
+def interrupt_session(session_id: str, *, text: str | None = None) -> Event:
+    """Append ``user_interrupt`` then cancel the in-flight tick.
+
+    One event covers both roles (§3.3):
+      - ``text`` is ``None``: bare ⚡. ``llm_context`` skips the event
+        when it builds messages, so no pollution of LLM context. The
+        daemon sees the event and cancels.
+      - ``text`` is a string: ⚡ with message. The event becomes a user
+        turn in LLM context AND the daemon cancels first.
+
+    We deliberately do NOT emit a separate ``EVENT_CONTROL_INTERRUPT``
+    — the user-side event already carries the daemon signal through the
+    event type, and emitting both would double-log the action.
+    """
+    if text is not None and not isinstance(text, str):
+        raise ValueError("interrupt_session: text must be a string or None")
+    system_dir = _require_existing_session(session_id)
+
+    event = _events_append_event(
+        system_dir, EVENT_USER_INTERRUPT, {"text": text}
+    )
+
+    # TODO(phase11): daemon watches events_v1 natively — drop this call.
+    try:
+        from butterfly.service.messages_service import (
+            interrupt_session as _svc_interrupt,
+        )
+
+        _svc_interrupt(session_id, _SYSTEM_SESSIONS_DIR)
+    except (FileNotFoundError, ValueError):
+        pass
+
+    # If the caller passed text, also deliver it as a user message so the
+    # in-flight daemon has it in its inbox — matches the legacy ⚡+msg
+    # behaviour. The event is already logged above; this is the
+    # daemon-notify leg only.
+    #
+    # KNOWN ISSUE (Phase 11 fix): the service.send_message path triggers
+    # the daemon's Phase 3a dual-emit, which will write a SECOND
+    # EVENT_USER_INPUT event to events_v1 for the same text. In live
+    # sessions this means `build_llm_context` sees the interrupt text
+    # twice (once as user_interrupt, once as user_input). Phase 11
+    # collapses this by having the daemon watch events_v1 natively
+    # instead of going through service.send_message — the daemon will
+    # then NOT re-emit on receipt, killing the duplication. Until then
+    # the duplication is a visible but bounded cosmetic artifact on
+    # live ⚡+message flows.
+    if text:
+        try:
+            from butterfly.service.messages_service import (
+                send_message as _svc_send,
+            )
+
+            _svc_send(
+                session_id,
+                text,
+                _SYSTEM_SESSIONS_DIR,
+                caller="human",
+                mode="interrupt",
+            )
+        except (FileNotFoundError, ValueError):
+            pass
+    return event
+
+
+# ── Tasks / todo ─────────────────────────────────────────────────────────────
+
+
+def upsert_task(
+    session_id: str,
+    name: str,
+    *,
+    description: str | None = None,
+    script: str | None = None,
+    check_interval: float | None = None,
+    notes: str | None = None,
+    progress: str | None = None,
+) -> Event:
+    """Create or update a task card. Event-first.
+
+    Order (§5.6):
+      1. Validate name (reuse the ``_card_path`` validator via a dry-run
+         call inside session_engine.task_cards).
+      2. Resolve session, load any existing card, apply the patch in
+         memory.
+      3. Append ``EVENT_TASK_CARD_CHANGED`` with the PROJECTED card dict
+         — this is the authoritative description of the change.
+      4. Write the card file (``save_card``) + the script file
+         (``write_script``) if a script body was supplied.
+      5. Return the event.
+
+    If the task doesn't exist AND no mutation parameters are given,
+    raise ``ValueError("nothing to upsert")``. This guards against
+    ``upsert_task(sid, "foo")`` silently creating a name-only card.
+
+    ``notes`` maps to the card's ``comments`` field (the task_cards
+    dataclass field is named ``comments``; we expose ``notes`` at the IO
+    surface because the old tool spec normalised on "notes").
+    """
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError("upsert_task: name must be a non-empty string")
+
+    system_dir = _require_existing_session(session_id)
+    user_dir = _resolve_user_dir(session_id)
+    tasks_dir = user_dir / "core" / "tasks"
+
+    from butterfly.session_engine.task_cards import (
+        TaskCard,
+        _card_path,  # name validator
+        load_card,
+        save_card,
+        write_script,
+    )
+
+    # Validate the name by running it through ``_card_path`` — raises on
+    # traversal / empty / "." name patterns.
+    _card_path(tasks_dir, name)
+
+    existing = load_card(tasks_dir, name)
+    nothing_to_do = (
+        existing is None
+        and description is None
+        and script is None
+        and check_interval is None
+        and notes is None
+        and progress is None
+    )
+    if nothing_to_do:
+        raise ValueError(
+            "upsert_task: nothing to upsert — card does not exist and no "
+            "fields supplied"
+        )
+
+    from datetime import datetime as _dt
+
+    if existing is not None:
+        card = TaskCard(
+            name=name,
+            description=description if description is not None else existing.description,
+            status=existing.status,
+            check_interval=(
+                float(check_interval) if check_interval is not None
+                else existing.check_interval
+            ),
+            created_at=existing.created_at,
+            last_checked_at=existing.last_checked_at,
+            last_started_at=existing.last_started_at,
+            last_finished_at=existing.last_finished_at,
+            comments=notes if notes is not None else existing.comments,
+            progress=progress if progress is not None else existing.progress,
+        )
+    else:
+        # Default cadence mirrors tasks_service: duty=7200s, others=3600s.
+        default_interval = 7200.0 if name == "duty" else 3600.0
+        card = TaskCard(
+            name=name,
+            description=description or "",
+            status="pending",
+            check_interval=(
+                float(check_interval) if check_interval is not None
+                else default_interval
+            ),
+            created_at=_dt.now().isoformat(),
+            comments=notes or "",
+            progress=progress or "",
+        )
+
+    # Event first (§5.6). Payload carries the full projected card so a
+    # consumer can materialise state without re-reading the file.
+    event = _events_append_event(
+        system_dir,
+        EVENT_TASK_CARD_CHANGED,
+        {"name": name, "card": card.to_dict()},
+    )
+
+    # Side-effect: persist card + script.
+    save_card(tasks_dir, card)
+    if script is not None:
+        write_script(tasks_dir, name, script)
+    return event
+
+
+def delete_task(session_id: str, name: str) -> Event:
+    """Log the deletion then remove the card + script files.
+
+    DESIGN.md §3.5 does not list a dedicated ``task_deleted`` event —
+    ``task_card_changed`` carries both create/update and removal, with
+    ``card=None`` signalling "gone". That keeps the event taxonomy
+    smaller at the cost of one conditional on the reducer side.
+    """
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError("delete_task: name must be a non-empty string")
+    system_dir = _require_existing_session(session_id)
+    tasks_dir = _resolve_user_dir(session_id) / "core" / "tasks"
+
+    from butterfly.session_engine.task_cards import (
+        delete_card,
+        load_card,
+    )
+
+    if load_card(tasks_dir, name) is None:
+        raise FileNotFoundError(
+            f"delete_task: card {name!r} does not exist in {session_id!r}"
+        )
+
+    event = _events_append_event(
+        system_dir,
+        EVENT_TASK_CARD_CHANGED,
+        {"name": name, "card": None},
+    )
+    delete_card(tasks_dir, name)
+    return event
+
+
+def upsert_todo_list(session_id: str, todo_list: dict) -> Event:
+    """Replace the session's todo list snapshot. Event-first."""
+    if not isinstance(todo_list, dict):
+        raise ValueError("upsert_todo_list: todo_list must be a dict")
+
+    system_dir = _require_existing_session(session_id)
+    core_dir = _resolve_user_dir(session_id) / "core"
+
+    from butterfly.session_engine.todo_list import TodoList, save_todo_list
+
+    try:
+        todo = TodoList.from_dict(todo_list)
+    except Exception as exc:  # defensive — from_dict is tolerant but guard anyway
+        raise ValueError(f"upsert_todo_list: invalid todo_list payload: {exc}") from exc
+
+    event = _events_append_event(
+        system_dir,
+        EVENT_TODO_LIST_CHANGED,
+        {"todo_list": todo.to_dict()},
+    )
+    save_todo_list(core_dir, todo)
+    return event
+
+
+# ── Panel / terminal ─────────────────────────────────────────────────────────
+
+
+def kill_panel_entry(session_id: str, tid: str) -> Event:
+    """Mark a panel entry as killed. Event-first.
+
+    The caller is responsible for any subprocess-side teardown (the web
+    handler today calls ``BackgroundTaskManager.kill`` on the daemon
+    side); this IO surface updates the file + fires the event so the
+    UI reflects the kill immediately.
+    """
+    if not isinstance(tid, str) or not tid.strip():
+        raise ValueError("kill_panel_entry: tid must be a non-empty string")
+    system_dir = _require_existing_session(session_id)
+    panel_dir = _resolve_user_dir(session_id) / "core" / "panel"
+
+    from butterfly.session_engine.panel import (
+        STATUS_KILLED,
+        load_entry,
+        save_entry,
+    )
+
+    entry = load_entry(panel_dir, tid)
+    if entry is None:
+        raise FileNotFoundError(
+            f"kill_panel_entry: tid {tid!r} not found in {session_id!r}"
+        )
+
+    import time as _time
+
+    entry.status = STATUS_KILLED
+    entry.finished_at = _time.time()
+
+    event = _events_append_event(
+        system_dir,
+        EVENT_PANEL_ENTRY_CHANGED,
+        {"entry": entry.to_json()},
+    )
+    save_entry(panel_dir, entry)
+    return event
+
+
+def terminal_input(
+    session_id: str,
+    text: str,
+    *,
+    source: str = "web",
+) -> Event:
+    """Enqueue one line of terminal input. Event-first.
+
+    Appends a ``terminal_input`` event (carries text + source for
+    telemetry) then writes the entry to ``core/terminal/input.jsonl`` so
+    the TerminalExecutor consumes it. The queue file is the effective
+    channel today; Phase 11 can drop it once the executor watches
+    events_v1 natively.
+    """
+    if not isinstance(text, str):
+        raise ValueError("terminal_input: text must be a string")
+    if source not in {"web", "cli"}:
+        raise ValueError(f"terminal_input: unknown source {source!r}")
+    system_dir = _require_existing_session(session_id)
+
+    event = _events_append_event(
+        system_dir,
+        EVENT_TERMINAL_INPUT,
+        {"text": text, "source": source},
+    )
+
+    # TODO(phase11): drop this — executor will watch events_v1.
+    from butterfly.service.terminal_service import enqueue_input as _svc_enqueue
+
+    _svc_enqueue(_SESSIONS_DIR, session_id, kind="input", content=text)
+    return event
+
+
+def terminal_interrupt(session_id: str) -> Event:
+    """Interrupt the terminal's foreground process. Event-first.
+
+    Encoded as a ``terminal_input`` event with ``text=None`` — the
+    schema (§3.5) has one terminal-input event type; the None sentinel
+    distinguishes interrupt from a regular line.
+    """
+    system_dir = _require_existing_session(session_id)
+
+    event = _events_append_event(
+        system_dir,
+        EVENT_TERMINAL_INPUT,
+        {"text": None, "source": "web"},
+    )
+
+    # TODO(phase11): drop this — executor will watch events_v1.
+    from butterfly.service.terminal_service import enqueue_input as _svc_enqueue
+
+    _svc_enqueue(_SESSIONS_DIR, session_id, kind="interrupt", content=None)
+    return event
+
+
+# ── Config / prompts / assets ────────────────────────────────────────────────
+
+
+def update_config(session_id: str, key: str, value: Any) -> Event:
+    """Update one key in ``core/config.yaml``. Event-first.
+
+    Key is validated against the config whitelist
+    (``DEFAULT_CONFIG`` keys) to prevent schema pollution — matches the
+    service-layer guard in :func:`butterfly.service.config_service.update_config`.
+    """
+    from butterfly.session_engine.session_config import DEFAULT_CONFIG
+
+    if not isinstance(key, str) or key not in DEFAULT_CONFIG:
+        raise ValueError(
+            f"update_config: unknown key {key!r}; "
+            f"allowed={sorted(DEFAULT_CONFIG.keys())}"
+        )
+    system_dir = _require_existing_session(session_id)
+
+    event = _events_append_event(
+        system_dir, EVENT_CONFIG_CHANGED, {"key": key}
+    )
+
+    # Side-effect: single-key update via the service's params path so
+    # duty-card sync + whitelist re-check still fire.
+    # TODO(phase11): inline the yaml-merge once we retire the service.
+    from butterfly.service.config_service import update_config as _svc_update
+
+    _svc_update(
+        session_id,
+        _SESSIONS_DIR,
+        _SYSTEM_SESSIONS_DIR,
+        {key: value},
+    )
+    return event
+
+
+def update_prompt(session_id: str, name: str, content: str) -> Event:
+    """Overwrite ``core/<name>.md`` for prompts. Event-first.
+
+    ``name`` ∈ {``system``, ``task``, ``env``}. Any other name raises
+    ``ValueError`` (prevents directory traversal).
+    """
+    if name not in _ALLOWED_PROMPT_NAMES:
+        raise ValueError(
+            f"update_prompt: unknown prompt {name!r}; "
+            f"expected one of {sorted(_ALLOWED_PROMPT_NAMES)}"
+        )
+    if not isinstance(content, str):
+        raise ValueError("update_prompt: content must be a string")
+    system_dir = _require_existing_session(session_id)
+
+    event = _events_append_event(
+        system_dir, EVENT_PROMPT_CHANGED, {"name": name}
+    )
+
+    # TODO(phase11): inline once service retires.
+    from butterfly.service.config_service import update_prompt_md as _svc_prompt
+
+    _svc_prompt(session_id, _SESSIONS_DIR, _SYSTEM_SESSIONS_DIR, name, content)
+    return event
+
+
+def update_asset(session_id: str, name: str, content: str) -> Event:
+    """Overwrite ``core/<name>.md`` for assets. Event-first.
+
+    ``name`` ∈ {``tools``, ``skills``}. Any other name raises
+    ``ValueError``.
+    """
+    if name not in _ALLOWED_ASSET_NAMES:
+        raise ValueError(
+            f"update_asset: unknown asset {name!r}; "
+            f"expected one of {sorted(_ALLOWED_ASSET_NAMES)}"
+        )
+    if not isinstance(content, str):
+        raise ValueError("update_asset: content must be a string")
+    system_dir = _require_existing_session(session_id)
+
+    event = _events_append_event(
+        system_dir, EVENT_ASSET_CHANGED, {"name": name}
+    )
+
+    # TODO(phase11): inline once service retires.
+    from butterfly.service.config_service import update_asset_md as _svc_asset
+
+    _svc_asset(session_id, _SESSIONS_DIR, _SYSTEM_SESSIONS_DIR, name, content)
+    return event
+
+
 # ── Public surface declaration ───────────────────────────────────────────────
 
 __all__ = [
@@ -490,9 +1157,16 @@ __all__ = [
     "list_sessions",
     "get_session",
     "get_status",
+    "create_session",
+    "delete_session",
+    "start_session",
+    "stop_session",
     # events
     "read_events",
     "latest_event_id",
+    # input
+    "send_message",
+    "interrupt_session",
     # derived
     "read_llm_context",
     "read_display_history",
@@ -506,6 +1180,16 @@ __all__ = [
     "read_panel_entry",
     "read_terminal_state",
     "read_terminal_log",
+    # writes
+    "upsert_task",
+    "delete_task",
+    "upsert_todo_list",
+    "kill_panel_entry",
+    "terminal_input",
+    "terminal_interrupt",
+    "update_config",
+    "update_prompt",
+    "update_asset",
     # catalogs
     "list_models",
     "list_agents",
