@@ -330,6 +330,12 @@ def _add_stop_parser(subparsers) -> None:
 
 
 def cmd_stop(args) -> int:
+    # Phase 6 retargeting was considered but deferred: the legacy
+    # --system-base knob lets tests point the CLI at a tmp repo, while
+    # runtime.io uses module-level constants. Retargeting here either
+    # requires reentrant-unsafe monkeypatching or breaking the tmp-path
+    # test fixtures wholesale. Phase 7 drops --system-base entirely and
+    # this command becomes a one-liner into _io.stop_session.
     from butterfly.service import stop_session
     try:
         if not stop_session(args.session_id, args.system_base):
@@ -356,6 +362,8 @@ def _add_start_parser(subparsers) -> None:
 
 
 def cmd_start(args) -> int:
+    # See cmd_stop: retargeting deferred to Phase 7 when --system-base
+    # goes away.
     from butterfly.service import start_session
     if not start_session(args.session_id, args.system_base):
         print(f"Error: session '{args.session_id}' not found", file=sys.stderr)
@@ -1295,6 +1303,10 @@ def main() -> None:
     _add_codex_parser(subparsers)
     _add_kimi_parser(subparsers)
     _add_server_parser(subparsers)
+
+    # Phase 6 — generic reflection + net-new write aliases.
+    from ui.cli.io_command import register_io_commands
+    register_io_commands(subparsers)
 
     args = parser.parse_args()
     if getattr(args, "func", None) is None:
