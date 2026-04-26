@@ -91,13 +91,17 @@ against the same instance.
   live update.
 - `input.jsonl` — user-typed commands queued from the web UI. Each
   line is `{ts, id, type, content?}` with `type` ∈ `{input, interrupt}`.
-  The session daemon polls this file at the same 50 ms cadence as
-  `context.jsonl` and forwards entries to
-  `TerminalExecutor.user_input` / `.user_interrupt`. On daemon
-  restart `terminal_input_offset` is seeded at the current file size
-  so historical queued entries are never replayed (that bug shipped
-  briefly in v2.0.33 — every server restart re-ran the full shell
-  history as tool output).
+  Writers go through `runtime.io.terminal_input` / `terminal_interrupt`,
+  which append a `terminal_input` event to `events_v1.jsonl` first and
+  then enqueue the entry on `input.jsonl` for the executor to consume
+  (the queue file is the effective channel today; Phase 11 will retire
+  it once `TerminalExecutor` watches `events_v1` natively). The session
+  daemon polls `input.jsonl` at 50 ms and forwards entries to
+  `TerminalExecutor.user_input` / `.user_interrupt`. On daemon restart
+  `terminal_input_offset` is seeded at the current file size so
+  historical queued entries are never replayed (that bug shipped briefly
+  in v2.0.33 — every server restart re-ran the full shell history as
+  tool output).
 - `snapshot.json` — written on idle-close (§ Idle close). Fields:
   `{ts, cwd}`.
 
@@ -146,17 +150,17 @@ ago — cwd restored]` system log line. Environment variables set with
 `export` are **not** restored (too noisy to round-trip safely); only
 cwd, which is the thing users consistently expect to come back.
 
-### User command → context.jsonl
+### User command → events_v1.jsonl
 
 On each accepted `user_input`:
 1. Shell writes `content` + collects output until idle (1.5 s) or 30 s
    total.
-2. Session daemon appends a `user_input` event to `context.jsonl`:
-   ```
-   {caller: system, source: panel, tool_name: terminal_user,
-    mode: wait, content: "$ <cmd>\n<output>"}
-   ```
+2. Session daemon appends a `user_input` event to `events_v1.jsonl`
+   with `source="terminal"` (caller = `terminal_user`), payload `text`
+   = `"$ <cmd>\n<output>"`. `build_llm_context()` picks it up as a
+   regular user-role turn on the next tick.
 
-`mode: wait` means the agent picks it up on its next natural break
-(new LLM call) without being preempted — consistent with how
-`bash(run_in_background=true)` notifications flow.
+The agent picks the entry up at its next natural break (new LLM call)
+without being preempted — consistent with how `bash(run_in_background=true)`
+notifications flow. (Legacy `context.jsonl` is still dual-written during
+the Phase 11 transition; new code reads from `events_v1.jsonl`.)

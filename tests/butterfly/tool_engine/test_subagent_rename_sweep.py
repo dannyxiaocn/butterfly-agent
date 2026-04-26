@@ -36,8 +36,11 @@ def _iter_production_py() -> list[Path]:
 
 def test_no_stale_sub_agent_tool_name_in_runtime_code() -> None:
     """The literal ``"sub_agent"`` in production .py may only appear in:
-      (a) the ``TYPE_SUB_AGENT = "sub_agent"`` constant definition
-      (b) lines that are pure comments (leading `#` after strip)
+      (a) the ``TYPE_SUB_AGENT = "sub_agent"`` panel-entry constant
+      (b) the ``SOURCE_SUBAGENT = "sub_agent"`` event-schema enum value
+          (user_input.source per DESIGN.md §3.3 — distinct from the
+          retired tool name)
+      (c) lines that are pure comments (leading `#` after strip)
 
     Any other occurrence is a runtime equality/branch that PR #52 was
     supposed to migrate to ``"subagent_new"``.
@@ -52,7 +55,7 @@ def test_no_stale_sub_agent_tool_name_in_runtime_code() -> None:
             if '"sub_agent"' not in line:
                 continue
             stripped = line.strip()
-            is_constant_def = stripped.startswith("TYPE_SUB_AGENT")
+            is_constant_def = stripped.startswith(("TYPE_SUB_AGENT", "SOURCE_SUBAGENT"))
             is_comment_only = stripped.startswith("#")
             if is_constant_def or is_comment_only:
                 continue

@@ -67,30 +67,31 @@ class WebUnitTests(unittest.TestCase):
                 self.assertEqual(response.status_code, 400)
 
     def test_history_endpoint_returns_display_history(self) -> None:
+        """Phase 7: /history returns events_v1 display events (for_llm +
+        UI-visible system types). Plumbing events (``control_*``,
+        ``session_*``) must be filtered out."""
+        from butterfly.runtime.events import (
+            EVENT_AGENT_TEXT,
+            EVENT_CONTROL_START,
+            EVENT_USER_INPUT,
+            append_event,
+        )
         with TemporaryDirectory() as td:
             root = _make_session(Path(td))
             system_dir = root / "_sessions" / "test-session"
-            (system_dir / "context.jsonl").write_text(
-                "\n".join([
-                    json.dumps({"type": "user_input", "id": "u1", "content": "hello", "ts": "2026-03-25T10:00:00"}),
-                    json.dumps({
-                        "type": "turn",
-                        "user_input_id": "u1",
-                        "ts": "2026-03-25T10:00:05",
-                        "messages": [{"role": "assistant", "content": "hi there"}],
-                    }),
-                ]) + "\n",
-                encoding="utf-8",
-            )
+            append_event(system_dir, EVENT_USER_INPUT, {"text": "hello"})
+            append_event(system_dir, EVENT_AGENT_TEXT, {"text": "hi there", "model": "m"})
+            append_event(system_dir, EVENT_CONTROL_START, {})  # plumbing
             app = create_app(root / "sessions", root / "_sessions")
             with TestClient(app) as client:
                 resp = client.get("/api/sessions/test-session/history")
 
             self.assertEqual(resp.status_code, 200)
             payload = resp.json()
-            self.assertEqual([event["type"] for event in payload["events"]], ["user", "agent"])
-            self.assertEqual(payload["events"][0]["content"], "hello")
-            self.assertEqual(payload["events"][1]["content"], "hi there")
+            types = [ev["type"] for ev in payload["events"]]
+            self.assertEqual(types, ["user_input", "agent_text"])
+            self.assertEqual(payload["events"][0]["payload"]["text"], "hello")
+            self.assertEqual(payload["events"][1]["payload"]["text"], "hi there")
 
     def test_get_tasks_returns_empty_cards_for_new_session(self) -> None:
         with TemporaryDirectory() as td:
@@ -170,10 +171,10 @@ class WebUnitTests(unittest.TestCase):
             )
 
     def test_put_tasks_emits_task_card_changed_event(self) -> None:
-        """v2.0.30 — web-side PUT /tasks must drop a ``task_card_changed``
-        line onto events.jsonl so the frontend's SSE-driven Tasks tab
-        refreshes on-event (replaces the old 15 s poll). Without this
-        event the UI would only update on the next full page load."""
+        """Phase 7: web-side PUT /tasks writes one ``task_card_changed``
+        event to events_v1.jsonl per mutation. The ``card`` payload is
+        None for deletes; otherwise the full projected card. Drives the
+        frontend's on-event Tasks-tab refresh."""
         with TemporaryDirectory() as td:
             root = _make_session(Path(td))
             app = create_app(root / "sessions", root / "_sessions")
@@ -190,14 +191,16 @@ class WebUnitTests(unittest.TestCase):
                 self.assertEqual(resp.status_code, 200)
                 resp = client.delete("/api/sessions/test-session/tasks/duty")
                 self.assertEqual(resp.status_code, 200)
-            events_path = root / "_sessions" / "test-session" / "events.jsonl"
+            events_path = root / "_sessions" / "test-session" / "events_v1.jsonl"
             lines = [json.loads(line) for line in events_path.read_text().splitlines() if line.strip()]
             changed = [e for e in lines if e.get("type") == "task_card_changed"]
-            self.assertEqual(
-                [(e["card"], e["change"]) for e in changed],
-                [("duty", "created"), ("duty", "updated"), ("duty", "deleted")],
-                "put→put→delete must emit created, updated, deleted in order",
-            )
+            self.assertEqual(len(changed), 3)
+            self.assertEqual(changed[0]["payload"]["name"], "duty")
+            self.assertIsNotNone(changed[0]["payload"]["card"])  # create
+            self.assertEqual(changed[1]["payload"]["name"], "duty")
+            self.assertEqual(changed[1]["payload"]["card"]["description"], "check v2")
+            self.assertEqual(changed[2]["payload"]["name"], "duty")
+            self.assertIsNone(changed[2]["payload"]["card"])  # delete sentinel
 
     def test_put_tasks_by_name_updates_existing_card_not_duplicates(self) -> None:
         """Saving a card by name overwrites it, does not create a second card."""
@@ -582,3 +585,364 @@ class WebUnitTests(unittest.TestCase):
             with TestClient(app) as client:
                 response = client.get("/api/update_status")
             self.assertEqual(response.status_code, 404)
+
+
+class Phase7Tests(unittest.TestCase):
+    """Phase 7 invariants — web is a thin shell over butterfly.runtime.io."""
+
+    # ── app.py import hygiene (no direct file IO, no service imports) ────
+
+    def test_no_direct_file_io_from_app_py(self) -> None:
+        """app.py may only import from ``butterfly.runtime`` + stdlib +
+        FastAPI. No ``butterfly.service.*`` imports and no raw file IO
+        helpers (``open(``, ``Path(...`` in disk-touching paths, ``json.load``).
+        The one allowed ``Path(...)`` usage is module-level path
+        constants; we check the IMPORT surface instead of substring
+        matching.
+        """
+        import ast
+        src_path = Path(__file__).resolve().parent.parent.parent.parent / "ui" / "web" / "app.py"
+        source = src_path.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        banned_modules = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                if node.module and node.module.startswith("butterfly.service"):
+                    banned_modules.add(node.module)
+            elif isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name.startswith("butterfly.service"):
+                        banned_modules.add(alias.name)
+        self.assertEqual(
+            banned_modules,
+            set(),
+            f"app.py imports banned service modules: {banned_modules}",
+        )
+        # Soft grep: we do use Path for the dist / sessions-dir constants,
+        # but no runtime-path handler should touch open() or json.load().
+        self.assertNotIn("json.load(", source)
+        self.assertNotIn("json.loads(f.read", source)
+
+    # ── SSE stream ───────────────────────────────────────────────────────
+
+    async def _collect_sse_frames_via_asgi(
+        self,
+        app,
+        path: str,
+        *,
+        expected_body_chunks: int = 4,
+        timeout: float = 5.0,
+        headers: dict | None = None,
+    ) -> tuple[int, list[str]]:
+        """Drive the ASGI app directly until ``expected_body_chunks``
+        non-comment SSE frames arrive, then signal http.disconnect.
+
+        Bypasses httpx's ASGI transport (which buffers SSE bodies past
+        the first yield). We send scope+receive/send messages as raw
+        dicts — the same protocol uvicorn uses — so the StreamingResponse
+        generator runs its full yield cycle in the test event loop.
+        """
+        import asyncio
+        assert path.startswith("/")
+        query = b""
+        if "?" in path:
+            p, _, q = path.partition("?")
+            path = p
+            query = q.encode()
+        received_events: list[dict] = []
+        send_done = asyncio.Event()
+        disconnect_sent = asyncio.Event()
+
+        async def receive():
+            # One initial 'http.request', then 'http.disconnect' once
+            # we've collected enough frames.
+            if not disconnect_sent.is_set():
+                await asyncio.sleep(0)  # let the server run
+                if not disconnect_sent.is_set():
+                    return {"type": "http.request", "body": b"", "more_body": False}
+            return {"type": "http.disconnect"}
+
+        async def send(msg):
+            received_events.append(msg)
+            if msg.get("type") == "http.response.start":
+                pass
+            elif msg.get("type") == "http.response.body":
+                # Count non-comment frames.
+                body = msg.get("body", b"")
+                frames = sum(
+                    1 for frame in body.decode("utf-8", errors="replace").split("\n\n")
+                    if frame.strip() and not frame.startswith(":")
+                )
+                nonlocal_body_frames[0] += frames
+                if nonlocal_body_frames[0] >= expected_body_chunks:
+                    disconnect_sent.set()
+                if not msg.get("more_body", True):
+                    send_done.set()
+
+        nonlocal_body_frames = [0]
+        scope = {
+            "type": "http",
+            "asgi": {"version": "3.0"},
+            "http_version": "1.1",
+            "method": "GET",
+            "scheme": "http",
+            "path": path,
+            "raw_path": path.encode(),
+            "query_string": query,
+            "root_path": "",
+            "headers": [(k.lower().encode(), v.encode()) for k, v in (headers or {}).items()],
+            "client": ("127.0.0.1", 0),
+            "server": ("127.0.0.1", 80),
+        }
+        try:
+            await asyncio.wait_for(app(scope, receive, send), timeout=timeout)
+        except asyncio.TimeoutError:
+            pass
+
+        # Extract status + decoded frames from the send log.
+        status = 0
+        body_chunks: list[str] = []
+        for ev in received_events:
+            if ev["type"] == "http.response.start":
+                status = ev["status"]
+            elif ev["type"] == "http.response.body":
+                body_chunks.append(ev["body"].decode("utf-8", errors="replace"))
+        joined = "".join(body_chunks)
+        frames = [
+            frame for frame in joined.split("\n\n")
+            if frame.strip() and not frame.startswith(":")
+        ]
+        return status, frames
+
+    def test_sse_stream_yields_events_in_order(self) -> None:
+        """One Event = one SSE frame. ``id:`` = Event id, ``event:`` =
+        Event type, ``data:`` = full Event JSON."""
+        import asyncio
+        from butterfly.runtime.events import (
+            EVENT_AGENT_TEXT,
+            EVENT_USER_INPUT,
+            append_event,
+        )
+        with TemporaryDirectory() as td:
+            root = _make_session(Path(td))
+            system_dir = root / "_sessions" / "test-session"
+            append_event(system_dir, EVENT_USER_INPUT, {"text": "hi"})
+            append_event(system_dir, EVENT_AGENT_TEXT, {"text": "hello", "model": "m"})
+            append_event(system_dir, EVENT_USER_INPUT, {"text": "again"})
+            app = create_app(root / "sessions", root / "_sessions")
+            with patch("ui.web.app._SSE_KEEPALIVE_SECONDS", 0.3):
+                status, frames = asyncio.run(
+                    self._collect_sse_frames_via_asgi(
+                        app,
+                        "/api/sessions/test-session/events/stream",
+                        expected_body_chunks=3,
+                    )
+                )
+            self.assertEqual(status, 200)
+            self.assertGreaterEqual(len(frames), 3)
+            ids, types = [], []
+            for frame in frames[:3]:
+                lines = dict(
+                    line.split(": ", 1) for line in frame.splitlines()
+                    if ": " in line
+                )
+                ids.append(int(lines["id"]))
+                types.append(lines["event"])
+                data = json.loads(lines["data"])
+                self.assertIn("id", data)
+                self.assertIn("type", data)
+                self.assertIn("payload", data)
+            self.assertEqual(ids, [1, 2, 3])
+            self.assertEqual(types, ["user_input", "agent_text", "user_input"])
+
+    def test_sse_resume_from_cursor_query_param(self) -> None:
+        """``?cursor=N`` yields only events with id > N."""
+        import asyncio
+        from butterfly.runtime.events import EVENT_USER_INPUT, append_event
+        with TemporaryDirectory() as td:
+            root = _make_session(Path(td))
+            system_dir = root / "_sessions" / "test-session"
+            for i in range(5):
+                append_event(system_dir, EVENT_USER_INPUT, {"text": f"m{i}"})
+            app = create_app(root / "sessions", root / "_sessions")
+            with patch("ui.web.app._SSE_KEEPALIVE_SECONDS", 0.3):
+                status, frames = asyncio.run(
+                    self._collect_sse_frames_via_asgi(
+                        app,
+                        "/api/sessions/test-session/events/stream?cursor=3",
+                        expected_body_chunks=2,
+                    )
+                )
+            self.assertEqual(status, 200)
+            ids = []
+            for frame in frames[:2]:
+                lines = dict(
+                    line.split(": ", 1) for line in frame.splitlines()
+                    if ": " in line
+                )
+                ids.append(int(lines["id"]))
+            self.assertEqual(ids, [4, 5])
+
+    def test_sse_resume_from_last_event_id_header(self) -> None:
+        """``Last-Event-ID: N`` header is the SSE reconnect contract;
+        the server resumes from id > N even when the query param is
+        absent."""
+        import asyncio
+        from butterfly.runtime.events import EVENT_USER_INPUT, append_event
+        with TemporaryDirectory() as td:
+            root = _make_session(Path(td))
+            system_dir = root / "_sessions" / "test-session"
+            for i in range(4):
+                append_event(system_dir, EVENT_USER_INPUT, {"text": f"m{i}"})
+            app = create_app(root / "sessions", root / "_sessions")
+            with patch("ui.web.app._SSE_KEEPALIVE_SECONDS", 0.3):
+                status, frames = asyncio.run(
+                    self._collect_sse_frames_via_asgi(
+                        app,
+                        "/api/sessions/test-session/events/stream",
+                        expected_body_chunks=2,
+                        headers={"last-event-id": "2"},
+                    )
+                )
+            self.assertEqual(status, 200)
+            ids = [
+                int(
+                    dict(
+                        ln.split(": ", 1) for ln in f.splitlines() if ": " in ln
+                    )["id"]
+                )
+                for f in frames[:2]
+            ]
+            self.assertEqual(ids, [3, 4])
+
+    def test_sse_stream_404_on_missing_session(self) -> None:
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "sessions").mkdir()
+            (root / "_sessions").mkdir()
+            app = create_app(root / "sessions", root / "_sessions")
+            with TestClient(app) as client:
+                resp = client.get("/api/sessions/missing/events/stream")
+            self.assertEqual(resp.status_code, 404)
+
+    # ── /events (JSON replay) ────────────────────────────────────────────
+
+    def test_events_endpoint_returns_all_events_as_json(self) -> None:
+        from butterfly.runtime.events import (
+            EVENT_CONTROL_START,
+            EVENT_USER_INPUT,
+            append_event,
+        )
+        with TemporaryDirectory() as td:
+            root = _make_session(Path(td))
+            system_dir = root / "_sessions" / "test-session"
+            append_event(system_dir, EVENT_USER_INPUT, {"text": "hi"})
+            append_event(system_dir, EVENT_CONTROL_START, {})
+            app = create_app(root / "sessions", root / "_sessions")
+            with TestClient(app) as client:
+                resp = client.get("/api/sessions/test-session/events")
+            self.assertEqual(resp.status_code, 200)
+            events = resp.json()["events"]
+            # /events returns EVERY event (no filter) including control_* plumbing.
+            self.assertEqual([e["type"] for e in events], ["user_input", "control_start"])
+
+    def test_events_since_id_filter(self) -> None:
+        from butterfly.runtime.events import EVENT_USER_INPUT, append_event
+        with TemporaryDirectory() as td:
+            root = _make_session(Path(td))
+            system_dir = root / "_sessions" / "test-session"
+            for i in range(3):
+                append_event(system_dir, EVENT_USER_INPUT, {"text": f"m{i}"})
+            app = create_app(root / "sessions", root / "_sessions")
+            with TestClient(app) as client:
+                resp = client.get("/api/sessions/test-session/events?since_id=1")
+            events = resp.json()["events"]
+            self.assertEqual([e["id"] for e in events], [2, 3])
+
+    # ── /interrupt ───────────────────────────────────────────────────────
+
+    def test_interrupt_endpoint_appends_event(self) -> None:
+        from butterfly.runtime.events import EVENT_USER_INTERRUPT, read_events
+        with TemporaryDirectory() as td:
+            root = _make_session(Path(td))
+            app = create_app(root / "sessions", root / "_sessions")
+            with TestClient(app) as client:
+                resp = client.post("/api/sessions/test-session/interrupt")
+            self.assertEqual(resp.status_code, 200)
+            system_dir = root / "_sessions" / "test-session"
+            types = [e.type for e in read_events(system_dir)]
+            self.assertIn(EVENT_USER_INTERRUPT, types)
+
+    # ── /messages ────────────────────────────────────────────────────────
+
+    def test_messages_endpoint_appends_user_input_event(self) -> None:
+        from butterfly.runtime.events import EVENT_USER_INPUT, read_events
+        with TemporaryDirectory() as td:
+            root = _make_session(Path(td))
+            app = create_app(root / "sessions", root / "_sessions")
+            with TestClient(app) as client:
+                resp = client.post(
+                    "/api/sessions/test-session/messages",
+                    json={"content": "hello world"},
+                )
+            self.assertEqual(resp.status_code, 200)
+            body = resp.json()
+            self.assertIn("event_id", body)
+            system_dir = root / "_sessions" / "test-session"
+            user_inputs = [e for e in read_events(system_dir) if e.type == EVENT_USER_INPUT]
+            # io.send_message appends once; the messages_service delegation
+            # may append a second. Either way, at least one must carry the
+            # web-sent text.
+            self.assertTrue(
+                any(e.payload.get("text") == "hello world" for e in user_inputs),
+                f"expected user_input with text 'hello world', got {user_inputs}",
+            )
+
+    def test_messages_endpoint_rejects_meta_session(self) -> None:
+        with TemporaryDirectory() as td:
+            root = _make_session(Path(td), session_id="agent_meta")
+            app = create_app(root / "sessions", root / "_sessions")
+            with TestClient(app) as client:
+                resp = client.post(
+                    "/api/sessions/agent_meta/messages",
+                    json={"content": "hi"},
+                )
+            self.assertEqual(resp.status_code, 403)
+
+    # ── /todo_list ──────────────────────────────────────────────────────
+
+    def test_todo_list_round_trip(self) -> None:
+        with TemporaryDirectory() as td:
+            root = _make_session(Path(td))
+            app = create_app(root / "sessions", root / "_sessions")
+            with TestClient(app) as client:
+                post = client.post(
+                    "/api/sessions/test-session/todo_list",
+                    json={"todo_list": {
+                        "todos": [
+                            {"content": "one", "status": "pending",
+                             "activeForm": "doing one"},
+                        ],
+                    }},
+                )
+                self.assertEqual(post.status_code, 200)
+                got = client.get("/api/sessions/test-session/todo_list")
+            self.assertEqual(got.status_code, 200)
+            payload = got.json()["todo_list"]
+            self.assertIsNotNone(payload)
+            self.assertEqual(payload["total"], 1)
+
+    # ── Catalogs ─────────────────────────────────────────────────────────
+
+    def test_models_endpoint_returns_providers_wrapper(self) -> None:
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "sessions").mkdir()
+            (root / "_sessions").mkdir()
+            app = create_app(root / "sessions", root / "_sessions")
+            with TestClient(app) as client:
+                resp = client.get("/api/models")
+            self.assertEqual(resp.status_code, 200)
+            payload = resp.json()
+            self.assertIn("providers", payload)
+            self.assertIsInstance(payload["providers"], list)

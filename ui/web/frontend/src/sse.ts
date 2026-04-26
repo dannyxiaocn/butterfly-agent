@@ -1,153 +1,85 @@
-import type { DisplayEvent } from './types';
+// SSE client. One Event -> one handler() call. Server sends the Event
+// id as SSE id:, so browser auto-reconnect via Last-Event-ID restarts
+// from the right place (DESIGN.md §7.2).
+import type { BfEvent } from './types';
 
-type SSEHandler = (event: DisplayEvent) => void;
+type SSEHandler = (event: BfEvent) => void;
 
 export class SSEConnection {
   private es: EventSource | null = null;
   private sessionId: string | null = null;
   private handler: SSEHandler | null = null;
-  // Dedup by event data 'id' field (not SSE seq number which resets each connection).
-  // seenIds is only cleared on attach() (new session), NOT on reconnect — so events
-  // already delivered are never shown twice, even after a drop+reconnect.
-  private seenIds = new Set<string>();
-  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  private contextSince = 0;
-  private eventsSince = 0;
+  private cursor = 0;
   private closed = false;
 
-  /** Latest context.jsonl byte offset processed by the live SSE stream.
-   * Used by main.ts to keep lastRenderedContextOffset in sync without
-   * needing _ctx to survive the clean-event strip (Bug 1 + Bug 3 interaction). */
-  get latestContextOffset(): number { return this.contextSince; }
-
-  attach(sessionId: string, contextSince: number, eventsSince: number, handler: SSEHandler): void {
+  /** Open / reopen the SSE stream. Caller passes the cursor they've
+   *  already rendered through the reducer; server replays id > cursor. */
+  attach(sessionId: string, cursor: number, handler: SSEHandler): void {
     this.close();
     this.closed = false;
     this.sessionId = sessionId;
-    this.contextSince = contextSince;
-    this.eventsSince = eventsSince;
+    this.cursor = cursor;
     this.handler = handler;
-    this.seenIds.clear(); // clear only when switching sessions
     this._connect();
   }
 
   close(): void {
     this.closed = true;
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = null;
-    }
     if (this.es) {
       this.es.close();
       this.es = null;
     }
   }
 
-  /** Re-connect immediately with fresh offsets (e.g. after tab regains focus).
-   * sessionId must match the currently attached session; otherwise no-op.
-   * Uses Math.max so SSE's already-advanced offsets are never rolled back (Bug 2). */
-  reconnectWithOffsets(sessionId: string, contextSince: number, eventsSince: number): void {
-    if (this.closed || !this.sessionId || this.sessionId !== sessionId) return;
-    this.contextSince = Math.max(this.contextSince, contextSince);
-    this.eventsSince = Math.max(this.eventsSince, eventsSince);
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = null;
-    }
-    this.es?.close();
-    this.es = null;
-    this._connect();
-  }
-
   private _connect(): void {
     if (this.closed || !this.sessionId) return;
-    // seenIds is NOT cleared here — it persists across reconnects so already-seen
-    // events (user messages, agent responses) are not duplicated after a drop+reconnect.
-    const url = `/api/sessions/${encodeURIComponent(this.sessionId)}/events`
-      + `?context_since=${this.contextSince}&events_since=${this.eventsSince}`;
+    const url = `/api/sessions/${encodeURIComponent(this.sessionId)}/events/stream?cursor=${this.cursor}`;
     this.es = new EventSource(url);
 
-    const eventTypes = [
-      'agent', 'user', 'tool', 'thinking', 'model_status', 'partial_text',
-      'tool_done', 'thinking_start', 'thinking_done',
-      'loop_start', 'loop_end',
-      'task_wakeup', 'task_finished', 'status', 'error', 'message',
-      'system_notice',
-      // Sub-agent / background-tool UI events
-      'tool_progress', 'tool_finalize', 'sub_agent_count', 'panel_update',
-      // v2.0.19: per-LLM-call usage + context + toks/s for the HUD
-      'llm_call_usage',
-      // v2.0.19: late reasoning_tokens attribution for the thinking cell
-      'thinking_tokens_update',
-      // v2.0.20: first-text-chunk + per-call output duration (pre-round-7 the
-      // frontend's client-side fallback quietly masked that these weren't
-      // subscribed — only the iteration_usage regression made it obvious).
-      'agent_output_start', 'agent_output_done',
-      // v2.0.23 round-7: per-LLM-call footer signal — carries usage +
-      // tool_use_ids so the handler can stamp the ↑/⛀/↓ footer on live tool
-      // cells (matched by data-tool-use-id) and the streaming agent cell.
-      'iteration_usage',
-      // v2.0.30: task-card CRUD / script-poll transitions drive the
-      // Tasks tab's on-event refresh (replaces the 15 s poll).
-      'task_card_changed', 'task_check', 'task_check_error',
-      // v2.0.37: standalone todo list — fired by todo_list tool writes
-      // and by the runtime reminder-injection path. Triggers a pinned
-      // header refresh + HUD row refresh.
+    // The server emits SSE frames with a typed event: field matching the
+    // Event.type. Use 'message' as a catch-all because EventSource only
+    // delivers untyped frames through onmessage, and typed listeners
+    // swallow unknowns. The server always sets event:, but being
+    // defensive costs nothing.
+    const onFrame = (e: MessageEvent) => {
+      try {
+        const data: BfEvent = JSON.parse(e.data);
+        if (typeof data?.id !== 'number') return;
+        if (data.id <= this.cursor) return; // dedup on reconnect
+        this.cursor = data.id;
+        this.handler?.(data);
+      } catch {
+        // ignore parse errors
+      }
+    };
+
+    // Attach the same handler on 'message' plus every known event: type.
+    // EventSource only delivers to 'message' for frames without a custom
+    // event: field; typed frames go to their named listener. We register
+    // both so schema drift (unknown types) still surfaces via 'message'.
+    this.es.addEventListener('message', onFrame as EventListener);
+    const knownTypes = [
+      'user_input', 'user_interrupt',
+      'agent_text', 'agent_thinking', 'agent_tool_call', 'agent_tool_result',
+      'session_created', 'session_started', 'session_stopped', 'session_deleted',
+      'model_status', 'llm_call_usage', 'tool_progress',
+      'task_card_changed', 'task_script_check', 'task_script_error', 'task_finished',
       'todo_list_changed',
-      // v2.0.30: Terminal panel live stream (log entries + state snapshots).
-      'terminal_log', 'terminal_state', 'terminal_rejected',
+      'terminal_log', 'terminal_state', 'terminal_input',
+      'panel_entry_changed', 'sub_agent_count',
+      'config_changed', 'prompt_changed', 'asset_changed',
+      'system_notice', 'error',
+      'control_interrupt', 'control_start', 'control_stop',
     ];
-
-    for (const type of eventTypes) {
-      this.es.addEventListener(type, (e: Event) => {
-        const me = e as MessageEvent;
-        try {
-          const data: DisplayEvent = JSON.parse(me.data);
-
-          // Advance resume offsets from server-embedded _ctx/_evt fields.
-          // This ensures reconnects start from where we left off rather than
-          // replaying the full backlog (Problem 11).
-          if (typeof (data as any)._ctx === 'number') {
-            this.contextSince = Math.max(this.contextSince, (data as any)._ctx);
-          }
-          if (typeof (data as any)._evt === 'number') {
-            this.eventsSince = Math.max(this.eventsSince, (data as any)._evt);
-          }
-
-          // Dedup by event data 'id' field (only permanent events carry an id).
-          // Ephemeral events (partial_text, model_status, tool) have no id and
-          // always pass through — their handlers are idempotent.
-          // Strip meta-fields before passing to handler so they don't leak
-          // into DisplayEvent objects seen by renderEvent/handleEvent (Bug 3).
-          const { _ctx, _evt, ...cleanData } = data as any;
-          const cleanEvent = cleanData as DisplayEvent;
-
-          const eventId = cleanEvent.id;
-          if (eventId) {
-            if (this.seenIds.has(eventId)) return;
-            this.seenIds.add(eventId);
-            // Trim ring buffer
-            if (this.seenIds.size > 2000) {
-              const arr = Array.from(this.seenIds);
-              this.seenIds = new Set(arr.slice(arr.length - 1000));
-            }
-          }
-          this.handler?.(cleanEvent);
-        } catch {
-          // ignore parse errors
-        }
-      });
+    for (const type of knownTypes) {
+      this.es.addEventListener(type, onFrame as EventListener);
     }
 
     this.es.onerror = () => {
+      // EventSource auto-reconnects with Last-Event-ID built from the
+      // last id: frame it received. We leave that to the browser; if the
+      // connection is permanently dead, we'll reopen on the next attach().
       if (this.closed) return;
-      this.es?.close();
-      this.es = null;
-      // reconnect after 3s using latest advanced offsets — seenIds prevents
-      // already-seen permanent events from duplicating on reconnect.
-      this.reconnectTimer = setTimeout(() => {
-        if (!this.closed) this._connect();
-      }, 3000);
     };
   }
 }

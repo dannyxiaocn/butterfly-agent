@@ -484,6 +484,137 @@ async def test_daemon_loop_routes_panel_user_input_through_queue(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_dispatcher_skips_dual_emit_when_events_v1_id_marker_present(tmp_path):
+    """PR #57 review Bug 1 regression: when the upstream writer
+    (``runtime.io.send_message`` / ``interrupt_session(text=…)``) has
+    already written the canonical ``user_input`` event to events_v1.jsonl
+    and tagged the context.jsonl entry with ``events_v1_id``, the
+    dispatcher must NOT mirror — otherwise the same user turn lands in
+    events_v1 twice and ``build_llm_context`` shows the LLM a doubled
+    user message on every web/CLI message.
+    """
+    from butterfly.runtime.ipc import FileIPC
+    from butterfly.runtime import events as rt_events
+
+    observed: list[str] = []
+    provider = RecordingProvider([("ack", [])], observed_user_messages=observed)
+    agent = Agent(provider=provider)
+    session = make_session(tmp_path, agent, session_id="dual-emit-skip")
+    ipc = FileIPC(session.system_dir)
+    stop_event = asyncio.Event()
+
+    real_sleep = asyncio.sleep
+
+    async def _fast_sleep(seconds):
+        await real_sleep(min(seconds, 0.01))
+
+    import butterfly.session_engine.session as session_mod
+    session_mod.asyncio.sleep = _fast_sleep  # type: ignore[assignment]
+
+    # Pretend the upstream writer (runtime.io.send_message) already wrote
+    # the canonical event to events_v1 and is now handing the dispatcher
+    # the marker.
+    upstream_event = rt_events.append_event(
+        session.system_dir,
+        rt_events.EVENT_USER_INPUT,
+        {"text": "hello agent", "source": "cli", "caller": None, "display_name": None},
+    )
+
+    try:
+        daemon_task = asyncio.create_task(
+            session.run_daemon_loop(ipc, stop_event=stop_event)
+        )
+        await real_sleep(0.05)
+        ipc.append_context({
+            "type": "user_input",
+            "content": "hello agent",
+            "id": "u-1",
+            "caller": "human",
+            "source": "user",
+            "mode": "interrupt",
+            "events_v1_id": upstream_event.id,
+        })
+        for _ in range(50):
+            if observed:
+                break
+            await real_sleep(0.02)
+        stop_event.set()
+        await daemon_task
+    finally:
+        session_mod.asyncio.sleep = real_sleep  # type: ignore[assignment]
+
+    # The dispatcher ran the input (provider observed it) but did NOT add
+    # a second EVENT_USER_INPUT to events_v1.
+    assert observed == ["hello agent"]
+    user_input_events = [
+        e for e in rt_events.read_events(session.system_dir)
+        if e.type == rt_events.EVENT_USER_INPUT
+    ]
+    assert len(user_input_events) == 1, (
+        f"expected exactly one EVENT_USER_INPUT (the upstream one), "
+        f"got {len(user_input_events)}: {user_input_events}"
+    )
+    assert user_input_events[0].id == upstream_event.id
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_still_mirrors_when_events_v1_id_marker_absent(tmp_path):
+    """Companion of the dual-emit-skip test: legacy callers
+    (subagent_resume, weixin, ui/cli/chat) write only context.jsonl with
+    no marker. The dispatcher MUST still mirror those to events_v1 so the
+    canonical event log stays complete."""
+    from butterfly.runtime.ipc import FileIPC
+    from butterfly.runtime import events as rt_events
+
+    observed: list[str] = []
+    provider = RecordingProvider([("ack", [])], observed_user_messages=observed)
+    agent = Agent(provider=provider)
+    session = make_session(tmp_path, agent, session_id="dual-emit-mirror")
+    ipc = FileIPC(session.system_dir)
+    stop_event = asyncio.Event()
+
+    real_sleep = asyncio.sleep
+
+    async def _fast_sleep(seconds):
+        await real_sleep(min(seconds, 0.01))
+
+    import butterfly.session_engine.session as session_mod
+    session_mod.asyncio.sleep = _fast_sleep  # type: ignore[assignment]
+
+    try:
+        daemon_task = asyncio.create_task(
+            session.run_daemon_loop(ipc, stop_event=stop_event)
+        )
+        await real_sleep(0.05)
+        # Legacy-shape entry: no events_v1_id field.
+        ipc.append_context({
+            "type": "user_input",
+            "content": "legacy hi",
+            "id": "u-legacy",
+            "caller": "parent_agent",
+            "source": "sub_agent",
+            "mode": "interrupt",
+        })
+        for _ in range(50):
+            if observed:
+                break
+            await real_sleep(0.02)
+        stop_event.set()
+        await daemon_task
+    finally:
+        session_mod.asyncio.sleep = real_sleep  # type: ignore[assignment]
+
+    assert observed == ["legacy hi"]
+    user_input_events = [
+        e for e in rt_events.read_events(session.system_dir)
+        if e.type == rt_events.EVENT_USER_INPUT
+    ]
+    assert len(user_input_events) == 1
+    assert user_input_events[0].payload["text"] == "legacy hi"
+    assert user_input_events[0].payload["source"] == "sub_agent"
+
+
+@pytest.mark.asyncio
 async def test_daemon_interrupt_poll_is_fast_enough_to_merge_human_followup(tmp_path):
     """Regression: daemon-side polling must be tight enough that a human's
     quick second send lands while the first run is still in flight.

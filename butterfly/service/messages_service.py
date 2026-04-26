@@ -13,13 +13,16 @@ def send_message(
     *,
     caller: str = "human",
     mode: str = "interrupt",
+    events_v1_id: int | None = None,
 ) -> str:
     _validate_session_id(session_id)
     system_dir = system_sessions_dir / session_id
     if not system_dir.exists():
         raise FileNotFoundError(session_id)
     from butterfly.runtime.bridge import BridgeSession
-    return BridgeSession(system_dir).send_message(content, caller=caller, mode=mode)
+    return BridgeSession(system_dir).send_message(
+        content, caller=caller, mode=mode, events_v1_id=events_v1_id,
+    )
 
 
 def interrupt_session(session_id: str, system_sessions_dir: Path) -> None:

@@ -100,6 +100,7 @@ class BridgeSession:
         *,
         caller: str = "human",
         mode: str = "interrupt",
+        events_v1_id: int | None = None,
     ) -> str:
         """Write a user_input event to context.jsonl. Returns the message ID.
 
@@ -114,17 +115,27 @@ class BridgeSession:
                 ``wait`` queues the message behind in-flight / earlier
                 queued work; consecutive wait-mode chat inputs collapse into
                 a single user message before the agent fires.
+            events_v1_id: When the caller has *already* written the canonical
+                user-side event to ``events_v1.jsonl`` (e.g. via
+                ``runtime.io.send_message``), pass its id here. The dispatcher
+                uses this marker to skip its dual-emit and avoid writing a
+                duplicate ``user_input`` event. Legacy callers that only
+                touch ``context.jsonl`` (subagent_resume, weixin, cli/chat)
+                leave it None — the dispatcher then mirrors as before.
         """
         if mode not in ("interrupt", "wait"):
             raise ValueError(f"invalid mode: {mode!r} (expected interrupt|wait)")
         msg_id = str(uuid.uuid4())
-        self._ipc.append_context({
+        entry: dict = {
             "type": "user_input",
             "content": content,
             "id": msg_id,
             "caller": caller,
             "mode": mode,
-        })
+        }
+        if events_v1_id is not None:
+            entry["events_v1_id"] = events_v1_id
+        self._ipc.append_context(entry)
         return msg_id
 
     def send_interrupt(self) -> None:

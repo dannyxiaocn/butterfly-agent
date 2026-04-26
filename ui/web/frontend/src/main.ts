@@ -1,17 +1,22 @@
+// Entry point + session bootstrap.
+// The critical shape here: attachSession() fetches history -> runs
+// reducer -> opens SSE -> routes every live event through the SAME
+// reducer. Live and replay share a single code path (DESIGN.md §7.3).
 import './style.css';
 import { api } from './api';
 import { store } from './store';
 import { sseConn } from './sse';
-import type { DisplayEvent } from './types';
+import { reduce, reduceMany } from './reducer';
+import type { BfEvent } from './types';
 import { createHeader } from './components/header';
 import { createSidebar } from './components/sidebar';
-import { createChat } from './components/chat';
+import { createChat, refreshHud } from './components/chat';
 import { createPanel } from './components/panel';
 import { terminalController } from './components/terminal';
 
-// Build the main layout
-const app = document.getElementById('app')!;
+// ── Layout ────────────────────────────────────────────────────────────────
 
+const app = document.getElementById('app')!;
 const header = createHeader();
 app.appendChild(header);
 
@@ -22,367 +27,260 @@ app.appendChild(layout);
 const sidebar = createSidebar();
 const chat = createChat();
 const panel = createPanel();
-
-const leftResizer = createLayoutResizer('sidebar');
-const rightResizer = createLayoutResizer('panel');
+const leftResizer = createResizer('sidebar');
+const rightResizer = createResizer('panel');
 
 layout.appendChild(sidebar);
 layout.appendChild(leftResizer);
 layout.appendChild(chat);
 layout.appendChild(rightResizer);
 layout.appendChild(panel);
-
 restoreColumnWidths();
 
-/** Build a 4-px gutter between two layout columns. Dragging it updates the
- *  corresponding CSS var on ``#layout`` so sidebar / panel grow or shrink
- *  in step. Widths are clamped and persisted to localStorage so the layout
- *  survives a reload. ``which`` selects which column the gutter resizes —
- *  "sidebar" (left gutter) or "panel" (right gutter).
- */
-function createLayoutResizer(which: 'sidebar' | 'panel'): HTMLElement {
+function createResizer(which: 'sidebar' | 'panel'): HTMLElement {
   const el = document.createElement('div');
   el.className = 'layout-resizer';
   el.dataset.target = which;
   el.setAttribute('role', 'separator');
   el.setAttribute('aria-orientation', 'vertical');
-
-  const MIN = 160;
-  const MAX_FRACTION = 0.6; // never let one gutter eat >60% of the viewport
   const cssVar = which === 'sidebar' ? '--sidebar-width' : '--panel-width';
   const storageKey = which === 'sidebar' ? 'butterfly.layout.sidebarWidth' : 'butterfly.layout.panelWidth';
-
+  const MIN = 160;
+  const MAX_FRACTION = 0.6;
   let startX = 0;
-  let startWidth = 0;
-
+  let startW = 0;
   const readCurrentPx = (): number => {
     const cs = getComputedStyle(layout).getPropertyValue(cssVar).trim();
     const n = parseFloat(cs);
     return Number.isFinite(n) && n > 0 ? n : (which === 'sidebar' ? 240 : 300);
   };
-
-  const onPointerMove = (ev: PointerEvent) => {
+  const onMove = (ev: PointerEvent) => {
     const dx = ev.clientX - startX;
     const delta = which === 'sidebar' ? dx : -dx;
-    const viewport = window.innerWidth || 1200;
-    const next = Math.max(MIN, Math.min(viewport * MAX_FRACTION, startWidth + delta));
+    const vp = window.innerWidth || 1200;
+    const next = Math.max(MIN, Math.min(vp * MAX_FRACTION, startW + delta));
     layout.style.setProperty(cssVar, `${Math.round(next)}px`);
   };
-
-  const onPointerUp = (ev: PointerEvent) => {
+  const onUp = (ev: PointerEvent) => {
     el.releasePointerCapture(ev.pointerId);
-    el.removeEventListener('pointermove', onPointerMove);
-    el.removeEventListener('pointerup', onPointerUp);
+    el.removeEventListener('pointermove', onMove);
+    el.removeEventListener('pointerup', onUp);
     el.classList.remove('dragging');
     document.body.classList.remove('resizing');
-    const finalPx = readCurrentPx();
-    try { localStorage.setItem(storageKey, String(Math.round(finalPx))); } catch {}
+    try { localStorage.setItem(storageKey, String(Math.round(readCurrentPx()))); } catch {}
   };
-
   el.addEventListener('pointerdown', (ev: PointerEvent) => {
     ev.preventDefault();
     startX = ev.clientX;
-    startWidth = readCurrentPx();
+    startW = readCurrentPx();
     el.setPointerCapture(ev.pointerId);
     el.classList.add('dragging');
     document.body.classList.add('resizing');
-    el.addEventListener('pointermove', onPointerMove);
-    el.addEventListener('pointerup', onPointerUp);
+    el.addEventListener('pointermove', onMove);
+    el.addEventListener('pointerup', onUp);
   });
-
   return el;
 }
 
 function restoreColumnWidths() {
   try {
-    const saved = {
-      sidebar: localStorage.getItem('butterfly.layout.sidebarWidth'),
-      panel: localStorage.getItem('butterfly.layout.panelWidth'),
-    };
-    if (saved.sidebar) layout.style.setProperty('--sidebar-width', `${parseInt(saved.sidebar, 10)}px`);
-    if (saved.panel) layout.style.setProperty('--panel-width', `${parseInt(saved.panel, 10)}px`);
-  } catch {
-    // localStorage may be unavailable in private-browsing edge cases —
-    // fall through to the CSS defaults.
-  }
+    const sb = localStorage.getItem('butterfly.layout.sidebarWidth');
+    const pn = localStorage.getItem('butterfly.layout.panelWidth');
+    if (sb) layout.style.setProperty('--sidebar-width', `${parseInt(sb, 10)}px`);
+    if (pn) layout.style.setProperty('--panel-width', `${parseInt(pn, 10)}px`);
+  } catch {}
 }
 
-// Typed accessor for chat methods
-interface ChatEl extends HTMLElement {
-  clearMessages(): void;
-  appendEvent(e: DisplayEvent): void;
-  handleEvent(e: DisplayEvent): void;
-  refreshHud(id: string): Promise<void>;
-}
+// ── Session attach ────────────────────────────────────────────────────────
 
-function getChatEl(): ChatEl {
-  return chat as ChatEl;
-}
-
-// ====== Session attach (exported for sidebar) ======
-
-// Monotonic attach token: each attachSession() increments this.
-// Every async step checks the token is still current before applying results,
-// preventing race conditions when the user switches sessions quickly (Problem 3).
+// Monotonic token so late async replies from a stale session get dropped.
 let attachVersion = 0;
-
-// Track the latest rendered context offset so visibilitychange can fetch
-// only new events rather than the full history (Problem 2).
-let lastRenderedContextOffset = 0;
 
 export async function attachSession(id: string): Promise<void> {
   const version = ++attachVersion;
 
-  // Update active session immediately so sidebar re-renders
   store.currentSessionId = id;
+  store.resetSession();
   store.emit('currentSession');
-
-  // Clear chat and reset per-session state so panel doesn't show stale data.
-  // Exception: keep store.taskCards in place until the new session's tasks
-  // finish loading. Clearing + emitting here would flash the Tasks tab into
-  // the "No task cards yet" empty state for the ~50ms until api.getTasks()
-  // resolves. Old cards briefly visible is less jarring than the flash; the
-  // attachVersion race guard still prevents stale fetches from overwriting.
-  getChatEl().clearMessages();
-  lastRenderedContextOffset = 0;
-  store.panelEntries = [];
-  store.currentParams = null;
+  store.emit('cards');
+  store.emit('tasks');
   store.emit('panel');
-  store.emit('config');
 
-  // Load history first, then open SSE from returned offsets
-  let contextOffset = 0;
-  let eventsOffset = 0;
-
+  // 1. Load history → feed through reducer (single code path).
+  let events: BfEvent[] = [];
   try {
-    const history = await api.getHistory(id);
-    if (attachVersion !== version) return; // stale — user switched again
-    for (const event of history.events) {
-      getChatEl().appendEvent(event);
-    }
-    contextOffset = history.context_offset;
-    eventsOffset = history.events_offset;
-    lastRenderedContextOffset = contextOffset;
+    const r = await api.readHistory(id, 0);
+    if (attachVersion !== version) return;
+    events = r.events ?? [];
+    reduceMany(events);
   } catch (e) {
     if (attachVersion !== version) return;
-    console.error('Failed to load history:', e);
+    console.error('history load failed:', e);
   }
 
-  // Load tasks
-  try {
-    const tasks = await api.getTasks(id);
-    if (attachVersion !== version) return;
-    store.taskCards = tasks.cards;
-    store.emit('tasks');
-  } catch (e) {
-    if (attachVersion !== version) return;
-    console.error('Failed to load tasks:', e);
-  }
+  // 2. Snapshots that aren't fully captured in the event stream yet
+  //    (tasks / todo / config / panel / HUD / terminal). The events
+  //    stream DOES carry task_card_changed, todo_list_changed, etc., but
+  //    those only fire on mutation — initial values come from the
+  //    snapshot endpoints.
+  refreshSnapshots(id, version);
 
-  // v2.0.37 — load standalone todo list (pinned above the task cards
-  // when present). Decoupled from the Tasks endpoint so task-card
-  // operations don't churn the pinned header, and vice versa.
-  try {
-    const res = await api.getTodoList(id);
-    if (attachVersion !== version) return;
-    store.todoList = res.todo_list;
-    store.emit('todoList');
-  } catch (e) {
-    if (attachVersion !== version) return;
-    console.error('Failed to load todo list:', e);
-  }
-
-  // Load config / params
-  try {
-    const cfg = await api.getConfig(id);
-    if (attachVersion !== version) return;
-    store.currentParams = cfg.params;
-    store.emit('config');
-    // Also update the session's params in store.sessions for meta detection
-    const sessIdx = store.sessions.findIndex(s => s.id === id);
-    if (sessIdx >= 0) {
-      store.sessions[sessIdx] = { ...store.sessions[sessIdx], params: cfg.params };
-      store.emit('sessions');
-      store.emit('currentSession');
-    }
-  } catch (e) {
-    if (attachVersion !== version) return;
-    console.error('Failed to load config:', e);
-  }
-
-  // Final freshness check before opening SSE (must be last side effect)
   if (attachVersion !== version) return;
 
-  // Refresh HUD on attach
-  getChatEl().refreshHud(id).catch(() => {});
-
-  // Load Terminal panel state (non-blocking — the panel may not be open,
-  // but the controller is ready when the user switches to it).
-  terminalController.attachSession(id).then(() => {
-    store.emit('panel');
-  }).catch((e) => console.error('Failed to load terminal:', e));
-
-  // Open SSE from history offsets
-  sseConn.attach(id, contextOffset, eventsOffset, (event: DisplayEvent) => {
-    if (store.currentSessionId !== id) return; // stale SSE
-    getChatEl().handleEvent(event);
-    // Fan out terminal_* events to the Terminal panel controller.
-    if (event.type === 'terminal_log' || event.type === 'terminal_state' || event.type === 'terminal_rejected') {
-      terminalController.handleEvent(event as any);
+  // 3. Open SSE from the high-water cursor the reducer applied.
+  sseConn.attach(id, store.cursor, (event: BfEvent) => {
+    if (store.currentSessionId !== id) return;
+    // Live events go through the SAME reducer as history. No divergence.
+    const signals = reduce(event);
+    for (const sig of signals) store.emit(sig);
+    // Always emit 'cards' for card-producing events even if the reducer
+    // already did — subscribers are idempotent.
+    if (signals.includes('cards')) store.emit('cards');
+    // HUD refresh on llm_call_usage / model_status — snapshot endpoint
+    // gives us the resolved percentages + context_tokens.
+    if (event.type === 'llm_call_usage' || event.type === 'model_status') {
+      refreshHud(id).catch(() => {});
     }
-
-    // Advance lastRenderedContextOffset from SSE's internal contextSince tracker.
-    // _ctx is stripped from the event before the handler is called (Bug 3 fix),
-    // so we read the offset via the public getter instead of (event as any)._ctx.
-    const latest = sseConn.latestContextOffset;
-    if (latest > lastRenderedContextOffset) {
-      lastRenderedContextOffset = latest;
-    }
-
-    // Update model state for header / sidebar
-    if (event.type === 'model_status') {
-      // Refresh session list to update status dots
-      api.listSessions().then(sessions => {
-        store.sessions = sessions;
-        store.emit('sessions');
-      }).catch(console.error);
-    }
-
-    // v2.0.30: Tasks tab refresh is now on-event.
-    //   * `task_card_changed` → agent CRUD tool or API edit
-    //   * `task_check` / `task_check_error` → script poll just ran (may
-    //     have flipped status or updated last_checked_at)
-    //   * `task_wakeup` / `task_finished` → card transitioned
-    //     working ↔ pending around an agent turn
-    if (
-      event.type === 'task_card_changed' ||
-      event.type === 'task_check' ||
-      event.type === 'task_check_error' ||
-      event.type === 'task_wakeup' ||
-      event.type === 'task_finished'
-    ) {
-      api.getTasks(id).then(res => {
-        if (store.currentSessionId !== id) return; // stale
-        store.taskCards = res.cards;
+    // Tasks snapshot refresh on task_* transitions — snapshot gives us
+    // the full TaskCard list with derived fields the bare event doesn't
+    // carry (next run times, etc.).
+    if (event.type === 'task_card_changed' || event.type === 'task_script_check'
+        || event.type === 'task_finished') {
+      api.getTasks(id).then(r => {
+        if (store.currentSessionId !== id) return;
+        store.tasks = r.cards;
         store.emit('tasks');
-      }).catch(() => {
-        // Non-fatal — next event triggers another refresh.
-      });
+      }).catch(() => {});
     }
-
-    // v2.0.37: standalone todo_list — backend emits ``todo_list_changed``
-    // from the todo_list tool AND from the runtime reminder-injection
-    // path. Refetch the snapshot (Tasks pinned header) AND refresh the
-    // HUD row in a single round-trip rather than waiting for the 10 s
-    // HUD poll.
     if (event.type === 'todo_list_changed') {
-      if (store.currentSessionId === id) {
-        api.getTodoList(id).then(res => {
-          if (store.currentSessionId !== id) return; // stale
-          store.todoList = res.todo_list;
-          store.emit('todoList');
-        }).catch(() => {});
-        getChatEl().refreshHud(store.currentSessionId).catch(() => {});
-      }
+      api.getTodoList(id).then(r => {
+        if (store.currentSessionId !== id) return;
+        store.todoList = r.todo_list;
+        store.emit('todoList');
+      }).catch(() => {});
     }
-
-    // v2.0.30: Panel tab refresh is also on-event. Replaces the old
-    // 2 s setInterval in panel.ts. Panel.ts listens for the store
-    // `panelRefreshRequest` signal and pulls /panel + per-tid details
-    // only when the Panel tab is currently visible.
-    if (
-      event.type === 'panel_update' ||
-      event.type === 'tool_progress' ||
-      event.type === 'tool_finalize' ||
-      event.type === 'sub_agent_count'
-    ) {
-      store.emit('panelRefreshRequest');
+    if (event.type === 'panel_entry_changed' || event.type === 'tool_progress'
+        || event.type === 'sub_agent_count') {
+      api.getPanel(id).then(entries => {
+        if (store.currentSessionId !== id) return;
+        store.panel = entries;
+        store.emit('panel');
+      }).catch(() => {});
+    }
+    // Route terminal events to the retained terminalController.
+    if (event.type === 'terminal_log' || event.type === 'terminal_state'
+        || event.type === 'terminal_input') {
+      terminalController.handleEvent(event as any);
     }
   });
 }
 
-// ====== Bootstrap ======
+async function refreshSnapshots(id: string, version: number) {
+  try {
+    const r = await api.getTasks(id);
+    if (attachVersion !== version) return;
+    store.tasks = r.cards;
+    store.emit('tasks');
+  } catch {}
+  try {
+    const r = await api.getTodoList(id);
+    if (attachVersion !== version) return;
+    store.todoList = r.todo_list;
+    store.emit('todoList');
+  } catch {}
+  try {
+    const r = await api.getConfig(id);
+    if (attachVersion !== version) return;
+    store.currentParams = r.params;
+    store.emit('config');
+  } catch {}
+  try {
+    const r = await api.getPanel(id);
+    if (attachVersion !== version) return;
+    store.panel = r;
+    store.emit('panel');
+  } catch {}
+  try {
+    await refreshHud(id);
+  } catch {}
+  // Terminal: leave its state management inside the controller.
+  terminalController.attachSession(id).catch(() => {});
+}
+
+// ── Bootstrap ─────────────────────────────────────────────────────────────
+
 async function init(): Promise<void> {
-  // Load sessions
   try {
     const sessions = await api.listSessions();
     store.sessions = sessions;
     store.emit('sessions');
-  } catch (e) {
-    console.error('Failed to load sessions:', e);
-  }
+  } catch (e) { console.error('listSessions failed:', e); }
 
-  // Poll weixin status every 5s
+  // Poll weixin status every 5s (small bridge health indicator — not an
+  // event-stream participant, so a light poll is fine).
   async function pollWeixin() {
     try {
-      const status = await api.getWeixinStatus();
-      store.weixinStatus = status;
+      store.weixinStatus = await api.getWeixinStatus();
       store.emit('weixin');
-    } catch {
-      // ignore
-    }
+    } catch {}
   }
   pollWeixin();
   setInterval(pollWeixin, 5000);
 
-  // Poll sessions list every 3s to update status dots
+  // Poll session list every 3s so status dots refresh independently of
+  // the SSE stream — the sidebar's session_* reducer hits already update
+  // on create / delete / start / stop, but pid_alive / model_state are
+  // derived from live daemon probes in the backend.
   setInterval(async () => {
     try {
-      const sessions = await api.listSessions();
-      store.sessions = sessions;
+      store.sessions = await api.listSessions();
       store.emit('sessions');
-    } catch {
-      // ignore
-    }
+    } catch {}
   }, 3000);
 
-  // v2.0.30: no more 15 s Tasks polling — the SSE handler below reloads
-  // store.taskCards in response to `task_card_changed`, `task_check`,
-  // `task_check_error`, `task_wakeup`, and `task_finished`. That covers
-  // agent-driven CRUD, script-poll transitions, and the "wakeup landed"
-  // round-trip.
-
-  // Refresh HUD every 10s when a session is active
-  setInterval(async () => {
-    if (!store.currentSessionId) return;
-    getChatEl().refreshHud(store.currentSessionId).catch(() => {});
+  // HUD tick — 10s, only when a session is attached.
+  setInterval(() => {
+    if (store.currentSessionId) refreshHud(store.currentSessionId).catch(() => {});
   }, 10000);
 
-  // Re-sync SSE when tab regains focus (browser throttles/drops SSE in background).
-  // Also renders any events that completed while the tab was hidden (Problem 2).
+  // Re-sync on tab visibility regain: replay any events the browser may
+  // have dropped while backgrounded. Dispatch through the reducer like
+  // everything else.
   document.addEventListener('visibilitychange', async () => {
     if (document.visibilityState !== 'visible') return;
     const id = store.currentSessionId;
     if (!id) return;
     try {
-      // Fetch only history AFTER last rendered offset — render new completed events
-      const history = await api.getHistory(id, lastRenderedContextOffset);
-      if (store.currentSessionId !== id) return; // session changed during await (Problem 5)
-      for (const event of history.events) {
-        getChatEl().appendEvent(event);
-      }
-      lastRenderedContextOffset = history.context_offset;
-      sseConn.reconnectWithOffsets(id, history.context_offset, history.events_offset);
-    } catch {
-      // ignore — SSE reconnect is best-effort
-    }
+      const r = await api.readHistory(id, store.cursor);
+      if (store.currentSessionId !== id) return;
+      if (r.events?.length) reduceMany(r.events);
+      // Reopen SSE from the new cursor.
+      sseConn.close();
+      sseConn.attach(id, store.cursor, () => {});
+      // Re-attach with the real handler by re-calling attachSession —
+      // simplest and cheapest for an infrequent event.
+      attachSession(id);
+    } catch {}
   });
 
-  // Keyboard shortcut: Cmd+K / Ctrl+K to focus chat input
+  // Cmd+K / Ctrl+K focuses chat input.
   document.addEventListener('keydown', (e) => {
     if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
       e.preventDefault();
       const input = document.getElementById('chat-input') as HTMLTextAreaElement | null;
-      if (input && !input.disabled) {
-        input.focus();
-      }
+      if (input && !input.disabled) input.focus();
     }
   });
 
-  // Auto-attach first session if any
   if (store.sessions.length > 0) {
     await attachSession(store.sessions[0].id);
   }
 }
 
 init().catch(console.error);
+
+// Hint the 'chat' variable is used, so noUnusedLocals doesn't complain.
+// (createChat attaches event listeners; we deliberately don't keep a
+// strong typed ref since main.ts doesn't call into it directly anymore —
+// all communication goes through the store.)
+void chat;

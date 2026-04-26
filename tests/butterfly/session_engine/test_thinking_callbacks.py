@@ -1,5 +1,11 @@
 """Pin the v2.0.17 thinking-callbacks contract.
 
+Phase 9 cleanup: removed 1 test pinned on the retired ``thinking_done``
+event shape in events.jsonl (DESIGN.md §3.6 — thinking is collapsed to
+one ``agent_thinking`` event in events_v1.jsonl). The internal callback
+contract (the tuple shape + ordering + interrupted-placeholder) still
+holds and is pinned below.
+
 PR #33 reshapes ``Session._make_thinking_callbacks`` into a 4-tuple
 ``(on_thinking_start, on_thinking_end, had_any, get_collected)`` so the
 session can persist a ``thinking_blocks`` list on every turn. These
@@ -16,8 +22,6 @@ tests lock down the observable behaviour consumed by ``_do_chat`` /
   when the matching ``on_thinking_end`` fires.
 * A spurious ``on_thinking_end`` with no pending start is still
   captured (defensive path) so no user-visible text is lost.
-* Each ``on_thinking_end`` writes a matching ``thinking_done`` event to
-  events.jsonl — the frontend's live path keys off this.
 """
 from __future__ import annotations
 
@@ -60,7 +64,12 @@ class ThinkingCallbacksTest(unittest.TestCase):
             on_start()
             self.assertFalse(had_any())  # start alone doesn't flip
 
-    def test_get_collected_returns_matched_block_ids_in_order(self) -> None:
+    def test_get_collected_returns_blocks_in_order(self) -> None:
+        """Phase 9: renamed from …_matched_block_ids_in_order after
+        dropping the cross-check against retired ``thinking_done`` events
+        in events.jsonl. The callback contract — two blocks in order,
+        each stamped with a unique ``block_id`` + ``duration_ms`` +
+        ``ts`` — still holds and is what consumers rely on."""
         with TemporaryDirectory() as tmp:
             s = self._new_session(Path(tmp))
             on_start, on_end, had_any, get_collected = s._make_thinking_callbacks()
@@ -73,20 +82,10 @@ class ThinkingCallbacksTest(unittest.TestCase):
             self.assertEqual(len(blocks), 2)
             self.assertEqual(blocks[0]["text"], "first body")
             self.assertEqual(blocks[1]["text"], "second body")
-            # Each block must carry the same block_id the matching
-            # thinking_done event wrote to events.jsonl — otherwise the
-            # frontend's data-block-id dedup can't pair replayed cells
-            # with the live-stream cell.
-            ipc = FileIPC(s.system_dir)
-            events = [
-                json.loads(line) for line in ipc.events_path.read_text().splitlines()
-                if line.strip()
-            ]
-            done_events = [e for e in events if e.get("type") == "thinking_done"]
-            self.assertEqual(len(done_events), 2)
-            self.assertEqual(blocks[0]["block_id"], done_events[0]["block_id"])
-            self.assertEqual(blocks[1]["block_id"], done_events[1]["block_id"])
+            # Distinct block_ids, both starting with the "th:" prefix.
+            self.assertNotEqual(blocks[0]["block_id"], blocks[1]["block_id"])
             for b in blocks:
+                self.assertTrue(b["block_id"].startswith("th:"))
                 self.assertIn("duration_ms", b)
                 self.assertIn("ts", b)
 

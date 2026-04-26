@@ -6,7 +6,7 @@ Butterfly is a file-backed Python agent runtime. The design follows these princi
 2. **Engines fill the loop's slots** — `llm_engine` → Provider, `tool_engine` → Tools, `skill_engine` → Skills, `session_engine` → Session wrapping the agent loop.
 3. **`runtime/` is the central coordinator** — watches sessions on disk, starts daemons, provides file-based IPC.
 4. **`agenthub/` is assets** — read-only config (prompts, tools, skills) seeded into sessions at creation.
-5. **Filesystem as agent's backend** — agents read/write their session dir; UI and server communicate via `context.jsonl` + `events.jsonl`. No sockets, no databases.
+5. **Filesystem as agent's backend** — agents read/write their session dir; the daemon, the web UI, and the CLI all communicate through one append-only event log: `_sessions/<id>/events_v1.jsonl`. See [`runtime/events.md`](runtime/events.md) for the schema and [`runtime/io.md`](runtime/io.md) for the only read/write surface. No sockets, no databases. (Legacy `context.jsonl` + `events.jsonl` are still dual-written during the Phase 11 transition; new code MUST NOT consume them.)
 6. **CLI is the primary user interface**.
 ## Layer Diagram
 
@@ -18,8 +18,8 @@ agenthub/ (static agent templates)
         → Provider (llm_engine)
         → Tools (tool_engine)
         → Skills (skill_engine)
-  → runtime (watcher, IPC, bridge)
-    → UI (cli, web)
+  → runtime (events.py, io.py, llm_context.py, watcher, bridge)
+    → UI (cli, web — both as thin shells over runtime.io)
 ```
 
 ## Key Architecture Decisions
@@ -28,7 +28,7 @@ agenthub/ (static agent templates)
 - **Hot reload**: Capabilities reload from disk before every agent activation. Edit files → agent picks up changes next run.
 - **Self-contained agents**: Each agent in `agenthub/` is fully self-contained — all prompts, tools, and skills are physically present. New agents are created with `--init-from <source>` (one-time copy) or `--blank`.
 - **Meta sessions**: Each agent seeds a meta session once; the meta session is the authoritative, evolving config. Child sessions are seeded from meta. Version staleness notices inform users when meta has advanced.
-- **File-based IPC**: JSONL append-only logs with byte-offset polling. No sockets, no message queues.
+- **File-based IPC**: `events_v1.jsonl` is the single append-only log; readers cursor by event id (browser SSE uses `Last-Event-ID`). No sockets, no message queues.
 
 ## Versioning
 

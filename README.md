@@ -31,16 +31,12 @@ One skill carries the full guide — load it inside Claude Code / Butterfly when
 
 ## Documentation
 
-Everything else lives in [`docs/`](docs/), mirroring the source tree. Each component directory has three files:
-
-| File | Purpose |
-|------|---------|
-| `design.md` | Architecture and rationale |
-| `impl.md` | Implementation reference — files, APIs, behaviors |
-| `todo.md` | Work log, known bugs, future directions |
+Everything else lives in [`docs/`](docs/), mirroring the source tree. One design doc per module.
 
 Start here:
 
-- [`docs/butterfly/design.md`](docs/butterfly/design.md) — runtime architecture
-- [`docs/agent/design.md`](docs/agent/design.md) — agent template system
-- [`docs/ui/design.md`](docs/ui/design.md) — CLI and Web frontends
+- [`docs/butterfly/runtime/events.md`](docs/butterfly/runtime/events.md) — `events_v1.jsonl` contract (the source of truth)
+- [`docs/butterfly/runtime/io.md`](docs/butterfly/runtime/io.md) — `butterfly.runtime.io` — the only read/write surface
+- [`docs/butterfly/session_engine/design.md`](docs/butterfly/session_engine/design.md) — daemon run loop
+- [`docs/ui/web/design.md`](docs/ui/web/design.md) — HTTP + SSE + unified Card
+- [`docs/ui/cli/design.md`](docs/ui/cli/design.md) — `butterfly io` reflection + friendly aliases

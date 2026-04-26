@@ -16,31 +16,21 @@ class PackageSurfaceTest(unittest.TestCase):
         for name in butterfly.__all__:
             self.assertTrue(hasattr(butterfly, name), name)
 
-    def test_subsystem_docs_exist(self) -> None:
+    def test_subsystem_design_docs_exist(self) -> None:
+        # Phase 10 purged impl.md/todo.md. `runtime/` was split into
+        # `events.md` + `io.md` so it lives as two docs rather than one
+        # design.md; checked separately.
         for name in [
             "core",
             "llm_engine",
-            "runtime",
             "service",
             "session_engine",
             "skill_engine",
             "tool_engine",
         ]:
             self.assertTrue((REPO_ROOT / "docs" / "butterfly" / name / "design.md").exists(), name)
-            self.assertTrue((REPO_ROOT / "docs" / "butterfly" / name / "impl.md").exists(), name)
-
-    def test_docs_list_all_runtime_subsystems(self) -> None:
-        text = (REPO_ROOT / "docs" / "butterfly" / "impl.md").read_text(encoding="utf-8")
-        for name in [
-            "core/",
-            "llm_engine/",
-            "tool_engine/",
-            "skill_engine/",
-            "session_engine/",
-            "runtime/",
-            "service/",
-        ]:
-            self.assertIn(name, text)
+        for fname in ("events.md", "io.md"):
+            self.assertTrue((REPO_ROOT / "docs" / "butterfly" / "runtime" / fname).exists(), fname)
 
     def test_public_modules_import_cleanly(self) -> None:
         for module_name in [

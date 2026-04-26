@@ -1,70 +1,128 @@
-# Web UI — Design
+# Web UI — HTTP, SSE, and the unified Card
 
-The web frontend serves a monitoring UI and HTTP API over the same file-backed session model used by the CLI. No second state model — everything comes from on-disk session files.
+The web backend is a thin shell over `butterfly.runtime.io`. Every route parses its request, calls exactly one `io.*` function, and returns the result as JSON. No business logic in `ui/web/app.py`. The frontend renders one Card per event via one reducer — live SSE and history replay drive the same code path.
 
-## v2.0.9 — UX polish
+## HTTP routes
 
-### Config editor
-- Two views + read-only table:
-  - **Form** view — structured inputs. Provider is a dropdown populated from `GET /api/models`; model becomes a dropdown keyed on the selected provider (with a `Custom…` escape hatch so power users can still type free-form model IDs). Complex fields (`tool_providers`, `prompts`, `tools`, `skills`, `duty`) remain JSON textareas to avoid building a dedicated widget per field.
-  - **Raw YAML** view — edits `sessions/<id>/core/config.yaml` byte-for-byte via `GET/PUT /api/sessions/{id}/config/yaml`. Comments are dropped by PyYAML on save (noted in the editor hint).
-- Backend sources model list from `butterfly/service/models_service.py` (hand-curated to match the 4 providers plus `openai-responses`). Not live-queried from provider APIs — the CLI surface is the source of truth.
-
-### 5-second input merge window (web only)
-State machine lives in `ui/web/frontend/src/components/chat.ts`:
+`ui/web/app.py`. Each handler is three to five lines: parse → `io.foo(...)` → JSON. Unknown errors become 500; `FileNotFoundError` → 404; `ValueError` → 400.
 
 ```
- IDLE ──Enter──▶ PENDING(5s timer)
- PENDING ──new msg──▶ PENDING (reset 5s, append buffer)
- PENDING ──timer, agent idle──▶ flush → IDLE
- PENDING ──timer, agent running──▶ BUFFERED_WHILE_STREAMING
- PENDING ──"Send now"──▶ flush → IDLE
- BUFFERED_WHILE_STREAMING ──model_status=idle──▶ flush → IDLE
- BUFFERED_WHILE_STREAMING ──new msg──▶ buffer append (no timer)
- ANY ──"Interrupt & send"──▶ POST /interrupt + flush → IDLE
+GET    /api/sessions                         → io.list_sessions
+POST   /api/sessions                         → io.create_session
+GET    /api/sessions/{id}                    → io.get_session
+DELETE /api/sessions/{id}                    → io.delete_session
+POST   /api/sessions/{id}/start              → io.start_session
+POST   /api/sessions/{id}/stop               → io.stop_session
+POST   /api/sessions/{id}/messages           → io.send_message
+POST   /api/sessions/{id}/interrupt          → io.interrupt_session
+GET    /api/sessions/{id}/events?since=...   → io.read_events            (JSON, replay)
+GET    /api/sessions/{id}/history            → io.read_display_history   (JSON, replay)
+GET    /api/sessions/{id}/events/stream      → io.tail_events            (SSE, live)
+GET    /api/sessions/{id}/hud                → io.read_hud
+GET    /api/sessions/{id}/tasks              → io.read_task_cards
+PUT    /api/sessions/{id}/tasks              → io.upsert_task
+DELETE /api/sessions/{id}/tasks/{name}       → io.delete_task
+GET    /api/sessions/{id}/todo_list          → io.read_todo_list
+POST   /api/sessions/{id}/todo_list          → io.upsert_todo_list
+GET    /api/sessions/{id}/config             → io.read_config
+PUT    /api/sessions/{id}/config             → io.update_config
+GET    /api/sessions/{id}/prompts/{name}     → io.read_prompt
+PUT    /api/sessions/{id}/prompts/{name}     → io.update_prompt
+GET    /api/sessions/{id}/assets/{name}      → io.read_asset
+PUT    /api/sessions/{id}/assets/{name}      → io.update_asset
+GET    /api/sessions/{id}/panel              → io.read_panel
+GET    /api/sessions/{id}/panel/{tid}        → io.read_panel_entry
+POST   /api/sessions/{id}/panel/{tid}/kill   → io.kill_panel_entry
+GET    /api/sessions/{id}/terminal           → io.read_terminal_state
+GET    /api/sessions/{id}/terminal/log       → io.read_terminal_log
+POST   /api/sessions/{id}/terminal/input     → io.terminal_input
+POST   /api/sessions/{id}/terminal/interrupt → io.terminal_interrupt
+GET    /api/models                           → io.list_models
+GET    /api/agents                           → io.list_agents
 ```
 
-Task-layer messages (duty fires, scheduled cards) bypass this entirely — they arrive through the task runtime, not the user-input path. CLI is untouched.
+If a feature needs a new route, it needs a new `runtime.io` function first. No routes compute anything the CLI can't.
 
-Auto-interrupt hint: when the pending buffer starts with `stop|wait|no|cancel|nope|hold on`, the "Interrupt & send" button pulses. We never auto-interrupt; the user presses the button.
+## SSE stream
 
-### HUD trim (v2.0.9)
-Before: `📁 cwd · 💬 ctx 42% (85k/200k) · ⎇ 3f +21 -7 · ⚡ in:1.2k out:0.4k cache:0.1k`
+```
+GET /api/sessions/{id}/events/stream?cursor=<int>
+```
 
-After: `• model-name · ctx 42% · [▶ bash] · 1.2k↓ 0.4k↑`
-- Status dot pulses green while the agent is running.
-- Running-tool pill is hidden unless a tool is mid-call.
-- Full cwd + full token breakdown are in `title=` tooltips.
+- One `Event` from `events_v1.jsonl` = one SSE frame.
+- SSE `id:` = Event `id` (browser auto-reconnect sends `Last-Event-ID`, which the server reads and resumes from).
+- SSE `event:` = Event `type`.
+- SSE `data:` = full Event object as JSON.
+- Keep-alive comment (`: keepalive\n\n`) every 30 s while idle.
+- Server honors `Last-Event-ID` header over the `?cursor=` query param.
 
-### Tool status redesign
-`msg-tool` now renders a uniform `▶ name | arg preview | ts` summary row + click-to-expand `<details>` block for full args. On `tool_done`, the row flips in place to `✓ name (duration)` (border accent switches yellow→green). No more separate `tool finished` msg-status line — keeps the log quiet, which the user explicitly asked for.
+No partial-text streaming. No multi-event batching. Shutdown is cooperative: uvicorn's `shutdown_event` gates the generator loop so Ctrl+C unwinds cleanly.
 
-### Thinking cell redesign (v2.0.9 follow-up)
+## History replay
 
-Prior behaviour leaked provider `thinking_delta` / `reasoning_*.delta` stream events directly into the same `on_text_chunk` callback that drives the main assistant-text `partial_text` channel. The web UI therefore showed partial chunks of chain-of-thought interleaved with the assistant's final answer, truncated at each 150-char flush boundary. The paths responsible for this were:
+`GET /api/sessions/{id}/events?since=0` returns the entire event list as a JSON array. The frontend feeds it through the exact same reducer as the SSE stream. **History = SSE, minus the tail.** Both live and replay produce the same Card list (alignment invariant).
 
-- `butterfly/llm_engine/providers/anthropic.py::_forward_stream_event` — forwarded `thinking_delta` bodies to `on_text_chunk`.
-- `butterfly/llm_engine/providers/codex.py::_parse_sse_stream` — forwarded `response.reasoning_text.delta` and `response.reasoning_summary_text.delta` to `on_text_chunk`.
-- `butterfly/llm_engine/providers/openai_responses.py::_stream` — same pattern as codex.
+## Unified Card
 
-All three are fixed. Thinking text is now routed through a pair of dedicated provider-level callbacks and a pair of IPC events:
+One event → one Card. Render function is pure:
 
-| Backend hook | IPC event | UI effect |
-|---|---|---|
-| `on_thinking_start()` | `thinking_start {block_id}` | Insert a `msg-thinking-running` cell reading `💭 Thinking…` (yellow accent, pulsing dots). |
-| `on_thinking_end(text)` | `thinking_done {block_id, text, duration_ms}` | Replace the running cell with a `<details>` that summarises `💭 Thought for Xs`; body is the full collected thinking text (collapsed by default). |
+```typescript
+function renderCard(props: CardProps): HTMLElement
+```
 
-Deltas are never emitted to the SSE stream — they stay server-side and are flushed as a single body on block close (matches the user's "don't stream thinking in real time" spec).
+`CardProps` is a small tagged union:
 
-For providers that return only encrypted / opaque reasoning (OpenAI Responses with `include=reasoning.encrypted_content`, Codex under the same flag), `on_thinking_end` fires with `text=""`. The UI shows the "Thought for Xs" pill with a body placeholder — the cell still appears so the user knows the model did reason, it just has no rendered text to display.
+```typescript
+interface CardProps {
+  kind: 'user' | 'agent-text' | 'agent-thinking' | 'agent-tool' | 'task' | 'system' | 'error';
+  accent: string;
+  title: string;
+  body: string | HTMLElement;
+  footer?: string;
+  collapsed?: boolean;
+}
+```
 
-The completed `turn` written to `context.jsonl` now carries a `has_streaming_thinking` flag symmetric to `has_streaming_tools`. Live SSE replay suppresses the old inline-thinking emit when that flag is set, so thinking cells don't render twice after a reconnect. History replay (`?context_since=…` on `/history`) still re-emits from turn content so pre-v2.0.9 sessions continue to show their reasoning.
+`cardPropsFor(card)` (pure) maps each event type to `CardProps`. Styling varies by `kind` (a CSS class) and `accent`.
 
-### YAML PUT hardening (v2.0.9 review fix)
+### Two cross-event rules (both keyed by `tool_use_id`)
 
-`service/config_service.py::update_config` now whitelist-filters the inbound params against `DEFAULT_CONFIG.keys()` before calling `write_config`. Previously a client could persist arbitrary keys via `PUT /api/sessions/{id}/config` or `.../config/yaml`, and they'd round-trip forever via `read_config`'s `{**DEFAULT_CONFIG, **raw}` merge. `session_config.write_config` also switched to an atomic tempfile + `os.replace` write so a concurrent read never sees a half-written file (the YAML PUT is now network-reachable).
+1. `agent_tool_call` without a matching `agent_tool_result` renders "running"; when the result arrives, the same Card re-renders with the result body.
+2. `tool_progress` is appended to the same Card's progress log.
 
-### Pending-buffer session-switch fix (v2.0.9 review fix)
+Implementation: a `Map<tool_use_id, Card>` lookup. No other cross-event state. Every other event produces an independent Card.
 
-`chat.ts`'s `currentSession` handler now flushes the 5-s merge buffer if the user switches to a different session mid-window. Previously the pending bar lingered on the new session with the previous session's text, and "Send now" silently targeted the old session id.
+## Reducer and store
 
+`reduce(event)` returns a list of card ids to re-render. `reduceMany(events)` is the replay fast path — used for history. SSE handlers call `reduce` per frame. Store shape:
+
+```typescript
+interface StoreShape {
+  currentSession: string | null;
+  sessions: SessionInfo[];
+  cards: Card[];                       // ordered by event id
+  cardByToolUseId: Map<string, Card>;  // for tool pairing
+  hud: HudSnapshot;
+  tasks: TaskCard[];
+  todoList: TodoList;
+  panel: PanelEntry[];
+  terminal: TerminalState;
+}
+```
+
+Live SSE events and replay events dispatch the identical reducer step. No divergence path.
+
+## Source layout
+
+```
+ui/web/app.py                          # FastAPI routes
+ui/web/frontend/src/api.ts             # fetch() wrappers for the route map
+ui/web/frontend/src/sse.ts             # EventSource wrapper, Last-Event-ID resume
+ui/web/frontend/src/reducer.ts         # reduce(event) → store mutation
+ui/web/frontend/src/store.ts           # StoreShape + subscribe
+ui/web/frontend/src/card.ts            # renderCard + cardPropsFor
+ui/web/frontend/src/main.ts            # app entrypoint, DOM wiring
+ui/web/frontend/src/components/        # panel, sidebar, HUD chrome
+```
+
+Previous ad-hoc state (streaming bubble promotion, `bashRunningCount` DOM recount, three-phase background-cell transitions, `markRunningToolsInterrupted`, `expandedTasks` sets, `assetCache`, the `diff.ts` module) is gone. The unified Card + one-reducer model replaces all of it.
