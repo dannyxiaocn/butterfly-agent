@@ -1815,16 +1815,29 @@ class Session:
                         # → "cli" (operator came from the CLI) and pass
                         # everything else through so "task" / "sub_agent"
                         # / "panel" survive.
-                        _new_source = "cli" if source == "user" else source
-                        self._emit_event(
-                            rt_events.EVENT_USER_INPUT,
-                            {
-                                "text": content,
-                                "source": _new_source,
-                                "caller": msg.get("tool_name") or msg.get("caller"),
-                                "display_name": msg.get("display_name"),
-                            },
-                        )
+                        #
+                        # If the upstream writer was ``runtime.io.send_message``
+                        # / ``interrupt_session(text=…)``, it has already
+                        # written the canonical event to events_v1.jsonl and
+                        # tagged the context.jsonl entry with ``events_v1_id``.
+                        # Skip our mirror in that case — otherwise the same
+                        # user turn lands in events_v1 twice (and the
+                        # ``build_llm_context`` adjacent-merge surfaces it as
+                        # a doubled user message to the LLM). Legacy callers
+                        # (subagent_resume, weixin, ui/cli/chat) still write
+                        # only context.jsonl, so the marker is absent and we
+                        # mirror as before.
+                        if msg.get("events_v1_id") is None:
+                            _new_source = "cli" if source == "user" else source
+                            self._emit_event(
+                                rt_events.EVENT_USER_INPUT,
+                                {
+                                    "text": content,
+                                    "source": _new_source,
+                                    "caller": msg.get("tool_name") or msg.get("caller"),
+                                    "display_name": msg.get("display_name"),
+                                },
+                            )
                         await self._enqueue(item)
 
                 # Terminal input queue — picks up typed lines + ^C from

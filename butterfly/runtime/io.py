@@ -555,6 +555,16 @@ def list_agents() -> list[str]:
 # Invariant I5: the web UI (and CLI) writes through these functions only
 # — no direct file IO elsewhere. Invariant I6: every function here is
 # CLI-callable (Phase 6 wires ``butterfly io <name>`` reflection).
+#
+# Single-writer contract: the event append is fcntl-locked, but the
+# follow-up side-effects (``save_card``, ``write_script``, …) run outside
+# the lock. Today's deployment has at most one writer at a time per
+# session (the daemon, plus the operator's CLI which the daemon
+# coalesces) so the derived files cannot drift from the event log. If a
+# future deployment ever runs two concurrent CLI writers (or two
+# daemons) on the same session, those side-effects need their own
+# coordination — flag this here rather than discovering the drift in
+# production.
 
 
 # ── Validators ────────────────────────────────────────────────────────────────
@@ -742,6 +752,13 @@ def send_message(
     # TODO(phase11): daemon watches events_v1 natively — drop this call.
     # Today it writes a companion ``user_input`` entry to context.jsonl
     # and wakes the daemon via FileIPC; both are legacy channels.
+    #
+    # ``events_v1_id=event.id`` carries the canonical event id we just wrote
+    # so the dispatcher (session.py) recognises this user_input as already
+    # mirrored and skips its dual-emit. Without the marker we would log the
+    # same user message twice in events_v1.jsonl — once here, once when the
+    # daemon pulls it from context.jsonl — and ``build_llm_context`` would
+    # show the LLM the user turn twice on every web/CLI message.
     try:
         from butterfly.service.messages_service import send_message as _svc_send
 
@@ -751,6 +768,7 @@ def send_message(
             _SYSTEM_SESSIONS_DIR,
             caller=caller or "human",
             mode="interrupt",
+            events_v1_id=event.id,
         )
     except (FileNotFoundError, ValueError):
         # Daemon-notify is best-effort; event is already persisted.
@@ -795,16 +813,11 @@ def interrupt_session(session_id: str, *, text: str | None = None) -> Event:
     # behaviour. The event is already logged above; this is the
     # daemon-notify leg only.
     #
-    # KNOWN ISSUE (Phase 11 fix): the service.send_message path triggers
-    # the daemon's Phase 3a dual-emit, which will write a SECOND
-    # EVENT_USER_INPUT event to events_v1 for the same text. In live
-    # sessions this means `build_llm_context` sees the interrupt text
-    # twice (once as user_interrupt, once as user_input). Phase 11
-    # collapses this by having the daemon watch events_v1 natively
-    # instead of going through service.send_message — the daemon will
-    # then NOT re-emit on receipt, killing the duplication. Until then
-    # the duplication is a visible but bounded cosmetic artifact on
-    # live ⚡+message flows.
+    # ``events_v1_id=event.id`` is the same dedup marker used by
+    # ``send_message`` above: the dispatcher will see it on the context.jsonl
+    # entry and skip the dual-emit, so the user-side text appears exactly
+    # once in events_v1.jsonl (as ``user_interrupt``, not as a second
+    # ``user_input``).
     if text:
         try:
             from butterfly.service.messages_service import (
@@ -817,6 +830,7 @@ def interrupt_session(session_id: str, *, text: str | None = None) -> Event:
                 _SYSTEM_SESSIONS_DIR,
                 caller="human",
                 mode="interrupt",
+                events_v1_id=event.id,
             )
         except (FileNotFoundError, ValueError):
             pass
