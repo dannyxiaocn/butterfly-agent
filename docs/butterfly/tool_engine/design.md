@@ -12,7 +12,7 @@ This file is the authoritative spec for v2.0.5. It covers the catalog, the backg
 2. **Minimal parameters.** Every deterministic-per-session value is injected at ToolLoader time, not by the agent per call.
 3. **Schema + description define agent UX.** Both are authoritative; sub-agents building tools must treat them as contracts.
 4. **Structured results.** Tools return strings, but those strings are conventionalized (see §6). Large outputs spill to disk.
-5. **Append-only history.** Any notification or event the agent needs to see goes to `context.jsonl` exactly once — never re-injected at prompt-build time (see §8 on TTL avoidance).
+5. **Append-only history.** Any notification or event the agent needs to see is appended to `events_v1.jsonl` exactly once — never re-injected at prompt-build time (see §8 on TTL avoidance). The LLM context is rebuilt from `events_v1.jsonl` via `build_llm_context()` at every tick (see [`docs/butterfly/runtime/events.md`](../runtime/events.md)).
 
 ---
 
@@ -153,8 +153,8 @@ In `Agent._execute_tools` (`butterfly/core/agent.py`):
 `BackgroundTaskManager` owns a daemon-side poller (`butterfly/tool_engine/background.py`). When a spawned process completes (or stalls, or is killed), the manager:
 
 1. Writes final state + output-file path into `sessions/<id>/core/panel/<tid>.json`.
-2. Emits a `panel_update` event on `events.jsonl` (for UI).
-3. **Appends a single user-role notification message** to `context.jsonl`:
+2. Appends a `panel_entry_changed` event to `events_v1.jsonl` (for UI). Legacy `panel_update` is still dual-written to the old `events.jsonl` during the Phase 11 transition; new consumers MUST read the v1 event.
+3. **Appends a single `user_input` event** (`source="task"` / `source="sub_agent"` etc.) to `events_v1.jsonl`:
    ```
    Background task <tid> (<tool>) completed with exit 0 in 47s. 2.3KB output.
    Fetch full output: tool_output(task_id="<tid>").
@@ -237,13 +237,11 @@ All tools return strings for provider compatibility, but adopt conventions so th
 
 Tools that complete normally (no raised exception) but whose output text encodes a failure — e.g. `bash` returning with `[exit 127, ...]`, an executor echoing a `Traceback (most recent call last):` — used to surface as green ✓ cells in the web UI, which was misleading. `butterfly/tool_engine/result_classifier.py` centralises the detection:
 
-- `classify_tool_result(tool_name, result) -> bool` — called once per call from `core/agent.py::_execute_tools` right after `tool.execute()` returns. The returned flag is combined with the exception-path `is_error` (tool-not-found, background-spawn-fail, raised exception) and threaded through `on_tool_done(name, input, result, tool_use_id, is_error)` so `Session._make_tool_done_callback` stamps `is_error` onto the `tool_done` event on `events.jsonl`.
+- `classify_tool_result(tool_name, result) -> bool` — called once per call from `core/agent.py::_execute_tools` right after `tool.execute()` returns. The returned flag is combined with the exception-path `is_error` (tool-not-found, background-spawn-fail, raised exception) and threaded through `on_tool_done(name, input, result, tool_use_id, is_error)` so `Session` stamps `is_error` onto the `agent_tool_result` event in `events_v1.jsonl` (the retired `tool_done` event in legacy `events.jsonl` is still dual-written until Phase 11).
 - Rule table lives at the module top of `result_classifier.py`. `bash` and `terminal_use` share a rule that parses the last `[exit N, ...]` footer (last match wins so trailing multi-command output classifies on the final exit code) and treats any `[timed out after ...]` prefix as error. `terminal_create` has no footer (welcome-block only) and falls through to the default rule, which correctly treats it as success. All other tools fall through to the default rule: `Traceback (most recent call last):` anywhere in the body, or the first non-empty line starting with `Error:` / `ERROR:` / `Error ` / `Traceback …`.
 - The classifier errs on the side of green. An unknown tool produces a false negative (error that should be red stays green) — never a false positive (success painted red). Add a dedicated rule in `_RULES` when a tool's failure idiom slips past the default.
 
-The web UI renders the same `is_error` bit two ways:
-- Live path: `tool_done` event carries `is_error`; `chat.ts` tool_done handler adds `.msg-tool.error` class and swaps the icon glyph to ✗.
-- History replay path: `ipc._context_event_to_display` already copies `is_error` from the paired `tool_result` block onto the replayed `tool` event (pre-v2.0.23); the new `renderEvent` branch just reads it.
+The web UI renders `is_error` through one path: the `agent_tool_result` event carries `is_error`, and the unified `reducer.ts` upgrades the matching tool Card (looked up via `tool_use_id`) to its error styling. Live SSE and history replay drive the same reducer — there is no separate "history replay path" anymore (see [`docs/ui/web/design.md`](../../ui/web/design.md)).
 
 ### 6.2 Disk spillover
 
@@ -275,12 +273,12 @@ No free-standing `memory_write` — everything goes through `memory_update` to k
 
 Claude Code's prompt-time reminder injection caused context exhaustion when reminders weren't garbage-collected (issues #6854/#11716/#13249). Butterfly avoids this structurally.
 
-- **All** notifications — background completion, stall, progress heartbeats, kill-by-restart — are appended to `context.jsonl` **exactly once**, as ordinary user-role messages.
-- Nothing is re-injected at prompt build time. The normal "replay context.jsonl to rebuild prompt" path sees each notification once, forever, just like any other message.
+- **All** notifications — background completion, stall, progress heartbeats, kill-by-restart — are appended to `events_v1.jsonl` **exactly once**, as ordinary `user_input` events (`source` distinguishes background-task vs. sub-agent vs. operator).
+- Nothing is re-injected at prompt-build time. `build_llm_context()` is a pure filter over the event log; each notification appears once, forever, just like any other event.
 - Growth is O(N_notifications), not O(N_notifications × N_turns).
 - Progress heartbeats use **delta semantics**: each notification contains only bytes appended since the last delivery for that task, tracked via `panel/<tid>.json#last_delivered_bytes`. Re-reading the file from scratch is never forced on the agent.
 
-The events.jsonl side also gets a mirror event per notification (for UI, not prompt), but events.jsonl is not replayed as context; it's only for live display.
+UI-only system events (e.g. `panel_entry_changed`, `tool_progress`) carry `for_llm=False` in the same `events_v1.jsonl` log; the LLM context builder filters them out, but the web reducer renders them.
 
 ---
 
@@ -340,11 +338,12 @@ its own conversation history.
   background-completion path when it lands.
 - Background mode (`run_in_background=true`): identical to bash bg —
   parent gets a `task_id=…` placeholder immediately and continues; the
-  child's completion arrives later as a `user_input` notification appended
-  to the parent's `context.jsonl` (with the child's full reply inline).
-  The tool description tells the agent this explicitly ("continue with
-  your own work — the runtime handles delivery") to stop it from
-  bash-catting the child's `events.jsonl` out of impatience (v2.0.19).
+  child's completion arrives later as a `user_input` event (with
+  `source="sub_agent"`) appended to the parent's `events_v1.jsonl` (with
+  the child's full reply inline). The tool description tells the agent
+  this explicitly ("continue with your own work — the runtime handles
+  delivery") to stop it from bash-catting the child's `events_v1.jsonl`
+  out of impatience (v2.0.19).
 
 ### Required `name` parameter (v2.0.19)
 
@@ -372,7 +371,7 @@ and `env.md`).
 
 ### Sub-agent cancel cascade (v2.0.24)
 
-A child session's daemon runs independently of the parent's await chain — `init_session` writes the child's manifest, the parent's `SessionWatcher` adopts it, and the child polls its own `context.jsonl` from there. When the parent cancels mid-`sub_agent` (chat-with-mode=interrupt, ⚡ Interrupt button, or Stop), the asyncio cancel propagating up through `_execute_tools → SubAgentTool.execute()` does **not** reach the child daemon — without explicit cascade, the child keeps spending tokens on a discarded task. Two cooperating fixes:
+A child session's daemon runs independently of the parent's await chain — `init_session` writes the child's manifest, the parent's `SessionWatcher` adopts it, and the child polls its own `events_v1.jsonl` from there. When the parent cancels mid-`sub_agent` (chat-with-mode=interrupt, ⚡ Interrupt button, or Stop), the asyncio cancel propagating up through `_execute_tools → SubAgentTool.execute()` does **not** reach the child daemon — without explicit cascade, the child keeps spending tokens on a discarded task. Two cooperating fixes:
 
 - `SubAgentTool.execute` (blocking path): wraps `await _wait_for_reply` in `try/except CancelledError` that calls `BridgeSession(child).send_interrupt()` before re-raising. Reaches the child via the same control event the bare ⚡ button uses; child's own `_handle_explicit_interrupt` cancels its in-flight run + drops its inbox + cascades to its own background runners (recursive).
 - `SubAgentRunner.kill` (background path): now calls `send_interrupt()` first, then `stop_session()`. Pre-2.0.24 the kill path only set `status=stopped` on the child, but the daemon's stopped-check fires only when a fresh input arrives — so an in-flight chat kept running until a natural break. Sending interrupt first cancels immediately; the stop call then prevents future task wakeups from auto-resuming.
@@ -399,18 +398,21 @@ When the runner is in background mode it owns a `PanelEntry` of type
 - `meta.child_session_id` — for sidebar pivot + "Open child session" link.
 - `meta.mode` — for the mode chip.
 - `meta.last_child_state` — refreshed every `polling_interval` seconds by
-  tailing the child's `events.jsonl`. Drives the `tool_progress` event
-  the parent's chat UI uses to keep the tool cell yellow with a live
-  summary.
+  tailing the child's `events_v1.jsonl`. Drives the `tool_progress` event
+  the parent's chat UI uses to keep the tool Card in its "running" state
+  with a live summary.
 - `meta.result` / `meta.result_text` — populated on completion.
 
 Web UI (see `ui/web/frontend/src/components/{chat,sidebar,panel}.ts`):
 
 - Chat HUD shows `⚙ N sub-agents running` while any sub_agent panel
   entry is non-terminal.
-- The chat-side tool cell stays yellow ("working") until the matching
-  `tool_finalize` event arrives (also fixes the prior bash-bg bug where
-  the cell flashed green immediately on the spawn placeholder).
+- The chat-side tool Card stays in its "running" state until the
+  matching `agent_tool_result` event arrives (the unified reducer keys
+  by `tool_use_id`). The retired `tool_finalize` event no longer fires
+  — pairing happens in one place, in `reducer.ts`. This also fixes the
+  prior bash-bg bug where the cell flashed green immediately on the
+  spawn placeholder.
 - The parent's panel renders the sub_agent card with a thumbnail
   (current activity) and an expandable view of the child's last 5
   events (via `GET /api/sessions/{child_id}/events_tail?n=5`).
