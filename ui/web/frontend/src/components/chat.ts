@@ -37,15 +37,45 @@ export function createChat(): HTMLElement {
       messagesEl.scrollTop + messagesEl.clientHeight >= messagesEl.scrollHeight - 40;
 
     // Rebuild with a DocumentFragment — single reflow, no innerHTML.
+    // Each card render is isolated in try/catch: a single malformed event
+    // (NaN ts, missing required field, reducer regression) must not abort
+    // the loop and silently drop every later card. We surface the failure
+    // as a small inline placeholder so the user sees that something went
+    // wrong rather than a blank pane.
     const frag = document.createDocumentFragment();
     for (const card of store.cards) {
-      frag.appendChild(renderCard(cardPropsFor(card)));
+      try {
+        frag.appendChild(renderCard(cardPropsFor(card)));
+      } catch (err) {
+        console.error('renderCard failed for card', card, err);
+        frag.appendChild(renderErrorPlaceholder(card, err));
+      }
     }
     messagesEl.replaceChildren(frag);
 
     if (wasAtBottom) {
       messagesEl.scrollTop = messagesEl.scrollHeight;
     }
+  }
+
+  function renderErrorPlaceholder(card: unknown, err: unknown): HTMLElement {
+    const el = document.createElement('div');
+    el.className = 'card card--error';
+    const kind = (card && typeof card === 'object' && 'kind' in card)
+      ? String((card as { kind: unknown }).kind)
+      : 'unknown';
+    const message = err instanceof Error ? err.message : String(err);
+    // textContent (not innerHTML) — error message is untrusted by virtue
+    // of having come out of a render path that just failed.
+    const title = document.createElement('div');
+    title.className = 'card-header';
+    title.textContent = `⚠ render failed (kind=${kind})`;
+    const body = document.createElement('div');
+    body.className = 'card-body';
+    body.textContent = message;
+    el.appendChild(title);
+    el.appendChild(body);
+    return el;
   }
 
   // Card-adjacent re-render: the reducer emits 'cards' on both append
