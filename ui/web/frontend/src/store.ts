@@ -1,59 +1,17 @@
-// Minimal pub-sub store. No derivation, no signals library — the
-// reducer writes here, components subscribe and re-render.
-import type {
-  BfEvent,
-  HudSnapshot,
-  PanelEntry,
-  Params,
-  Session,
-  TaskCard,
-  TerminalState,
-  TodoListSnapshot,
-} from './types';
-
-// One Card per Event. Cards are ordered by event id (monotonic per session).
-// The tool_use ↔ tool_result pairing (DESIGN.md §8.1) is the ONLY
-// cross-event rule: we key the call's card by tool_use_id so the matching
-// result can upgrade it in place.
-export interface Card {
-  event: BfEvent;
-  // When a tool_result arrives, we mutate the matching call-card's
-  // resultPayload rather than appending a second card.
-  resultEvent?: BfEvent | null;
-}
+import type { DisplayEvent, PanelEntry, Params, Session, TaskCard, TodoListSnapshot } from './types';
 
 type Listener = () => void;
 
-export interface StoreShape {
-  currentSessionId: string | null;
-  sessions: Session[];
-  currentParams: Params | null;
-  cards: Card[];
-  cardByToolUseId: Map<string, Card>;
-  hud: HudSnapshot | null;
-  tasks: TaskCard[];
-  todoList: TodoListSnapshot | null;
-  panel: PanelEntry[];
-  terminal: TerminalState | null;
-  weixinStatus: { status: string; error?: string; session?: string; account?: string };
-  // Highest event id applied through the reducer for the current session.
-  // SSE / history consumers use this as a cursor.
-  cursor: number;
-}
-
-class Store implements StoreShape {
-  currentSessionId: string | null = null;
+class Store {
   sessions: Session[] = [];
+  currentSessionId: string | null = null;
   currentParams: Params | null = null;
-  cards: Card[] = [];
-  cardByToolUseId: Map<string, Card> = new Map();
-  hud: HudSnapshot | null = null;
-  tasks: TaskCard[] = [];
+  modelState: { state: string; source: string | null } = { state: 'idle', source: null };
+  taskCards: TaskCard[] = [];
   todoList: TodoListSnapshot | null = null;
-  panel: PanelEntry[] = [];
-  terminal: TerminalState | null = null;
+  panelEntries: PanelEntry[] = [];
   weixinStatus: { status: string; error?: string; session?: string; account?: string } = { status: 'idle' };
-  cursor = 0;
+  chatEvents: DisplayEvent[] = [];
 
   private _listeners: Map<string, Set<Listener>> = new Map();
 
@@ -70,20 +28,6 @@ class Store implements StoreShape {
 
   get currentSession(): Session | null {
     return this.sessions.find(s => s.id === this.currentSessionId) ?? null;
-  }
-
-  /** Reset per-session state. Called on session switch. The reducer
-   *  always assumes a clean slate for a new session — live + replay both
-   *  dispatch against this zero state. */
-  resetSession(): void {
-    this.cards = [];
-    this.cardByToolUseId = new Map();
-    this.hud = null;
-    this.tasks = [];
-    this.todoList = null;
-    this.panel = [];
-    this.terminal = null;
-    this.cursor = 0;
   }
 }
 

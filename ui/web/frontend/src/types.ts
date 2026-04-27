@@ -1,74 +1,10 @@
-// Frontend types — mirror butterfly/runtime/events.py schema (DESIGN.md §3).
-// One event envelope: {id, ts, type, for_llm, payload}. Payload shape varies
-// by type; we stay loose (payload: any) at the boundary and narrow inside
-// eventToCardProps().
-
-// ── Event type literals (mirror butterfly/runtime/events.py) ────────────────
-export const EVT = {
-  USER_INPUT: 'user_input',
-  USER_INTERRUPT: 'user_interrupt',
-  AGENT_TEXT: 'agent_text',
-  AGENT_THINKING: 'agent_thinking',
-  AGENT_TOOL_CALL: 'agent_tool_call',
-  AGENT_TOOL_RESULT: 'agent_tool_result',
-  SESSION_CREATED: 'session_created',
-  SESSION_STARTED: 'session_started',
-  SESSION_STOPPED: 'session_stopped',
-  SESSION_DELETED: 'session_deleted',
-  MODEL_STATUS: 'model_status',
-  LLM_CALL_USAGE: 'llm_call_usage',
-  TOOL_PROGRESS: 'tool_progress',
-  TASK_CARD_CHANGED: 'task_card_changed',
-  TASK_SCRIPT_CHECK: 'task_script_check',
-  TASK_SCRIPT_ERROR: 'task_script_error',
-  TASK_FINISHED: 'task_finished',
-  TODO_LIST_CHANGED: 'todo_list_changed',
-  TERMINAL_LOG: 'terminal_log',
-  TERMINAL_STATE: 'terminal_state',
-  TERMINAL_INPUT: 'terminal_input',
-  PANEL_ENTRY_CHANGED: 'panel_entry_changed',
-  SUB_AGENT_COUNT: 'sub_agent_count',
-  CONFIG_CHANGED: 'config_changed',
-  PROMPT_CHANGED: 'prompt_changed',
-  ASSET_CHANGED: 'asset_changed',
-  SYSTEM_NOTICE: 'system_notice',
-  ERROR: 'error',
-  CONTROL_INTERRUPT: 'control_interrupt',
-  CONTROL_START: 'control_start',
-  CONTROL_STOP: 'control_stop',
-} as const;
-
-export type EventType = typeof EVT[keyof typeof EVT] | string;
-
-export interface BfEvent {
-  id: number;
-  ts: number;
-  type: EventType;
-  for_llm: boolean;
-  payload: Record<string, any>;
-}
-
-// ── Session / UI types ──────────────────────────────────────────────────────
-
-export interface Params {
-  model: string | null;
-  provider: string | null;
-  fallback_model?: string | null;
-  fallback_provider?: string | null;
-  thinking?: boolean;
-  thinking_budget?: number;
-  thinking_effort?: string;
-  is_meta_session?: boolean;
-  [key: string]: unknown;
-}
-
 export interface Session {
   id: string;
   agent: string;
-  status: 'active' | 'stopped' | string;
+  status: 'active' | 'stopped';
   pid: number | null;
   pid_alive: boolean;
-  model_state: 'idle' | 'running' | string;
+  model_state: 'idle' | 'running';
   model_source: string | null;
   last_run_at: string | null;
   created_at: string | null;
@@ -76,43 +12,28 @@ export interface Session {
   persistent: boolean;
   has_tasks: boolean;
   params?: Params;
+  // Sub-agent hierarchy: when set, this session was spawned by another and
+  // the sidebar renders it indented under its parent.
   parent_session_id?: string | null;
+  // Sub-agent permission mode (explorer / executor) — surfaced in sidebar
+  // chip and panel cards.
   mode?: string | null;
+  // User-facing session label (set by the new-session form or by the
+  // sub_agent tool's ``name`` arg). When present, the sidebar and panel
+  // render this in place of the raw session_id.
   display_name?: string | null;
 }
 
-export interface TaskCard {
-  name: string;
-  description: string;
-  check_interval: number;
-  status: 'pending' | 'working' | 'finished' | 'paused';
-  last_checked_at: string | null;
-  last_started_at: string | null;
-  last_finished_at: string | null;
-  created_at: string;
-  comments: string;
-  progress: string;
-  script?: string | null;
-}
-
-export interface TodoListItem {
-  content: string;
-  status: 'pending' | 'in_progress' | 'completed';
-  activeForm: string;
-}
-
-export interface TodoListSnapshot {
-  progress_line: string;
-  progress: string;
-  comments: string;
-  active_index: number | null;
-  total: number;
-  pending_count: number;
-  all_done: boolean;
-  iters_since_seen: number;
-  threshold: number;
-  updated_at: string | null;
-  items: TodoListItem[];
+export interface Params {
+  model: string | null;
+  provider: string | null;
+  fallback_model: string | null;
+  fallback_provider: string | null;
+  thinking: boolean;
+  thinking_budget: number;
+  thinking_effort: string;
+  is_meta_session?: boolean;
+  [key: string]: unknown;
 }
 
 export type PanelEntryStatus =
@@ -120,8 +41,7 @@ export type PanelEntryStatus =
   | 'completed'
   | 'stalled'
   | 'killed'
-  | 'killed_by_restart'
-  | string;
+  | 'killed_by_restart';
 
 export interface PanelEntry {
   tid: string;
@@ -146,53 +66,52 @@ export interface PanelEntryDetail extends PanelEntry {
   output_tail: string | null;
 }
 
-export interface TerminalState {
-  active: boolean;
-  cwd: string | null;
-  cwd_display: string | null;
-  home: string | null;
-  venv: string | null;
-  git_branch: string | null;
-  git_dirty: boolean | null;
-  last_active_at: number | null;
-  foreground_pid: number | null;
-  foreground_cmd: string | null;
-  locked_by: 'agent' | 'user' | null;
-  shell_pid: number | null;
+// v2.0.37 — standalone todo list (decoupled from task cards). Stored at
+// core/todo_list.json; rendered pinned at the top of the Tasks tab and
+// summarised on the HUD's third row.
+export interface TodoListItem {
+  content: string;
+  status: 'pending' | 'in_progress' | 'completed';
+  activeForm: string;
 }
 
-export interface HudSnapshot {
-  cwd?: string;
-  context_bytes?: number;
-  context_tokens?: number | null;
-  max_context_tokens?: number;
-  toks_per_s?: number | null;
-  model?: string | null;
-  thinking?: boolean;
-  thinking_effort?: string | null;
-  git?: { files: number; added: number; deleted: number };
-  usage?: { input?: number; output?: number; cache_read?: number; cache_write?: number; reasoning?: number } | null;
-  sub_agents_running?: number;
-  bash_running?: number;
-  todo?: {
-    progress_line: string;
-    active_index: number | null;
-    total: number;
-    pending_count: number;
-    all_done: boolean;
-    iters_since_seen: number;
-    threshold: number;
-    items: TodoListItem[];
-  } | null;
+export interface TodoListSnapshot {
+  progress_line: string;
+  progress: string;
+  comments: string;
+  active_index: number | null;
+  total: number;
+  pending_count: number;
+  all_done: boolean;
+  iters_since_seen: number;
+  threshold: number;
+  updated_at: string | null;
+  items: TodoListItem[];
 }
 
-// ── Model catalog ───────────────────────────────────────────────────────────
+export interface TaskCard {
+  name: string;
+  description: string;
+  check_interval: number;
+  status: 'pending' | 'working' | 'finished' | 'paused';
+  last_checked_at: string | null;
+  last_started_at: string | null;
+  last_finished_at: string | null;
+  created_at: string;
+  comments: string;
+  progress: string;
+  // v2.0.29 — single bash script per card. Last line of stdout decides
+  // dispatch: [skip] / [start] / [start] <msg> / [done].
+  script?: string | null;
+}
 
 export interface ModelCatalogEntry {
   name: string;
   max_context_tokens: number;
   exposes_reasoning_tokens: boolean;
   default: boolean;
+  // Optional Anthropic-specific knobs; null when unset or provider is not
+  // Anthropic. See models.yaml for allowed string values.
   thinking_mode?: string | null;
   thinking_effort?: string | null;
   thinking_display?: string | null;
@@ -215,7 +134,96 @@ export interface ModelsCatalog {
   providers: ProviderCatalogEntry[];
 }
 
-// ── Session tone helpers (reused from pre-refactor UI) ──────────────────────
+export interface DisplayEvent {
+  type: string;
+  content?: string;
+  ts?: string;
+  name?: string;
+  input?: Record<string, unknown>;
+  state?: string;
+  source?: string;
+  value?: string;
+  triggered_by?: string;
+  usage?: {
+    input?: number;
+    output?: number;
+    cache_read?: number;
+    cache_write?: number;
+    reasoning?: number;
+  };
+  result_len?: number;
+  result?: string;
+  result_truncated?: boolean;
+  iterations?: number;
+  id?: string;
+  card?: string;
+  message?: string;
+  // thinking_start / thinking_done
+  block_id?: string;
+  text?: string;
+  duration_ms?: number;
+  // Background-spawn tagging on tool_done so the UI keeps the cell yellow
+  // until tool_finalize arrives (sub_agent + bash background).
+  is_background?: boolean;
+  tid?: string;
+  // tool_progress: latest one-line summary (e.g. "running tool: bash").
+  summary?: string;
+  // tool_finalize: terminal kind from BackgroundEvent.
+  kind?: string;
+  exit_code?: number | null;
+  // sub_agent_count: HUD badge tally.
+  running?: number;
+  // llm_call_usage (v2.0.19): per-LLM-call accounting for the HUD. Token
+  // counts are nested under ``usage`` (same shape as loop_end) — the
+  // top-level ``input`` field on this event is NOT a token count (it's
+  // reserved for the tool_call event's input record).
+  iteration?: number;
+  context_tokens?: number;
+  toks_per_s?: number | null;
+  // thinking_tokens_update (v2.0.19): credits the provider-reported
+  // reasoning_tokens for one LLM call to a specific thinking block so the
+  // cell label flips from "Thought Xs" to "Thought Xs for N tokens".
+  reasoning_tokens?: number;
+  // v2.0.20: persisted thinking block whose turn ended via interrupt before
+  // on_thinking_end closed it — history replay renders these as
+  // "Thinking interrupted" instead of the normal "Thought" label.
+  interrupted?: boolean;
+  // v2.0.23: tool_done + history-replayed tool event — ``true`` when the
+  // tool raised (core/agent.py) or the tool_engine classifier matched a
+  // failure pattern (bash non-zero exit, Traceback, leading "Error:" line).
+  // Frontend flips .msg-tool to the red ✗ state when set.
+  is_error?: boolean;
+  // v2.0.23: on 'user' display events, identifies which of the three input
+  // origins this row represents — drives the glass-card colour variant:
+  //   caller=human (or absent) + source=user → green (human chat)
+  //   caller=system + source=panel           → orange-yellow (bg tool output)
+  //   caller=task                            → sky blue (task wakeup) — not
+  //       currently emitted by the backend for task runs (task_wakeup is a
+  //       separate event type), reserved for future unification.
+  // The `task_wakeup` event itself carries `card` for the dim sub-label.
+  caller?: string;
+  // v2.0.23: background-tool-notification user_input rows carry the
+  // originating tool's name so the glass card's dim sub-label can read
+  // "tool output — bash" without parsing the free-form notification body.
+  tool_name?: string;
+  // v2.0.23: sub_agent completion notifications (tool_name=="sub_agent")
+  // carry the child session's display_name + permission mode so the
+  // metallic "Sub-agent" cell shows "Sub-agent — <display_name>" in the
+  // summary without a lookup to sessions list.
+  display_name?: string;
+  sub_agent_mode?: string;
+  // v2.0.23: task_wakeup event carries the resolved task prompt (after
+  // {task} template expansion) so the sky-blue "Wakeup" card renders the
+  // actual prompt in its body instead of a placeholder.
+  prompt?: string;
+  // v2.0.23 round-7: iteration_usage event — per-LLM-call live footer signal.
+  // ``tool_use_ids`` lists the tool cells (by tool_use_id) that should
+  // receive the ↑/⛀/↓ footer; ``has_text`` gates whether the streaming
+  // agent cell also gets one. ``usage`` shape matches the thinking/tool/agent
+  // event ``usage`` field above.
+  tool_use_ids?: string[];
+  has_text?: boolean;
+}
 
 export type SessionTone = 'running' | 'napping' | 'persistent' | 'stopped' | 'idle' | 'meta';
 
@@ -240,5 +248,12 @@ export function toneColor(tone: SessionTone): string {
 }
 
 export function toneLabel(tone: SessionTone): string {
-  return tone;
+  switch (tone) {
+    case 'running': return 'running';
+    case 'napping': return 'napping';
+    case 'persistent': return 'persistent';
+    case 'stopped': return 'stopped';
+    case 'meta': return 'meta';
+    case 'idle': return 'idle';
+  }
 }
