@@ -1609,6 +1609,8 @@ class Session:
             self._emit_event(
                 rt_events.EVENT_AGENT_THINKING,
                 {
+                    # Pair with the EVENT_AGENT_THINKING_START placeholder.
+                    "block_id": entry.get("block_id"),
                     "text": entry.get("text") or "",
                     "signature": entry.get("signature"),
                     "summary": entry.get("summary"),
@@ -2678,6 +2680,24 @@ class Session:
                 # stand-in. Without this the event log has an unpaired
                 # tool_use block for every backgrounded tool.
                 self._tid_to_tool_use_id[tid] = tool_use_id
+                # UI lifecycle marker (for_llm=False): the bg manager picked
+                # up this tool — the cell should stay "running" (yellow) until
+                # the eventual EVENT_AGENT_TOOL_RESULT lands from
+                # _drain_background_events. Without this the frontend sees
+                # only the call → result transition with no signal that the
+                # tool successfully entered the bg pool.
+                self._emit_event(
+                    rt_events.EVENT_AGENT_BG_TOOL_DISPATCHED,
+                    {
+                        "tool_use_id": tool_use_id,
+                        "tool_name": name,
+                        "tid": tid,
+                        # ``placeholder`` is the in-band string the executor
+                        # returned ("task_id=…"); kept for log fidelity but
+                        # the frontend does not render it.
+                        "placeholder": result_str[:_TOOL_OUTPUT_INLINE_CAP],
+                    },
+                )
             self._append_event(payload)
             # Phase 3b (F1 fix): for background tools the *final*
             # ``EVENT_AGENT_TOOL_RESULT`` arrives later from the
@@ -3136,6 +3156,14 @@ class Session:
                 "interrupted": True,
             })
             self._append_event({"type": "thinking_start", "block_id": block_id})
+            # UI lifecycle marker (for_llm=False) — pairs with the canonical
+            # EVENT_AGENT_THINKING emitted at on_thinking_end so the frontend
+            # can render the spinning "Thinking…" placeholder. Without this
+            # the cell only appears (already finalized) when the block closes.
+            self._emit_event(
+                rt_events.EVENT_AGENT_THINKING_START,
+                {"block_id": block_id},
+            )
 
         def on_thinking_end(text: str) -> None:
             if not pending:
@@ -3166,6 +3194,10 @@ class Session:
             self._emit_event(
                 rt_events.EVENT_AGENT_THINKING,
                 {
+                    # ``block_id`` carried so the frontend can pair this
+                    # close-event with the matching EVENT_AGENT_THINKING_START
+                    # placeholder; the field is ignored by build_llm_context.
+                    "block_id": block_id,
                     "text": text or "",
                     "signature": None,
                     "summary": None,

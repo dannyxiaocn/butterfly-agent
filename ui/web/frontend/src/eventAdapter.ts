@@ -81,15 +81,39 @@ export function bfToDisplay(e: BfEvent): DisplayEvent[] {
         // by reusing the open-ended map; old code reads .value occasionally.)
       })];
 
+    case 'agent_thinking_start':
+      // UI-only marker from butterfly/runtime/events.py: thinking stream
+      // opened. Pre-PR-#57 this was the dedicated ``thinking_start`` event
+      // the chat pane keys its spinning "Thinking…" cell off of.
+      return [withCommon(e, {
+        type: 'thinking_start',
+        block_id: p.block_id ?? '',
+      })];
+
     case 'agent_thinking':
+      // Canonical close-event (for_llm=True). Old UI distinguishes
+      // "currently mid-stream" (thinking_start) from "finalised"
+      // (thinking_done) — when we have a paired block_id we route this
+      // through ``thinking_done`` so the cell flips out of the running
+      // state. History replay without a prior thinking_start (legacy
+      // sessions, or the start emit failed) falls back to the legacy
+      // ``thinking`` type, which appendEvent renders as a finalised cell.
+      if (p.block_id) {
+        return [withCommon(e, {
+          type: 'thinking_done',
+          block_id: String(p.block_id),
+          text: typeof p.text === 'string' ? p.text : (p.summary ?? ''),
+          duration_ms: typeof p.duration_ms === 'number' ? p.duration_ms : undefined,
+          interrupted: Boolean(p.interrupted),
+          reasoning_tokens: typeof p.reasoning_tokens === 'number' ? p.reasoning_tokens : undefined,
+        })];
+      }
       return [withCommon(e, {
         type: 'thinking',
         text: typeof p.text === 'string' ? p.text : (p.summary ?? ''),
         duration_ms: typeof p.duration_ms === 'number' ? p.duration_ms : undefined,
         interrupted: Boolean(p.interrupted),
         reasoning_tokens: typeof p.reasoning_tokens === 'number' ? p.reasoning_tokens : undefined,
-        // signature/summary kept on the event for any code that reads them.
-        block_id: p.block_id ?? undefined,
       })];
 
     case 'agent_tool_call':
@@ -103,17 +127,48 @@ export function bfToDisplay(e: BfEvent): DisplayEvent[] {
         ...({ tool_use_id: p.tool_use_id } as Partial<DisplayEvent>),
       })];
 
+    case 'agent_bg_tool_dispatched':
+      // UI-only marker (for_llm=False): bg manager picked the tool up. The
+      // chat pane's ``tool_done`` handler with is_background=true keeps the
+      // cell yellow until the deferred ``tool_finalize`` arrives. Mirrors
+      // pre-PR-#57's two-phase placeholder UX without any change to the
+      // canonical EVENT_AGENT_TOOL_RESULT contract.
+      return [withCommon(e, {
+        type: 'tool_done',
+        result: '',
+        result_len: 0,
+        is_error: false,
+        is_background: true,
+        tid: p.tid ?? undefined,
+        ...({ tool_use_id: p.tool_use_id, tool_name: p.tool_name } as Partial<DisplayEvent>),
+      })];
+
     case 'agent_tool_result': {
       const result = p.result == null ? '' : String(p.result);
+      // Bg path: this is the deferred completion that pairs with an earlier
+      // ``agent_bg_tool_dispatched`` placeholder. Old chat.ts expects
+      // ``tool_finalize`` here so it can flip the yellow cell green/red and
+      // stamp the real result text.
+      if (p.is_background) {
+        return [withCommon(e, {
+          type: 'tool_finalize',
+          tid: p.tid ?? p.tool_use_id ?? undefined,
+          // ``kind`` mirrors BackgroundEvent's terminal kind in the original
+          // schema; chat.ts only checks for "completed" vs the killed/stalled
+          // family, so we collapse on is_error.
+          kind: p.is_error ? 'killed' : 'completed',
+          result,
+          result_len: result.length,
+          is_error: Boolean(p.is_error),
+          duration_ms: typeof p.duration_ms === 'number' ? p.duration_ms : undefined,
+          ...({ tool_use_id: p.tool_use_id, tool_name: p.tool_name } as Partial<DisplayEvent>),
+        })];
+      }
       return [withCommon(e, {
         type: 'tool_done',
         result,
         result_len: result.length,
         is_error: Boolean(p.is_error),
-        // is_background on new schema = "this finished in bg"; the old UI
-        // expects tool_done(is_background=true) as a placeholder waiting for
-        // tool_finalize. Since the new server emits no follow-up, we lie and
-        // mark is_background=false so the cell finalises immediately.
         is_background: false,
         duration_ms: typeof p.duration_ms === 'number' ? p.duration_ms : undefined,
         ...({ tool_use_id: p.tool_use_id, tool_name: p.tool_name } as Partial<DisplayEvent>),

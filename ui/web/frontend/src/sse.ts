@@ -21,6 +21,9 @@ type SSEHandler = (event: DisplayEvent) => void;
 const NEW_EVENT_TYPES = [
   'user_input', 'user_interrupt',
   'agent_text', 'agent_thinking', 'agent_tool_call', 'agent_tool_result',
+  // UI lifecycle markers added on top of PR #57's schema to restore the
+  // pre-refactor two-phase rendering (see butterfly/runtime/events.py).
+  'agent_thinking_start', 'agent_bg_tool_dispatched',
   'session_created', 'session_started', 'session_stopped', 'session_deleted',
   'model_status', 'llm_call_usage',
   'tool_progress',
