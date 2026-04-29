@@ -4,7 +4,10 @@ The session engine owns one Python task per live session. It polls the session's
 
 ## Events-as-truth
 
-`events_v1.jsonl` is authoritative (invariant I3 from the refactor). `Session._rebuild_history_from_events()` runs before every `Agent.run()` call and replaces the agent's in-memory `_history` with `build_llm_context(read_events(session_dir))`. The trailing user-role message is trimmed so the dispatcher's currently-dispatched `user_input` is not double-counted when `Agent.run()` re-composes `[*_history, Message(role="user", content=input)]`.
+`events_v1.jsonl` is authoritative (invariant I3 from the refactor). `Session._rebuild_history_from_events()` runs before every `Agent.run()` call and replaces the agent's in-memory `_history` with `build_llm_context(read_events(session_dir))`. Two coercion steps run on top of the pure builder output:
+
+1. **Selective trim** — the trailing user-role message is dropped only when it is *text-only*; a tail carrying a `tool_result` block is kept so its paired `function_call` from the prior assistant turn is not orphaned (gpt-5 rejects orphans with HTTP 400). The trim still prevents the dispatcher's currently-dispatched `user_input` from being double-counted when `Agent.run()` re-composes `[*_history, Message(role="user", content=input)]`.
+2. **Role coercion** — `build_llm_context` groups `agent_tool_result` events under `role="user"` (matches Anthropic's wire shape per DESIGN.md §4), but `Agent._history`'s internal convention is `role="tool"` for tool-result-only messages. Rebuild flips the role at this seam so the OpenAI Responses provider's `_convert_messages` dispatches through `_convert_tool_result` → `function_call_output`. Anthropic's provider remaps `tool` → `user` before sending, so either input role lands on the same wire bytes.
 
 Consequences:
 
@@ -57,7 +60,9 @@ The dispatcher keeps two queues (`_interrupt_queue`, `_wait_queue`) inherited fr
 
 Each `agent_tool_call` pairs with exactly one `agent_tool_result` keyed by `tool_use_id`. For blocking tools the result lands in the same iteration. For background tools (`run_in_background=true`, bg bash, background sub-agents), the daemon appends `agent_tool_call` immediately + a `panel_entry_changed` so the UI shows "running", then appends `agent_tool_result` when the `BackgroundTaskManager` notifies completion. Intermediate output streams as `tool_progress` events keyed by the same `tool_use_id`.
 
-The live UI renders the call card in "running" state and upgrades to "done" on the result — see [docs/ui/web/design.md](../../ui/web/design.md) for the one-event-one-card rule.
+When the inline tool result is the bg-spawn placeholder (`"Task started. task_id=…"`), `on_tool_done` additionally emits `agent_bg_tool_dispatched` (for_llm=False) so the frontend can keep the cell yellow until the deferred `agent_tool_result` lands. Similarly, `on_thinking_start` emits `agent_thinking_start` (for_llm=False) paired by `block_id` with the canonical `agent_thinking` close event. Both markers are pure presentation hints — `build_llm_context` filters them out.
+
+The live UI renders the call card in "running" state and upgrades to "done" on the result — see [docs/ui/web/design.md](../../ui/web/design.md).
 
 ## Stop / Start ↔ task cards
 

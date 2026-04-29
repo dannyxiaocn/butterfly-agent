@@ -48,11 +48,20 @@ Callers never pass `for_llm`; the event type implies it via `_FOR_LLM_DEFAULTS`.
 | `type` | `payload` |
 |---|---|
 | `agent_text` | `{ text: str, model: str }` |
-| `agent_thinking` | `{ text: str, signature: str?, summary: str?, redacted: bool, interrupted: bool, reasoning_tokens: int?, duration_ms: float? }` |
+| `agent_thinking` | `{ block_id: str, text: str, signature: str?, summary: str?, redacted: bool, interrupted: bool, reasoning_tokens: int?, duration_ms: float? }` |
 | `agent_tool_call` | `{ tool_use_id: str, tool_name: str, args: object }` |
 | `agent_tool_result` | `{ tool_use_id: str, tool_name: str, result: str, is_error: bool, is_background: bool, duration_ms: float }` |
 
 One event per assistant text block, reasoning block, tool call, or tool result. No partial streaming; a block emits once on close. For background tools, `agent_tool_result` fires when the background job completes — the UI shows "running" between the call and the result.
+
+## Agent-side UI lifecycle markers (for_llm=False)
+
+These pair with the canonical agent-side events above to drive two-phase UI rendering. They never enter LLM context (`build_llm_context` filters them out).
+
+| `type` | `payload` | When |
+|---|---|---|
+| `agent_thinking_start` | `{ block_id: str }` | Provider opened a thinking stream. Pairs by `block_id` with the eventual `agent_thinking` close event. The frontend renders a spinning "Thinking…" cell here and finalises it on close. |
+| `agent_bg_tool_dispatched` | `{ tool_use_id: str, tool_name: str, tid: str, placeholder: str }` | A tool result returned the bg-spawn placeholder (`"Task started. task_id=…"`) so the panel will track it. The frontend keeps the cell yellow ("running") until the deferred `agent_tool_result` lands. Only emitted on the bg path; inline tools skip it. |
 
 ## System-side events (for_llm=False)
 
@@ -90,8 +99,8 @@ These event types are deliberately not emitted. Earlier releases had them; the e
 
 - `partial_text` — text emits once on block close as `agent_text`.
 - `agent_output_start` / `agent_output_done` — duration lives on `agent_text` via the `llm_call_usage` pairing.
-- `thinking_start` / `thinking_done` / `thinking_tokens_update` — one `agent_thinking` event per closed block.
-- `tool_done` / `tool_finalize` — folded into `agent_tool_result`.
+- `thinking_done` / `thinking_tokens_update` — folded into `agent_thinking` (close-only). The open phase resurfaced as the `agent_thinking_start` UI marker (for_llm=False) above; reasoning never enters LLM context twice.
+- `tool_done` / `tool_finalize` — folded into `agent_tool_result`. The bg-spawn yellow→green transition is now driven by the `agent_bg_tool_dispatched` UI marker paired with the canonical `agent_tool_result`.
 - `task_wakeup` — folded into `user_input` with `source="task"`.
 - `iteration_usage` — merged into `llm_call_usage`.
 
