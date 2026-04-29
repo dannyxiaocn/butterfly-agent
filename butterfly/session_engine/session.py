@@ -616,7 +616,23 @@ class Session:
             # user_input doesn't get double-counted when Agent.run
             # re-composes ``[*self._history, Message(role="user", content=input)]``.
             # The reshape-history / interrupt-merge tests pin this.
-            while built and built[-1].role == "user":
+            #
+            # Important: tool_result events also land on role="user" (per
+            # DESIGN.md §4 — matches Anthropic's wire shape) but they are
+            # NOT pending user inputs — they are the close of a tool_use →
+            # tool_result pair the assistant made on the previous turn.
+            # Trimming them here would orphan the paired function_call /
+            # tool_use, which gpt-5 rejects with 400 BadRequestError. So
+            # the trim guard skips messages whose blocks are ALL
+            # tool_result type — only "real" user-text trailers are stripped.
+            def _is_text_only_user(m) -> bool:
+                if m.role != "user":
+                    return False
+                # ``content`` here is the runtime IR (tuple of Block) — every
+                # entry has a ``.type`` attribute. tool_result blocks have
+                # type=="tool_result"; user_input blocks have "text".
+                return all(getattr(b, "type", "") != "tool_result" for b in m.content)
+            while built and _is_text_only_user(built[-1]):
                 built = built[:-1]
             coerced: list[CoreMessage] = []
             for m in built:
@@ -629,13 +645,42 @@ class Session:
                     coerced.append(
                         CoreMessage(role=m.role, content=blocks[0].text)
                     )
-                else:
-                    coerced.append(
-                        CoreMessage(
-                            role=m.role,
-                            content=[b.to_dict() for b in blocks],
-                        )
+                    continue
+                # Role boundary translation for tool_result blocks.
+                #
+                # build_llm_context groups EVENT_AGENT_TOOL_RESULT events
+                # under role="user" (matches Anthropic's wire shape per
+                # DESIGN.md §4); but Agent._history's internal convention
+                # is role="tool" for tool-result-only messages, which
+                # core/agent.py emits at agent.py:380 and which providers
+                # downstream-key off:
+                #
+                #   * Anthropic remaps role "tool" → "user" before sending,
+                #     so either input role lands on the same wire bytes.
+                #   * OpenAI Responses provider's `_convert_messages`
+                #     dispatches by role: "tool" → `_convert_tool_result`
+                #     → function_call_output. role="user" routes through
+                #     `_convert_user` which only handles "text" blocks
+                #     and SILENTLY DROPS tool_result blocks — leaving the
+                #     paired function_call orphaned, which gpt-5 rejects
+                #     with BadRequestError ("function_call without matching
+                #     function_call_output"). That manifested as the live
+                #     bug where every user message after a todo-list-edit
+                #     turn vanished into a 400.
+                #
+                # Restoring role="tool" here keeps build_llm_context's
+                # DESIGN.md contract intact (its tests still pin role=user
+                # for tool_result) and only translates at the seam where
+                # Agent expects its own convention.
+                role = m.role
+                if role == "user" and any(b.type == "tool_result" for b in blocks):
+                    role = "tool"
+                coerced.append(
+                    CoreMessage(
+                        role=role,
+                        content=[b.to_dict() for b in blocks],
                     )
+                )
             self._agent._history = coerced
         except Exception as exc:  # noqa: BLE001 — diagnostic swallow
             _log.warning(
