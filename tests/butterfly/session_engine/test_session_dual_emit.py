@@ -268,9 +268,91 @@ class ThinkingDualWriteTest(unittest.TestCase):
             self.assertEqual(p["text"], "deliberation body")
             self.assertFalse(p["interrupted"])
             self.assertIn("duration_ms", p)
+            # block_id is stamped so the close event can be paired with the
+            # paired EVENT_AGENT_THINKING_START placeholder by the frontend.
+            self.assertIn("block_id", p)
+            self.assertTrue(p["block_id"])
 
             legacy = _read_legacy_events(s)
             self.assertTrue(any(e.get("type") == "thinking_done" for e in legacy))
+
+    def test_agent_thinking_start_emitted_on_open(self) -> None:
+        """on_thinking_start must emit EVENT_AGENT_THINKING_START so the
+        UI can render the spinning placeholder; pairs with the canonical
+        agent_thinking close event by block_id."""
+        with TemporaryDirectory() as tmp:
+            s = _new_session(Path(tmp))
+            on_start, on_end, _had, _get = s._make_thinking_callbacks()
+            on_start()
+            on_end("body")
+
+            v1 = _read_v1(s)
+            starts = [e for e in v1 if e["type"] == rt_events.EVENT_AGENT_THINKING_START]
+            ends = [e for e in v1 if e["type"] == rt_events.EVENT_AGENT_THINKING]
+            self.assertEqual(len(starts), 1, "exactly one start placeholder")
+            self.assertEqual(len(ends), 1, "exactly one close event")
+
+            # The two events MUST share a block_id — that is the contract the
+            # frontend keys its placeholder upgrade off.
+            self.assertEqual(
+                starts[0]["payload"]["block_id"],
+                ends[0]["payload"]["block_id"],
+            )
+
+            # for_llm taxonomy: start is a UI-only marker (False), end is
+            # canonical (True). Otherwise build_llm_context would double-
+            # count the same thinking block.
+            self.assertFalse(starts[0]["for_llm"])
+            self.assertTrue(ends[0]["for_llm"])
+
+
+class BgToolDispatchedTest(unittest.TestCase):
+    def test_bg_tool_dispatched_emitted_on_placeholder(self) -> None:
+        """A tool whose result string parses as a background spawn
+        ("task_id=…") must emit EVENT_AGENT_BG_TOOL_DISPATCHED at
+        on_tool_done time so the frontend can show a yellow placeholder
+        until the deferred EVENT_AGENT_TOOL_RESULT lands."""
+        with TemporaryDirectory() as tmp:
+            s = _new_session(Path(tmp))
+            on_call, _ = s._make_tool_call_callback()
+            on_call("bash", {"cmd": "sleep 100"}, "toolu_bg")
+            on_done = s._make_tool_done_callback()
+            # _parse_background_tid keys off the exact "Task started. task_id=…."
+            # placeholder format the executor emits — see session.py top.
+            on_done("bash", {}, "Task started. task_id=t_123.", "toolu_bg", is_error=False)
+
+            v1 = _read_v1(s)
+            disp = [e for e in v1 if e["type"] == rt_events.EVENT_AGENT_BG_TOOL_DISPATCHED]
+            self.assertEqual(len(disp), 1)
+            p = disp[0]["payload"]
+            self.assertEqual(p["tool_use_id"], "toolu_bg")
+            self.assertEqual(p["tool_name"], "bash")
+            self.assertEqual(p["tid"], "t_123")
+            self.assertFalse(disp[0]["for_llm"])
+
+            # Phase 3a invariant: bg path does NOT also emit
+            # agent_tool_result here — that arrives later from the
+            # _drain_background_events finalize. Otherwise the LLM context
+            # would carry two tool_result blocks for one call.
+            results = [e for e in v1 if e["type"] == rt_events.EVENT_AGENT_TOOL_RESULT]
+            self.assertEqual(len(results), 0)
+
+    def test_inline_tool_does_not_emit_dispatched(self) -> None:
+        """Inline (non-background) tools must NOT emit the dispatched
+        marker — that event is the gating signal for the bg-only
+        yellow→green two-phase UX."""
+        with TemporaryDirectory() as tmp:
+            s = _new_session(Path(tmp))
+            on_call, _ = s._make_tool_call_callback()
+            on_call("read_file", {"path": "x"}, "toolu_inline")
+            on_done = s._make_tool_done_callback()
+            on_done("read_file", {}, "file body", "toolu_inline", is_error=False)
+
+            v1 = _read_v1(s)
+            disp = [e for e in v1 if e["type"] == rt_events.EVENT_AGENT_BG_TOOL_DISPATCHED]
+            self.assertEqual(len(disp), 0)
+            results = [e for e in v1 if e["type"] == rt_events.EVENT_AGENT_TOOL_RESULT]
+            self.assertEqual(len(results), 1)
 
 
 class LlmCallUsageDualWriteTest(unittest.TestCase):

@@ -677,7 +677,53 @@ class Session:
             # user_input doesn't get double-counted when Agent.run
             # re-composes ``[*self._history, Message(role="user", content=input)]``.
             # The reshape-history / interrupt-merge tests pin this.
-            while built and built[-1].role == "user":
+            #
+            # Important: tool_result events also land on role="user" (per
+            # DESIGN.md §4 — matches Anthropic's wire shape) but they are
+            # NOT pending user inputs — they are the close of a tool_use →
+            # tool_result pair the assistant made on the previous turn.
+            # Trimming them here would orphan the paired function_call /
+            # tool_use, which gpt-5 rejects with 400 BadRequestError. So
+            # the trim guard skips messages whose blocks are ALL
+            # tool_result type — only "real" user-text trailers are stripped.
+            #
+            # Mixed messages (text + tool_result in one user-role Message,
+            # produced when a bg agent_tool_result lands AFTER a user_input
+            # on disk and build_llm_context's adjacent-role grouping merges
+            # them) are split here: tool_result blocks go to a new
+            # role="user" Message that keeps DESIGN.md §4's wire shape and
+            # will be role-coerced to "tool" by the loop below; text blocks
+            # go to a separate role="user" Message that may then be trimmed
+            # if it is the trailing entry (its content is owned by the
+            # dispatcher's ChatItem and will be re-introduced by Agent.run).
+            # The tool_result message is emitted FIRST so the paired
+            # function_call from the prior assistant turn pairs immediately;
+            # text follows.
+            def _split_mixed(m):
+                blocks = list(m.content)
+                if m.role != "user" or len(blocks) <= 1:
+                    return [m]
+                tool_blocks = [b for b in blocks if getattr(b, "type", "") == "tool_result"]
+                text_blocks = [b for b in blocks if getattr(b, "type", "") != "tool_result"]
+                if not tool_blocks or not text_blocks:
+                    return [m]
+                from butterfly.core.types import Message as _Msg
+                return [
+                    _Msg(role="user", content=tuple(tool_blocks)),
+                    _Msg(role="user", content=tuple(text_blocks)),
+                ]
+            split: list = []
+            for m in built:
+                split.extend(_split_mixed(m))
+            built = split
+            def _is_text_only_user(m) -> bool:
+                if m.role != "user":
+                    return False
+                # ``content`` here is the runtime IR (tuple of Block) — every
+                # entry has a ``.type`` attribute. tool_result blocks have
+                # type=="tool_result"; user_input blocks have "text".
+                return all(getattr(b, "type", "") != "tool_result" for b in m.content)
+            while built and _is_text_only_user(built[-1]):
                 built = built[:-1]
             coerced: list[CoreMessage] = []
             for m in built:
@@ -690,13 +736,42 @@ class Session:
                     coerced.append(
                         CoreMessage(role=m.role, content=blocks[0].text)
                     )
-                else:
-                    coerced.append(
-                        CoreMessage(
-                            role=m.role,
-                            content=[b.to_dict() for b in blocks],
-                        )
+                    continue
+                # Role boundary translation for tool_result blocks.
+                #
+                # build_llm_context groups EVENT_AGENT_TOOL_RESULT events
+                # under role="user" (matches Anthropic's wire shape per
+                # DESIGN.md §4); but Agent._history's internal convention
+                # is role="tool" for tool-result-only messages, which
+                # core/agent.py emits at agent.py:380 and which providers
+                # downstream-key off:
+                #
+                #   * Anthropic remaps role "tool" → "user" before sending,
+                #     so either input role lands on the same wire bytes.
+                #   * OpenAI Responses provider's `_convert_messages`
+                #     dispatches by role: "tool" → `_convert_tool_result`
+                #     → function_call_output. role="user" routes through
+                #     `_convert_user` which only handles "text" blocks
+                #     and SILENTLY DROPS tool_result blocks — leaving the
+                #     paired function_call orphaned, which gpt-5 rejects
+                #     with BadRequestError ("function_call without matching
+                #     function_call_output"). That manifested as the live
+                #     bug where every user message after a todo-list-edit
+                #     turn vanished into a 400.
+                #
+                # Restoring role="tool" here keeps build_llm_context's
+                # DESIGN.md contract intact (its tests still pin role=user
+                # for tool_result) and only translates at the seam where
+                # Agent expects its own convention.
+                role = m.role
+                if role == "user" and any(b.type == "tool_result" for b in blocks):
+                    role = "tool"
+                coerced.append(
+                    CoreMessage(
+                        role=role,
+                        content=[b.to_dict() for b in blocks],
                     )
+                )
             self._agent._history = coerced
         except Exception as exc:  # noqa: BLE001 — diagnostic swallow
             _log.warning(
@@ -1670,6 +1745,8 @@ class Session:
             self._emit_event(
                 rt_events.EVENT_AGENT_THINKING,
                 {
+                    # Pair with the EVENT_AGENT_THINKING_START placeholder.
+                    "block_id": entry.get("block_id"),
                     "text": entry.get("text") or "",
                     "signature": entry.get("signature"),
                     "summary": entry.get("summary"),
@@ -2739,6 +2816,24 @@ class Session:
                 # stand-in. Without this the event log has an unpaired
                 # tool_use block for every backgrounded tool.
                 self._tid_to_tool_use_id[tid] = tool_use_id
+                # UI lifecycle marker (for_llm=False): the bg manager picked
+                # up this tool — the cell should stay "running" (yellow) until
+                # the eventual EVENT_AGENT_TOOL_RESULT lands from
+                # _drain_background_events. Without this the frontend sees
+                # only the call → result transition with no signal that the
+                # tool successfully entered the bg pool.
+                self._emit_event(
+                    rt_events.EVENT_AGENT_BG_TOOL_DISPATCHED,
+                    {
+                        "tool_use_id": tool_use_id,
+                        "tool_name": name,
+                        "tid": tid,
+                        # ``placeholder`` is the in-band string the executor
+                        # returned ("task_id=…"); kept for log fidelity but
+                        # the frontend does not render it.
+                        "placeholder": result_str[:_TOOL_OUTPUT_INLINE_CAP],
+                    },
+                )
             self._append_event(payload)
             # Phase 3b (F1 fix): for background tools the *final*
             # ``EVENT_AGENT_TOOL_RESULT`` arrives later from the
@@ -3197,6 +3292,14 @@ class Session:
                 "interrupted": True,
             })
             self._append_event({"type": "thinking_start", "block_id": block_id})
+            # UI lifecycle marker (for_llm=False) — pairs with the canonical
+            # EVENT_AGENT_THINKING emitted at on_thinking_end so the frontend
+            # can render the spinning "Thinking…" placeholder. Without this
+            # the cell only appears (already finalized) when the block closes.
+            self._emit_event(
+                rt_events.EVENT_AGENT_THINKING_START,
+                {"block_id": block_id},
+            )
 
         def on_thinking_end(text: str) -> None:
             if not pending:
@@ -3227,6 +3330,10 @@ class Session:
             self._emit_event(
                 rt_events.EVENT_AGENT_THINKING,
                 {
+                    # ``block_id`` carried so the frontend can pair this
+                    # close-event with the matching EVENT_AGENT_THINKING_START
+                    # placeholder; the field is ignored by build_llm_context.
+                    "block_id": block_id,
                     "text": text or "",
                     "signature": None,
                     "summary": None,

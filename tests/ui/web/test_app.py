@@ -909,6 +909,41 @@ class Phase7Tests(unittest.TestCase):
                 )
             self.assertEqual(resp.status_code, 403)
 
+    def test_messages_endpoint_accepts_wait_mode(self) -> None:
+        """Body's ``mode`` field is plumbed through io.send_message so the
+        dispatcher can queue rather than interrupt. The recorded user_input
+        event carries the mode for replay/audit."""
+        from butterfly.runtime.events import EVENT_USER_INPUT, read_events
+        with TemporaryDirectory() as td:
+            root = _make_session(Path(td))
+            app = create_app(root / "sessions", root / "_sessions")
+            with TestClient(app) as client:
+                resp = client.post(
+                    "/api/sessions/test-session/messages",
+                    json={"content": "queue me", "mode": "wait"},
+                )
+            self.assertEqual(resp.status_code, 200)
+            self.assertEqual(resp.json().get("mode"), "wait")
+            system_dir = root / "_sessions" / "test-session"
+            user_inputs = [e for e in read_events(system_dir) if e.type == EVENT_USER_INPUT]
+            self.assertTrue(
+                any(e.payload.get("mode") == "wait"
+                    and e.payload.get("text") == "queue me"
+                    for e in user_inputs),
+                f"expected wait-mode user_input, got {[e.payload for e in user_inputs]}",
+            )
+
+    def test_messages_endpoint_rejects_invalid_mode(self) -> None:
+        with TemporaryDirectory() as td:
+            root = _make_session(Path(td))
+            app = create_app(root / "sessions", root / "_sessions")
+            with TestClient(app) as client:
+                resp = client.post(
+                    "/api/sessions/test-session/messages",
+                    json={"content": "x", "mode": "bogus"},
+                )
+            self.assertEqual(resp.status_code, 400)
+
     # ── /todo_list ──────────────────────────────────────────────────────
 
     def test_todo_list_round_trip(self) -> None:

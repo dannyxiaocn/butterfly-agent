@@ -29,6 +29,8 @@ from pathlib import Path
 from typing import Any, Iterable, Iterator
 
 from butterfly.runtime.events import (
+    EVENT_AGENT_BG_TOOL_DISPATCHED,
+    EVENT_AGENT_THINKING_START,
     EVENT_ASSET_CHANGED,
     EVENT_CONFIG_CHANGED,
     EVENT_CONTROL_START,
@@ -306,6 +308,11 @@ _UI_VISIBLE_SYSTEM_TYPES: frozenset[str] = frozenset({
     EVENT_ASSET_CHANGED,
     EVENT_SYSTEM_NOTICE,
     EVENT_ERROR,
+    # UI lifecycle markers — replay must preserve the two-phase
+    # thinking and bg-tool placeholders so the chat pane reconstructs
+    # the same cell states it would have rendered live.
+    EVENT_AGENT_THINKING_START,
+    EVENT_AGENT_BG_TOOL_DISPATCHED,
 })
 
 
@@ -715,12 +722,19 @@ def send_message(
     source: str = "cli",
     caller: str | None = None,
     display_name: str | None = None,
+    mode: str = "interrupt",
 ) -> Event:
     """Append ``user_input`` then notify the live daemon (if any).
 
     ``source`` ∈ schema enum (cli / web / task / parent-agent). ``caller``
     carries the task card name (for the ``task`` source) or parent tool
     name (for the parent-agent source); ``None`` otherwise.
+
+    ``mode`` ∈ {"interrupt", "wait"}. ``interrupt`` (default) cancels the
+    in-flight tick and dispatches the new user_input immediately; ``wait``
+    enqueues the message behind the running tick so the agent finishes
+    its current turn first. The dispatcher in ``session.py`` is the
+    enforcer; this surface just plumbs the flag through.
 
     Event is appended first (§5.6). Daemon notification (via
     :class:`BridgeSession`) is a best-effort post-event side-effect;
@@ -736,6 +750,11 @@ def send_message(
             f"send_message: unknown source {source!r}; "
             f"expected one of {sorted(_valid_sources)}"
         )
+    if mode not in ("interrupt", "wait"):
+        raise ValueError(
+            f"send_message: unknown mode {mode!r}; "
+            "expected 'interrupt' or 'wait'"
+        )
     system_dir = _require_existing_session(session_id)
 
     event = _events_append_event(
@@ -746,6 +765,11 @@ def send_message(
             "source": source,
             "caller": caller,
             "display_name": display_name,
+            # ``mode`` is recorded on the event for audit / replay clarity.
+            # It does NOT travel into the LLM context (build_llm_context
+            # only reads ``text``); it is consumed by the dispatcher when it
+            # decides whether to interrupt the live tick.
+            "mode": mode,
         },
     )
 
@@ -767,7 +791,7 @@ def send_message(
             text,
             _SYSTEM_SESSIONS_DIR,
             caller=caller or "human",
-            mode="interrupt",
+            mode=mode,
             events_v1_id=event.id,
         )
     except (FileNotFoundError, ValueError):

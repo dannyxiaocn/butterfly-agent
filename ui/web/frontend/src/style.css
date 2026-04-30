@@ -1,9 +1,3 @@
-/* Butterfly Web UI — Phase 8 rewrite.
-   Target ~1500 LOC. One base .card, kind variants via modifier classes,
-   accent via CSS var (--card-accent). No glass-card sub-variants, no
-   three-phase bg-tool rules, no diff-cell rules.
-*/
-
 :root {
   --bg: #0d1117;
   --bg2: #161b22;
@@ -12,7 +6,9 @@
   --border: #30363d;
   --border2: #444c56;
   --accent: #58a6ff;
+  --accent-glow: rgba(88,166,255,0.15);
   --green: #3fb950;
+  --green-glow: rgba(63,185,80,0.15);
   --yellow: #d29922;
   --red: #f85149;
   --purple: #bc8cff;
@@ -24,17 +20,38 @@
   --mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
   --radius: 8px;
   --radius-sm: 6px;
-  --shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
-  --sidebar-width: 240px;
-  --panel-width: 320px;
+  --radius-lg: 12px;
+  --shadow: 0 1px 3px rgba(0,0,0,0.4);
 }
 
-* { box-sizing: border-box; margin: 0; padding: 0; }
-* { scrollbar-width: thin; scrollbar-color: var(--bg4) transparent; }
-::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--bg4); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: var(--border2); }
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--bg4) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--bg4);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--border2);
+}
 
 html, body {
   height: 100%;
@@ -45,422 +62,2874 @@ html, body {
   line-height: 1.5;
 }
 
-#app { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
 
-/* ========== HEADER ========== */
+/* ====== HEADER ====== */
 #header {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 0 16px; height: 48px;
-  background: var(--bg2); border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px;
+  height: 48px;
+  background: var(--bg2);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  gap: 16px;
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.logo {
+  font-weight: 700;
+  font-size: 15px;
+  color: var(--text);
+  letter-spacing: -0.3px;
+}
+
+.indicator {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  display: inline-block;
   flex-shrink: 0;
 }
-.header-left, .header-right { display: flex; align-items: center; gap: 16px; }
-.logo { font-size: 16px; font-weight: 600; }
-.indicator { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
-.indicator .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
-.header-session { display: flex; align-items: center; gap: 10px; }
-.session-name { font-weight: 500; }
+
 .status-pill {
-  display: inline-flex; align-items: center; gap: 6px;
-  padding: 2px 8px; font-size: 11px;
-  border: 1px solid var(--border); border-radius: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid transparent;
+  letter-spacing: 0.3px;
 }
-.status-pill .dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
 
-/* ========== LAYOUT ========== */
+.header-session {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.session-name {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text);
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ====== LAYOUT ====== */
 #layout {
-  display: grid;
-  grid-template-columns: var(--sidebar-width) 4px 1fr 4px var(--panel-width);
-  flex: 1; overflow: hidden;
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+  /* Sidebar + panel widths are driven by CSS vars so the drag handles can
+   * update one property instead of mutating inline style on the column. */
+  --sidebar-width: 240px;
+  --panel-width: 300px;
 }
-body.resizing { cursor: col-resize; user-select: none; }
-.layout-resizer {
-  background: transparent; cursor: col-resize;
-  transition: background 0.15s;
-}
-.layout-resizer:hover, .layout-resizer.dragging { background: var(--accent); }
 
-/* ========== SIDEBAR ========== */
+/* ====== SIDEBAR ====== */
 #sidebar {
-  background: var(--bg2); border-right: 1px solid var(--border);
-  display: flex; flex-direction: column; min-width: 0; overflow: hidden;
+  width: var(--sidebar-width);
+  flex-shrink: 0;
+  background: var(--bg2);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
-.sidebar-header {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 8px 12px; height: 40px;
-  border-bottom: 1px solid var(--border);
-}
-.sidebar-title { font-weight: 600; font-size: 13px; }
-.session-list { flex: 1; overflow-y: auto; padding: 8px 0; }
-.session-item {
-  display: flex; align-items: center; gap: 8px;
-  padding: 6px 12px; cursor: pointer;
-  border-left: 3px solid transparent;
-}
-.session-item:hover { background: var(--bg3); }
-.session-item.active { background: var(--bg3); border-left-color: var(--accent); }
-.session-item.child { padding-left: 24px; }
-.session-indent { color: var(--dimmed); }
-.session-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
-.session-item-info { display: flex; flex-direction: column; min-width: 0; flex: 1; }
-.session-item-name { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.session-item-agent { font-size: 11px; color: var(--muted); }
-.session-list-empty { padding: 12px; color: var(--dimmed); font-size: 12px; }
-.sidebar-footer {
-  display: flex; gap: 6px;
-  padding: 8px 12px;
-  border-top: 1px solid var(--border);
-}
-.new-session-card {
-  margin: 8px 12px; padding: 10px;
-  background: var(--bg3); border: 1px solid var(--border); border-radius: var(--radius);
-}
-.new-session-card.hidden { display: none; }
-.ns-name-input {
-  width: 100%; padding: 6px 8px;
-  background: var(--bg); color: var(--text);
-  border: 1px solid var(--border); border-radius: var(--radius-sm);
-  font-size: 13px; margin-bottom: 8px;
-}
-.new-session-card-row2 { display: flex; gap: 8px; align-items: center; }
-.ns-agent-select {
-  flex: 1; padding: 4px 8px;
-  background: var(--bg); color: var(--text);
-  border: 1px solid var(--border); border-radius: var(--radius-sm);
-  font-size: 12px;
-}
-.new-session-card-actions { display: flex; gap: 6px; }
 
-/* ========== BUTTONS ========== */
-.btn-sm, .btn-xs, .btn-icon {
-  padding: 4px 10px; font-size: 12px;
-  background: var(--bg3); color: var(--text);
-  border: 1px solid var(--border); border-radius: var(--radius-sm);
+/* ====== RESIZE HANDLES ======
+ * Thin vertical grips between columns. 4px hit target, 1px visible line on
+ * hover/drag. Cursor stays col-resize across the gutter so the drag feels
+ * continuous even when the pointer drifts a pixel off the visible line. */
+.layout-resizer {
+  flex: 0 0 4px;
+  background: transparent;
+  cursor: col-resize;
+  position: relative;
+  z-index: 5;
+  transition: background 0.12s;
+}
+.layout-resizer:hover,
+.layout-resizer.dragging {
+  background: var(--accent, #7ac3f2);
+}
+body.resizing,
+body.resizing * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px 8px;
+  flex-shrink: 0;
+}
+
+.sidebar-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--muted);
+}
+
+.btn-icon {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 4px;
+  width: 22px;
+  height: 22px;
   cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   transition: background 0.15s, border-color 0.15s;
 }
-.btn-sm:hover, .btn-xs:hover, .btn-icon:hover { background: var(--bg4); border-color: var(--border2); }
-.btn-xs { padding: 2px 6px; font-size: 11px; }
-.btn-icon {
-  width: 28px; height: 28px; padding: 0;
-  display: inline-flex; align-items: center; justify-content: center;
-  font-size: 14px;
+
+.btn-icon:hover {
+  background: var(--bg3);
+  border-color: var(--border2);
 }
-.btn-primary { background: var(--accent); color: white; border-color: var(--accent); }
-.btn-primary:hover { background: #4f91d9; }
-.btn-warn { background: transparent; color: var(--yellow); border-color: var(--yellow); }
-.btn-danger { background: transparent; color: var(--red); border-color: var(--red); }
-.btn-start { color: var(--green); border-color: var(--green); }
-.btn-stop { color: var(--yellow); border-color: var(--yellow); }
 
-.hidden { display: none !important; }
+.session-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 8px;
+}
 
-/* ========== CHAT ========== */
+.session-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background 0.12s;
+  margin-bottom: 2px;
+  border-left: 3px solid transparent;
+}
+
+.session-item:hover {
+  background: var(--bg3);
+}
+
+.session-item.active {
+  background: var(--bg3);
+  border-left-color: var(--accent);
+}
+
+.session-item.running-pulse {
+  outline: 1px solid rgba(63,185,80,0.3);
+  animation: running-outline-pulse 2s ease-in-out infinite;
+}
+
+@keyframes running-outline-pulse {
+  0%, 100% { outline-color: rgba(63,185,80,0.15); }
+  50% { outline-color: rgba(63,185,80,0.5); }
+}
+
+.session-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.session-dot.pulse {
+  animation: dot-pulse 2s ease-in-out infinite;
+}
+
+.session-dot.weixin-dot {
+  width: auto;
+  height: auto;
+  border-radius: 0;
+  background: transparent !important;
+  color: #22c55e;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+@keyframes dot-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.6; transform: scale(0.85); }
+}
+
+.session-item-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.session-item-name {
+  font-size: 13px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+
+.session-item-agent {
+  font-size: 11px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-top: 1px;
+}
+
+/* Sub-agent child session: indented under parent (markdown-list style). */
+.session-item.child {
+  margin-left: 18px;
+  border-left: 2px solid var(--border);
+  padding-left: 8px;
+}
+
+.session-item.child[data-depth="2"] { margin-left: 36px; }
+.session-item.child[data-depth="3"] { margin-left: 54px; }
+
+.session-indent {
+  color: var(--muted);
+  font-size: 11px;
+  flex-shrink: 0;
+  margin-right: -2px;
+}
+
+.session-mode-chip {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 15px;
+  border-radius: 7px;
+  background: var(--bg3);
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  vertical-align: 1px;
+}
+
+.session-mode-chip.mode-explorer {
+  background: rgba(122, 195, 242, 0.18);
+  color: #7ac3f2;
+  border: 1px solid rgba(122, 195, 242, 0.35);
+}
+
+.session-mode-chip.mode-executor {
+  background: rgba(232, 169, 74, 0.18);
+  color: #e8a94a;
+  border: 1px solid rgba(232, 169, 74, 0.35);
+}
+
+/* Sub-agent panel card. Shares structure with .panel-row but adds a
+   recent-activity block when expanded. */
+.sub-agent-row .sub-agent-detail {
+  /* Parent .panel-row already has 10/12 padding so the detail block only
+   * needs top-spacing + column layout. Keeping its own horizontal padding
+   * would stack and push content inward visibly. */
+  padding: 6px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.sub-agent-detail-row {
+  font-size: 11px;
+  color: var(--muted);
+}
+.sub-agent-recent {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: var(--bg2);
+  border-radius: 4px;
+  padding: 6px 8px;
+}
+.sub-agent-recent-empty {
+  font-size: 11px;
+  color: var(--muted);
+  font-style: italic;
+}
+.sub-agent-evt {
+  font-size: 11px;
+  color: var(--text);
+  line-height: 1.5;
+}
+.sub-agent-evt code {
+  background: var(--bg3);
+  padding: 0 4px;
+  border-radius: 3px;
+  font-size: 10px;
+}
+.sub-agent-evt-icon {
+  color: var(--accent);
+  margin-right: 4px;
+}
+.sub-agent-evt-quiet {
+  color: var(--muted);
+  font-size: 10px;
+}
+.sub-agent-result {
+  margin-top: 4px;
+}
+.sub-agent-result summary {
+  font-size: 11px;
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+}
+.sub-agent-result pre {
+  margin: 6px 0 0;
+  background: var(--bg2);
+  padding: 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  white-space: pre-wrap;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.sidebar-footer {
+  display: flex;
+  gap: 4px;
+  padding: 10px 8px;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.sidebar-footer > button {
+  flex: 1;
+}
+
+/* ── New-session card ────────────────────────────────────────────────────
+ * Lives inline at the top of the session list and mimics .session-item
+ * dimensions so the list reads as "one pending card waiting to be named".
+ */
+.new-session-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  margin-bottom: 4px;
+  border: 1px dashed var(--border2);
+  background: var(--bg3);
+  box-shadow: inset 0 0 0 1px transparent;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.new-session-card:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-glow);
+}
+
+.new-session-card.hidden {
+  display: none;
+}
+
+.ns-name-input {
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 13px;
+  font-weight: 500;
+  padding: 0;
+  width: 100%;
+  line-height: 1.4;
+}
+
+.ns-name-input::placeholder {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.new-session-card-row2 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ns-agent-select {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--font);
+  font-size: 11px;
+  padding: 2px 0;
+  margin-left: -2px;
+  cursor: pointer;
+  /* Strip the default arrow — the session-card layout above doesn't show
+   * one either, so the two rows stay visually aligned. */
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.ns-agent-select:hover {
+  color: var(--text);
+}
+
+.ns-agent-select option {
+  background: var(--bg2);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.new-session-card-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.new-session-card-actions .btn-sm {
+  padding: 2px 8px;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.new-session-card-actions .btn-primary {
+  padding: 3px 10px;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+/* ====== BUTTONS ====== */
+button {
+  font-family: var(--font);
+  font-size: 13px;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg3);
+  color: var(--text);
+  padding: 5px 10px;
+  transition: background 0.12s, opacity 0.12s, border-color 0.15s, color 0.15s;
+}
+
+button:hover {
+  background: var(--bg4);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-sm {
+  background: var(--bg3);
+  color: var(--text2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 4px 10px;
+  cursor: pointer;
+  font-size: 12px;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+
+.btn-sm:hover {
+  border-color: var(--border2);
+  color: var(--text);
+}
+
+.btn-primary {
+  background: var(--accent);
+  color: #000;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 6px 14px;
+  font-weight: 600;
+  cursor: pointer;
+  font-size: 13px;
+  transition: opacity 0.15s;
+}
+
+.btn-primary:hover {
+  opacity: 0.85;
+  background: var(--accent);
+}
+
+.btn-danger, .btn-delete {
+  border-color: rgba(248,81,73,0.4);
+  color: var(--red);
+}
+
+.btn-danger:hover, .btn-delete:hover {
+  border-color: var(--red);
+  background: rgba(248,81,73,0.1);
+}
+
+.btn-warn {
+  color: var(--yellow);
+  border-color: rgba(210,153,34,0.4);
+}
+
+.btn-warn:hover {
+  border-color: var(--yellow);
+  background: rgba(210,153,34,0.1);
+}
+
+.btn-start {
+  color: var(--green);
+  border-color: rgba(63,185,80,0.4);
+}
+
+.btn-start:hover {
+  border-color: var(--green);
+  background: rgba(63,185,80,0.1);
+}
+
+.btn-stop {
+  color: var(--yellow);
+  border-color: rgba(210,153,34,0.4);
+}
+
+.btn-stop:hover {
+  border-color: var(--yellow);
+  background: rgba(210,153,34,0.1);
+}
+
+/* ====== FORMS ====== */
+.form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+
+.form-field label {
+  font-size: 11px;
+  color: var(--muted);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.form-field input,
+.form-field select,
+.form-field textarea {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 13px;
+  padding: 6px 8px;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.form-field input:focus,
+.form-field select:focus,
+.form-field textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+.form-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+.flex1 {
+  flex: 1;
+}
+
+.form-error {
+  color: var(--red);
+  font-size: 12px;
+  padding: 6px 0;
+}
+
+.form-error.hidden {
+  display: none;
+}
+
+/* ====== CHAT ====== */
 #chat {
-  display: flex; flex-direction: column;
-  min-width: 0; background: var(--bg);
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg);
+  min-width: 0;
 }
+
+/* Empty state */
+.chat-empty-state {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--muted);
+  user-select: none;
+}
+
+.chat-empty-logo {
+  font-size: 36px;
+  opacity: 0.4;
+}
+
+.chat-empty-text {
+  font-size: 14px;
+  color: var(--dimmed);
+}
+
 .messages {
   flex: 1;
-  padding: 16px 24px;
   overflow-y: auto;
-  display: flex; flex-direction: column; gap: 10px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
-/* ========== CARD (unified) ========== */
-.card {
+/* ====== MESSAGE ANIMATIONS ====== */
+@keyframes msg-appear {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.msg {
+  border-radius: var(--radius-sm);
+  padding: 12px 16px;
+  max-width: 100%;
+  position: relative;
+  border: 1px solid transparent;
+  animation: msg-appear 0.18s ease-out;
+}
+
+/* ── Agent output block ── */
+/* v2.0.20: agent cell uses a <details> wrapper just like thinking cells,
+   so the outer .msg strips its default chrome and lets the inner
+   .agent-details carry the border + accent. Streaming (yellow + pulse) →
+   done (accent) mirrors .msg-thinking-running → .msg-thinking-done. */
+.msg-agent {
+  background: transparent;
+  border: none;
+  padding: 0 0 2px 0;
+}
+.agent-details {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 6px;
+  background: var(--bg2);
+  overflow: hidden;
+}
+.agent-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  font-size: 12px;
+  font-family: var(--mono);
+}
+.agent-summary::-webkit-details-marker { display: none; }
+.agent-summary::after {
+  content: '▸';
+  margin-left: 0;
+  padding-left: 6px;
+  font-size: 10px;
+  opacity: 0.6;
+}
+.agent-details[open] .agent-summary::after {
+  content: '▾';
+}
+.agent-label {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.agent-word { color: var(--accent); font-weight: 600; }
+.agent-meta {
+  color: var(--dimmed);
+  font-weight: normal;
+  font-size: 11px;
+}
+.agent-meta:empty { display: none; }
+.agent-body {
+  padding: 10px 14px 10px 14px;
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+  color: var(--text);
+  line-height: 1.6;
+}
+.agent-empty {
+  color: var(--dimmed);
+  font-style: italic;
+}
+.msg-agent-streaming .agent-details {
+  border-left-color: var(--yellow);
+  animation: pulseThinking 1.6s ease-in-out infinite;
+}
+.msg-agent-streaming .agent-word { color: var(--dimmed); }
+
+/* ── Thinking block ── */
+.msg-thinking {
+  background: transparent;
+  border: none;
+  padding: 0 0 2px 0;
+}
+
+.thinking-details {
+  border: 1px solid var(--border);
+  border-left: 3px solid #7c6fcd;
+  border-radius: 6px;
+  background: rgba(124, 111, 205, 0.05);
+  overflow: hidden;
+}
+
+.thinking-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  font-size: 12px;
+  color: var(--dimmed);
+  font-family: var(--mono);
+}
+
+.thinking-summary::-webkit-details-marker { display: none; }
+
+.thinking-summary::after {
+  content: '▸';
+  margin-left: 0;
+  padding-left: 6px;
+  font-size: 10px;
+}
+.thinking-details[open] .thinking-summary::after {
+  content: '▾';
+}
+
+
+.thinking-label {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+}
+/* Only "Thought" carries the purple emphasis; the duration + token meta that
+   trails it reads as dim metadata so the cell's headline isn't dominated by
+   the ancillary numbers. */
+.thinking-word { color: #9d8fe0; font-weight: 600; }
+.thinking-meta {
+  color: var(--dimmed);
+  font-weight: normal;
+  font-size: 11px;
+}
+.thinking-meta:empty { display: none; }
+
+.thinking-body {
+  padding: 10px 14px 10px 14px;
+  font-size: 12px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.thinking-empty {
+  color: var(--dimmed);
+  font-style: italic;
+}
+
+/* Running thinking cell: same <details> chrome as the done state so the
+   ▸ caret is visible from the first paint. The yellow accent + pulse
+   live on the inner .thinking-details while the cell is live; both are
+   dropped when thinking_done arrives and the cell transitions to purple. */
+.msg-thinking-running {
+  background: transparent;
+  border: none;
+  padding: 0 0 2px 0;
+}
+.msg-thinking-running .thinking-details {
+  border-left-color: var(--yellow);
+  animation: pulseThinking 1.6s ease-in-out infinite;
+}
+.msg-thinking-running .thinking-word { color: var(--dimmed); }
+
+.msg-thinking-done {
+  background: transparent;
+  border: none;
+  padding: 0 0 2px 0;
+}
+
+/* Interrupted thinking cell: the provider never delivered a thinking_done,
+   so the cell carries the running-state body (usually empty) and a dimmed
+   label. The .msg-thinking-done class strips the outer chrome; here we dim
+   the inner details and kill the pulse so it reads as a dead thought. */
+.msg-thinking-interrupted {
+  opacity: 0.6;
+}
+.msg-thinking-interrupted .thinking-details {
+  border-left-color: var(--dimmed);
+  animation: none;
+}
+.msg-thinking-interrupted .thinking-word {
+  color: var(--dimmed);
+}
+
+@keyframes pulseThinking {
+  0%, 100% { opacity: 0.7; }
+  50% { opacity: 1; }
+}
+
+/* v2.0.23: user-side collapsible cards. Four variants split across two
+   visual treatments:
+     .msg-user-you              → transparent frosted-glass (human chat)
+     .msg-user-tool-output      → metallic gradient (orange-yellow)
+     .msg-user-sub-agent        → metallic gradient (orange)
+     .msg-user-task             → metallic gradient (sky blue)
+   All span full width like thinking/tool/agent cells — the pre-v2.0.23
+   right-align+80% cap was dropped to keep the chat column rhythm uniform.
+   Chrome (summary/body layout + caret) is shared; the per-variant blocks
+   below only set the surface colour + texture. */
+.msg-user {
+  background: none;
+  border: none;
+  padding: 0 !important;
+  align-self: stretch;
+  max-width: none;
+}
+
+.msg-user .user-details {
+  border: 1px solid var(--user-border, rgba(127,207,127,0.38));
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.msg-user .user-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+.msg-user .user-summary::-webkit-details-marker { display: none; }
+.msg-user .user-summary::after {
+  content: '▸';
+  color: var(--dimmed);
+  font-size: 11px;
+  transition: transform 0.12s;
+}
+.msg-user .user-details[open] > .user-summary::after {
+  transform: rotate(90deg);
+}
+
+.msg-user .user-label {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+.msg-user .user-word {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--user-accent, var(--green));
+}
+.msg-user .user-meta {
+  font-size: 11px;
+  color: var(--dimmed);
+  font-family: var(--mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.msg-user .user-body {
+  padding: 8px 12px 10px;
+  border-top: 1px solid var(--user-border, rgba(127,207,127,0.25));
+  font-size: 13px;
+  line-height: 1.55;
+}
+.msg-user .user-body-empty {
+  color: var(--dimmed);
+  font-size: 12px;
+  font-style: italic;
+}
+
+/* ── Surface treatment: transparent glass (human chat only) ── */
+.msg-user-you .user-details {
+  background: rgba(127,207,127,0.10);
+  backdrop-filter: blur(10px) saturate(1.2);
+  -webkit-backdrop-filter: blur(10px) saturate(1.2);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.15), inset 0 1px 0 rgba(255,255,255,0.04);
+}
+.msg-user-you {
+  --user-accent: #7fcf7f;
+  --user-border: rgba(127,207,127,0.45);
+}
+
+/* ── Surface treatment: metallic (notifications — tool-output / sub-agent / task) ──
+   Diagonal coloured base + vertical light→shadow highlight + inset top rim
+   mimic brushed-metal finish without a runtime blur cost. No backdrop-filter
+   so these cells read as opaque notifications, clearly distinct from the
+   human-chat glass bubble. */
+.msg-user-tool-output .user-details,
+.msg-user-sub-agent .user-details,
+.msg-user-task .user-details {
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.055) 0%, rgba(0,0,0,0.18) 100%),
+    linear-gradient(135deg, var(--user-metal-hi) 0%, var(--user-metal-lo) 55%, var(--user-metal-hi) 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.08),
+    inset 0 -1px 0 rgba(0,0,0,0.25),
+    0 1px 2px rgba(0,0,0,0.3);
+}
+
+.msg-user-tool-output {
+  --user-accent: #e8a94a;
+  --user-border: rgba(232,169,74,0.45);
+  --user-metal-hi: rgba(232,169,74,0.24);
+  --user-metal-lo: rgba(232,169,74,0.10);
+}
+.msg-user-sub-agent {
+  --user-accent: #ff8c3a;
+  --user-border: rgba(255,140,58,0.48);
+  --user-metal-hi: rgba(255,140,58,0.26);
+  --user-metal-lo: rgba(255,140,58,0.11);
+}
+.msg-user-task {
+  --user-accent: #7ac3f2;
+  --user-border: rgba(122,195,242,0.45);
+  --user-metal-hi: rgba(122,195,242,0.24);
+  --user-metal-lo: rgba(122,195,242,0.10);
+}
+
+.msg-tool {
+  background: transparent;
+  border: none;
+  padding: 0 0 2px 0;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.msg-error {
+  background: rgba(248,81,73,0.06);
+  border: 1px solid rgba(248,81,73,0.3);
+  border-left: 3px solid var(--red);
+}
+
+.msg-status {
+  text-align: center;
+  color: var(--dimmed);
+  font-style: italic;
+  font-size: 12px;
+  background: none;
+  border: none;
+  padding: 4px 0;
+  animation: none;
+}
+
+/* .msg-task-wakeup removed in v2.0.23 — task_wakeup events now render
+   through the unified .msg-user-task glass card chrome defined above. */
+
+.msg-task-finished {
+  text-align: center;
+  color: var(--dimmed);
+  font-style: italic;
+  font-size: 12px;
+  background: none;
+  border: none;
+  animation: none;
+}
+
+.msg-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  flex-wrap: wrap;
+}
+
+.msg-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--accent);
+  opacity: 0.7;
+}
+
+.msg-tool .msg-label {
+  color: var(--yellow);
+}
+
+.msg-ts {
+  font-size: 11px;
+  color: var(--dimmed);
+  margin-left: auto;
+  font-family: var(--mono);
+}
+
+/* v2.0.23 round-7: dim token footer for tool + agent cell bodies. Sits as
+   a SIBLING of .tool-body / .agent-body inside the <details> wrapper so
+   its padding stands alone (no stacking with a body padding-bottom).
+   Horizontal padding mirrors the summary pill's 12px gutter. Thinking
+   cells do NOT use this footer — their token info is in the summary
+   ("Thought Xs for N toks"). */
+.cell-usage-footer {
+  font-size: 10px;
+  color: var(--dimmed);
+  font-family: var(--mono);
+  margin: 0;
+  padding: 6px 12px 8px 12px;
+  border-top: 1px dashed var(--border);
+  letter-spacing: 0.3px;
+  opacity: 0.75;
+}
+
+.msg-body {
+  line-height: 1.6;
+}
+
+/* ====== MARKDOWN BODY ====== */
+.markdown-body p { margin: 0 0 8px; }
+.markdown-body p:last-child { margin-bottom: 0; }
+.markdown-body h1, .markdown-body h2, .markdown-body h3,
+.markdown-body h4, .markdown-body h5, .markdown-body h6 {
+  margin: 12px 0 6px;
+  font-weight: 700;
+  color: var(--text);
+}
+.markdown-body h1 { font-size: 18px; }
+.markdown-body h2 { font-size: 16px; }
+.markdown-body h3 { font-size: 15px; }
+.markdown-body code {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 1px 5px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text2);
+}
+.markdown-body pre {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  overflow-x: auto;
+  margin: 8px 0;
+}
+.markdown-body pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 12px;
+  font-family: var(--mono);
+}
+.markdown-body ul, .markdown-body ol {
+  padding-left: 20px;
+  margin: 6px 0;
+}
+.markdown-body li { margin: 2px 0; }
+.markdown-body blockquote {
+  border-left: 3px solid var(--border2);
+  padding-left: 12px;
+  color: var(--muted);
+  margin: 8px 0;
+}
+.markdown-body a { color: var(--accent); text-decoration: none; }
+.markdown-body a:hover { text-decoration: underline; }
+.markdown-body table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 8px 0;
+}
+.markdown-body th, .markdown-body td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+.markdown-body th { background: var(--bg3); font-weight: 600; }
+.markdown-body hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 12px 0;
+}
+
+/* ====== TOOL MESSAGES ====== */
+.tool-pill {
+  background: rgba(210,153,34,0.15);
+  color: var(--yellow);
+  border: 1px solid rgba(210,153,34,0.3);
+  border-radius: 3px;
+  padding: 1px 6px;
+  font-size: 11px;
+  font-weight: 600;
+  font-family: var(--mono);
+}
+
+.tool-pre {
   background: var(--bg2);
   border: 1px solid var(--border);
-  border-left: 3px solid var(--card-accent, var(--border2));
-  border-radius: var(--radius);
-  padding: 10px 14px;
-  box-shadow: var(--shadow);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin-top: 6px;
+  font-size: 12px;
+  font-family: var(--mono);
+  color: var(--text2);
+}
+
+.tool-details {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--yellow);
+  border-radius: 6px;
+  background: var(--bg2);
   overflow: hidden;
 }
-.card-header, .card-summary {
-  display: flex; align-items: baseline; gap: 10px;
-  font-size: 12px;
-  color: var(--muted);
+.tool-details .tool-status-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
 }
-.card-summary { cursor: pointer; list-style: none; }
-.card-summary::-webkit-details-marker { display: none; }
-.card-caret { display: inline-block; width: 10px; height: 10px; transition: transform 0.15s; }
-.card-caret::before { content: '▸'; color: var(--muted); font-size: 10px; }
-.card-details[open] .card-caret { transform: rotate(90deg); }
-.card-title { font-weight: 600; color: var(--text); flex: 0 0 auto; }
-.card-footer { margin-left: auto; color: var(--dimmed); font-size: 11px; }
-.card-body { padding-top: 8px; color: var(--text); word-wrap: break-word; }
-.card-body :first-child { margin-top: 0; }
-.card-body :last-child { margin-bottom: 0; }
-.card-body p { margin: 6px 0; }
-.card-body pre, .card-pre {
-  background: var(--bg);
-  border: 1px solid var(--border); border-radius: var(--radius-sm);
-  padding: 8px 10px;
-  font-family: var(--mono); font-size: 12px;
-  overflow-x: auto;
-  white-space: pre-wrap; word-break: break-word;
+.tool-details .tool-status-summary .msg-ts {
+  margin-left: auto;
 }
-.card-body code {
-  font-family: var(--mono); font-size: 12px;
-  background: var(--bg3); padding: 1px 4px; border-radius: 3px;
+.tool-details .tool-status-summary::-webkit-details-marker { display: none; }
+.tool-details .tool-status-summary::after {
+  content: '▸';
+  margin-left: 0;
+  font-size: 10px;
+  opacity: 0.6;
+  padding-left: 6px;
 }
-.card-body pre code { background: transparent; padding: 0; }
-
-/* Kind variants */
-.card--user { background: linear-gradient(to right, rgba(63, 185, 80, 0.04), var(--bg2) 40px); }
-.card--agent-text { background: var(--bg2); }
-.card--agent-thinking { background: linear-gradient(to right, rgba(188, 140, 255, 0.04), var(--bg2) 40px); }
-.card--agent-tool { background: linear-gradient(to right, rgba(88, 166, 255, 0.03), var(--bg2) 40px); }
-.card--system { background: var(--bg2); color: var(--muted); }
-.card--error { background: linear-gradient(to right, rgba(248, 81, 73, 0.06), var(--bg2) 40px); }
-
-.tool-section { margin: 6px 0; }
-.tool-section-label {
-  font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px;
-  color: var(--dimmed); margin-bottom: 4px;
+.tool-details[open] .tool-status-summary::after {
+  content: '▾';
 }
-.tool-running { color: var(--yellow); font-style: italic; padding: 4px 0; }
-
-/* ========== HUD ========== */
-.hud-bar {
-  padding: 6px 24px;
-  background: var(--bg2);
-  border-bottom: 1px solid var(--border);
-  font-size: 12px;
-  color: var(--muted);
-  display: flex; flex-direction: column; gap: 2px;
-}
-.hud-bar.hidden { display: none; }
-.hud-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-.hud-row-runners { color: var(--dimmed); font-size: 11px; }
-.hud-model { color: var(--text); font-weight: 500; }
-.hud-ctx { color: var(--accent); }
-.hud-tps { color: var(--green); }
-.hud-usage { color: var(--muted); font-family: var(--mono); font-size: 11px; }
-.hud-todo { color: var(--yellow); font-style: italic; }
-
-/* ========== INPUT ========== */
-.chat-input-area {
+.tool-body {
+  padding: 8px 12px 10px 12px;
   border-top: 1px solid var(--border);
-  background: var(--bg2);
-  padding: 10px 24px;
-  display: flex; flex-direction: column; gap: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
-.chat-input-area textarea {
-  width: 100%; padding: 8px 12px;
-  background: var(--bg); color: var(--text);
-  border: 1px solid var(--border); border-radius: var(--radius-sm);
-  font-family: var(--font); font-size: 14px;
-  resize: vertical; min-height: 40px;
+.tool-body-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
-.chat-input-area textarea:focus { outline: none; border-color: var(--accent); }
-.chat-input-actions { display: flex; gap: 8px; justify-content: flex-end; }
+.tool-body-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--dimmed);
+  font-family: var(--mono);
+}
+.tool-body-content {
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text2);
+  max-height: 300px;
+  overflow-y: auto;
+}
+.tool-body-content pre {
+  margin: 0;
+  padding: 6px 8px;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--text2);
+}
+.tool-body-empty {
+  color: var(--dimmed);
+  font-size: 11px;
+}
 
-/* ========== PANEL ========== */
+.tool-query {
+  margin-top: 6px;
+  color: var(--text2);
+}
+
+.tool-args {
+  margin-top: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.kv-pair {
+  font-size: 12px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 2px 6px;
+  font-family: var(--mono);
+}
+
+.kv-key {
+  color: var(--accent);
+}
+
+.kv-val {
+  color: var(--muted);
+}
+
+/* ====== HUD BAR ====== */
+.hud-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 16px;
+  background: var(--bg2);
+  border-top: 1px solid var(--border);
+  border-top-left-radius: var(--radius);
+  border-top-right-radius: var(--radius);
+  font-size: 11px;
+  font-family: var(--mono);
+  color: var(--dimmed);
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.hud-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 18px;
+}
+
+.hud-spacer {
+  flex: 1;
+}
+
+/* --- Row 1: model + ctx bar + speed ---------------------------------- */
+.hud-model-text {
+  color: var(--text2);
+}
+
+.hud-effort {
+  color: var(--text2);
+  margin-left: 4px;
+}
+
+.hud-effort.hidden { display: none; }
+
+.hud-context {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  /* Default heat colour — overridden by .ctx-low / .ctx-mid / .ctx-high
+   * applied in updateHudContext (chat.ts). */
+  --ctx-heat: var(--accent);
+}
+
+/* Bar / bracket colour tracks heat at all thresholds. Text (pct + totals)
+ * only colours from 60% up — below that it reads as plain white so the
+ * eye isn't drawn to a low-signal number. */
+.hud-context.ctx-low  { --ctx-heat: var(--accent); --ctx-text-heat: var(--text2); }
+.hud-context.ctx-mid  { --ctx-heat: var(--yellow); --ctx-text-heat: var(--yellow); }
+.hud-context.ctx-high { --ctx-heat: var(--red);    --ctx-text-heat: var(--red);    }
+
+.hud-ctx-bar {
+  font-family: var(--mono);
+  letter-spacing: 0.5px;
+}
+
+.hud-ctx-bracket { color: var(--ctx-heat); }
+
+.hud-ctx-filled {
+  color: var(--ctx-heat);
+}
+
+.hud-ctx-empty {
+  color: var(--dimmed);
+  opacity: 0.6;
+}
+
+.hud-ctx-pct {
+  color: var(--ctx-text-heat);
+}
+
+.hud-ctx-totals {
+  color: var(--ctx-text-heat);
+  margin-left: -2px;
+}
+
+.hud-speed-text {
+  color: var(--dimmed);
+  transition: color 0.2s;
+}
+
+#hud-bar.running .hud-speed-text {
+  color: var(--yellow);
+}
+
+/* --- Row 2: runners (bash / sub-agents) ------------------------------ */
+.hud-row-runners {
+  font-size: 11px;
+  color: var(--dimmed);
+}
+
+.hud-runners-caret {
+  color: var(--dimmed);
+  transition: color 0.15s;
+}
+
+.hud-runners-caret.active {
+  color: var(--yellow);
+}
+
+.hud-runner {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--dimmed);
+  padding: 1px 6px;
+  border-radius: 999px;
+  /* Dim-metallic — same recipe as the active pills below, just mixed
+   * against muted greys so an idle "0 bash running" still carries the
+   * brushed-metal chrome. Active colours override these vars. */
+  --runner-hi: rgba(139,148,158,0.12);
+  --runner-lo: rgba(139,148,158,0.05);
+  --runner-border: rgba(139,148,158,0.22);
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.035) 0%, rgba(0,0,0,0.12) 100%),
+    linear-gradient(135deg, var(--runner-hi) 0%, var(--runner-lo) 55%, var(--runner-hi) 100%);
+  border: 1px solid var(--runner-border);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.04),
+    inset 0 -1px 0 rgba(0,0,0,0.18);
+  transition: color 0.15s, background 0.15s, border-color 0.15s, box-shadow 0.15s;
+}
+
+/* Active lifts the metal tint from dim grey to the chat-cell palette. */
+.hud-runner.active {
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.055) 0%, rgba(0,0,0,0.18) 100%),
+    linear-gradient(135deg, var(--runner-hi) 0%, var(--runner-lo) 55%, var(--runner-hi) 100%);
+  border-color: var(--runner-border);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.08),
+    inset 0 -1px 0 rgba(0,0,0,0.25);
+}
+
+/* bash — aligns with tool-output cell (.msg-user-tool-output): #e8a94a. */
+.hud-runner-bash.active {
+  --runner-hi: rgba(232,169,74,0.24);
+  --runner-lo: rgba(232,169,74,0.10);
+  --runner-border: rgba(232,169,74,0.45);
+  color: #e8a94a;
+}
+
+/* sub-agents — aligns with sub-agent cell (.msg-user-sub-agent): #ff8c3a. */
+.hud-runner-sub.active {
+  --runner-hi: rgba(255,140,58,0.26);
+  --runner-lo: rgba(255,140,58,0.11);
+  --runner-border: rgba(255,140,58,0.48);
+  color: #ff8c3a;
+}
+
+.hud-runners-sep {
+  color: var(--dimmed);
+  opacity: 0.6;
+}
+
+.agent-status {
+  padding: 4px 16px;
+  font-size: 11px;
+  font-family: var(--mono);
+  color: var(--yellow);
+  font-style: italic;
+  flex-shrink: 0;
+  animation: pulseThinking 1.6s ease-in-out infinite;
+}
+
+.hud-bar.hidden { display: none; }
+
+.hud-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  white-space: nowrap;
+}
+
+.hud-icon {
+  font-size: 11px;
+  opacity: 0.6;
+}
+
+.hud-sep {
+  color: var(--border2);
+  margin: 0 2px;
+}
+
+.hud-item.hud-cwd {
+  max-width: 260px;
+  overflow: hidden;
+  position: relative;
+}
+
+.hud-cwd-text {
+  display: inline-block;
+  white-space: nowrap;
+  transition: none;
+}
+
+.hud-cwd-text.scrolling {
+  animation: hud-cwd-scroll 12s ease-in-out infinite;
+}
+
+@keyframes hud-cwd-scroll {
+  0%, 20%  { transform: translateX(0); }
+  80%, 100% { transform: translateX(var(--scroll-px, 0)); }
+}
+
+.hud-git-added {
+  color: var(--green);
+  font-weight: 600;
+}
+
+.hud-git-deleted {
+  color: var(--red);
+  font-weight: 600;
+}
+
+.hud-tokens-text {
+  color: var(--muted);
+}
+
+/* ====== CHAT INPUT ====== */
+.chat-input-area {
+  padding: 12px 16px;
+  background: var(--bg2);
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+#chat-input {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 14px;
+  padding: 8px 12px;
+  resize: none;
+  outline: none;
+  min-height: 60px;
+  max-height: 200px;
+  transition: border-color 0.15s, box-shadow 0.15s;
+  width: 100%;
+}
+
+#chat-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+#chat-input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.chat-input-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat-input-actions-right {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-left: auto;
+}
+
+/* ====== RIGHT PANEL ====== */
 #panel {
+  width: var(--panel-width);
+  flex-shrink: 0;
   background: var(--bg2);
   border-left: 1px solid var(--border);
-  display: flex; flex-direction: column;
-  min-width: 0; overflow: hidden;
-}
-.panel-empty, .panel-empty-hint {
-  padding: 24px 12px; color: var(--dimmed);
-  text-align: center; font-size: 13px;
-}
-.panel-tabs { display: flex; border-bottom: 1px solid var(--border); }
-.panel-tab {
-  flex: 1; padding: 8px 12px;
-  background: transparent; color: var(--muted);
-  border: none; border-bottom: 2px solid transparent;
-  cursor: pointer; font-size: 12px; font-weight: 500;
-}
-.panel-tab:hover { background: var(--bg3); }
-.panel-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
-.panel-content { flex: 1; overflow-y: auto; padding: 10px 12px; }
-.panel-header-row {
-  display: flex; align-items: center; justify-content: space-between;
-  margin: 8px 0 6px;
-}
-.panel-section-title { font-size: 12px; font-weight: 600; color: var(--muted); }
-
-/* ========== TASKS ========== */
-.task-cards { display: flex; flex-direction: column; gap: 8px; }
-.task-card summary {
-  cursor: pointer; list-style: none;
-  display: flex; align-items: center; gap: 8px;
-  padding: 4px 0; font-size: 12px;
-}
-.task-card summary::-webkit-details-marker { display: none; }
-.task-status {
-  padding: 1px 6px; border-radius: 8px;
-  font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px;
-}
-.status-pending { background: rgba(139, 148, 158, 0.2); color: var(--muted); }
-.status-working { background: rgba(210, 153, 34, 0.2); color: var(--yellow); }
-.status-finished { background: rgba(63, 185, 80, 0.2); color: var(--green); }
-.status-paused { background: rgba(248, 81, 73, 0.15); color: var(--red); }
-.status-running { background: rgba(210, 153, 34, 0.2); color: var(--yellow); }
-.status-completed { background: rgba(63, 185, 80, 0.2); color: var(--green); }
-.status-stalled { background: rgba(139, 148, 158, 0.2); color: var(--muted); }
-.status-killed, .status-killed_by_restart { background: rgba(248, 81, 73, 0.15); color: var(--red); }
-.task-name { font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; }
-.task-meta { font-size: 11px; color: var(--dimmed); }
-.task-body { padding: 8px 0 4px; font-size: 13px; color: var(--text2); }
-
-.todo-card { padding: 8px 10px; margin-bottom: 10px; }
-.todo-card summary { cursor: pointer; list-style: none; font-size: 12px; color: var(--yellow); }
-.todo-card summary::-webkit-details-marker { display: none; }
-.todo-line { font-weight: 500; }
-.todo-list { list-style: none; padding: 6px 0 0; }
-.todo-item { display: flex; gap: 8px; padding: 3px 0; font-size: 12px; }
-.todo-item.active { color: var(--yellow); font-weight: 500; }
-.todo-completed { color: var(--muted); text-decoration: line-through; }
-.todo-mark { width: 14px; text-align: center; color: var(--dimmed); }
-.todo-in_progress .todo-mark { color: var(--yellow); }
-.todo-completed .todo-mark { color: var(--green); }
-.todo-text { flex: 1; overflow: hidden; text-overflow: ellipsis; }
-
-/* ========== PANEL ENTRIES ========== */
-.panel-entry { padding: 8px 10px; border-left-color: var(--border2); }
-.panel-entry summary {
-  cursor: pointer; list-style: none;
-  display: flex; align-items: center; gap: 8px;
-  font-size: 12px;
-}
-.panel-entry summary::-webkit-details-marker { display: none; }
-.panel-entry-tool { font-family: var(--mono); font-weight: 600; }
-.panel-entry-status { font-size: 10px; text-transform: uppercase; color: var(--muted); }
-.panel-entry-tid { margin-left: auto; color: var(--dimmed); font-family: var(--mono); font-size: 10px; }
-.panel-entry.status-running { border-left-color: var(--yellow); }
-.panel-entry.status-completed { border-left-color: var(--green); }
-.panel-entry.status-killed, .panel-entry.status-killed_by_restart { border-left-color: var(--red); }
-
-/* ========== CONFIG ========== */
-.config-view { font-size: 13px; }
-.config-table { width: 100%; border-collapse: collapse; margin-top: 8px; }
-.config-table td { padding: 3px 8px; border-bottom: 1px solid var(--border); font-size: 12px; }
-.config-key { color: var(--muted); width: 40%; font-family: var(--mono); }
-.config-val { color: var(--text); word-break: break-all; }
-
-/* ========== TASK EDITOR (for taskEditor.ts) ========== */
-.task-editor {
-  padding: 12px;
-  background: var(--bg3); border: 1px solid var(--border);
-  border-radius: var(--radius);
-  display: flex; flex-direction: column; gap: 10px;
-}
-.task-editor-header { font-size: 13px; font-weight: 600; }
-.form-field { display: flex; flex-direction: column; gap: 4px; }
-.form-field label { font-size: 11px; color: var(--muted); }
-.form-field input, .form-field select, .form-field textarea {
-  padding: 6px 8px;
-  background: var(--bg); color: var(--text);
-  border: 1px solid var(--border); border-radius: var(--radius-sm);
-  font-family: var(--font); font-size: 13px;
-}
-.form-field textarea { resize: vertical; font-family: var(--mono); font-size: 12px; }
-.task-content-textarea { min-height: 80px; }
-.form-row { display: flex; gap: 8px; }
-.task-editor-actions { justify-content: flex-end; }
-.form-error { color: var(--red); font-size: 12px; padding: 6px 0; }
-
-/* ========== SHELL HIGHLIGHT (taskEditor script) ========== */
-.shell-edit {
-  position: relative;
-  background: var(--bg);
-  border: 1px solid var(--border); border-radius: var(--radius-sm);
-  font-family: var(--mono); font-size: 12px;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
-  min-height: 160px;
 }
-.shell-edit-highlight {
-  position: absolute; inset: 0;
+
+.panel-empty {
+  padding: 24px;
+  color: var(--muted);
+  text-align: center;
+  font-style: italic;
+}
+
+.panel-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.panel-tab {
+  flex: 1;
+  background: none;
+  border: none;
+  border-radius: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  padding: 10px 0;
+  font-weight: 600;
+  font-size: 13px;
+  cursor: pointer;
+  transition: color 0.18s, border-color 0.18s, background 0.18s;
+}
+
+.panel-tab:hover {
+  color: var(--text2);
+  background: rgba(255,255,255,0.02);
+}
+
+.panel-tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+  background: none;
+}
+
+.panel-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* ====== TASK CARDS ====== */
+.task-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* v2.0.23: .task-card is now a <details> — the summary is the closed view
+   (name + duty + status + interval pill), the body holds description,
+   progress, comments, window, last-run and the Edit button. Hover no longer
+   reveals the Edit button because it lives inside the body and is only
+   visible when the card is expanded. */
+.task-card {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  transition: border-color 0.15s;
+  position: relative;
+  overflow: hidden;
+}
+
+.task-card:hover {
+  border-color: var(--border2);
+}
+
+.task-card-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+.task-card-summary::-webkit-details-marker { display: none; }
+.task-card-summary-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.task-card-summary-top::after {
+  content: '▸';
+  color: var(--dimmed);
+  font-size: 11px;
+  margin-left: auto;
+  transition: transform 0.12s;
+}
+.task-card[open] > .task-card-summary .task-card-summary-top::after {
+  transform: rotate(90deg);
+}
+
+.task-card-summary-main {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+  flex: 1;
+}
+
+.task-card-body {
+  padding: 0 12px 12px;
+  border-top: 1px solid var(--border);
+  margin-top: 0;
+  padding-top: 10px;
+}
+
+.task-card-section {
+  margin: 8px 0;
+}
+.task-card-section-label {
+  font-size: 10px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--dimmed);
+  font-weight: 600;
+  margin-bottom: 3px;
+}
+.task-card-section-body {
+  font-size: 12px;
+  color: var(--text2);
+  font-family: var(--mono);
+  white-space: pre-wrap;
+  line-height: 1.5;
+}
+.task-card-section-body.markdown-body {
+  font-family: var(--font);
+  white-space: normal;
+}
+.task-card-section-body.task-card-empty {
+  color: var(--dimmed);
+  font-style: italic;
+}
+
+/* Task card inline script view — shell-highlighted, monospace block.
+ * Sits in the expanded card body alongside description/progress blocks. */
+.task-card-script {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.5;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
   padding: 6px 8px;
   margin: 0;
-  color: var(--text);
-  pointer-events: none;
+  white-space: pre-wrap;
+  word-break: break-all;
+  overflow: auto;
+  max-height: 260px;
+}
+.task-card-script code {
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  white-space: inherit;
+}
+.task-card-script.lang-bash .sh-comment  { color: #6a9955; font-style: italic; }
+.task-card-script.lang-bash .sh-keyword  { color: #c586c0; font-weight: 600; }
+.task-card-script.lang-bash .sh-builtin  { color: #dcdcaa; }
+.task-card-script.lang-bash .sh-string   { color: #ce9178; }
+.task-card-script.lang-bash .sh-variable { color: #9cdcfe; }
+.task-card-script.lang-bash .sh-number   { color: #b5cea8; }
+
+.task-interval-pill {
+  font-size: 10px;
+  color: var(--muted);
+  font-family: var(--mono);
+  background: rgba(139,148,158,0.08);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 1px 7px;
+  white-space: nowrap;
+}
+
+.task-card-summary-snippets {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.task-summary-block {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.task-summary-label {
+  font-size: 9px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--dimmed);
+  font-weight: 600;
+}
+.task-summary-snippet {
+  font-size: 12px;
+  color: var(--text2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.4;
+}
+
+/* Todo-list pinned header (v2.0.37 — standalone, not a task card). The
+ * panel summary mirrors the HUD row's split styling: yellow prefix
+ * counter, bold body text, dim + strikethrough for the all-done
+ * state. */
+.task-summary-snippet-todo-prefix {
+  color: var(--yellow);
+  font-weight: 600;
+}
+.task-summary-snippet-todo-body {
+  font-weight: 600;
+}
+.task-summary-snippet-todo-done {
+  color: var(--dimmed);
+  text-decoration: line-through;
+  opacity: 0.65;
+}
+
+/* Pinned standalone todo list — sits above the regular task cards list.
+ * Margin separates it from the cards below; the card chrome is reused
+ * so it visually reads as "one more card, always at top". */
+.task-todo-pinned {
+  margin-bottom: 12px;
+}
+
+.task-card-todo-list .task-todo-pill {
+  /* Distinguish from the duty pill — grey, not accent. */
+  background: var(--surface-2, rgba(255, 255, 255, 0.05));
+  color: var(--dimmed);
+}
+
+/* Expanded items list inside the pinned todo card. */
+.task-todo-items {
+  list-style: none;
+  padding-left: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.task-todo-item {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  line-height: 1.4;
+}
+.task-todo-marker {
+  display: inline-block;
+  min-width: 1.2em;
+  text-align: center;
+  flex-shrink: 0;
+}
+.task-todo-index {
+  color: var(--dimmed);
+  min-width: 1.8em;
+  flex-shrink: 0;
+}
+.task-todo-text {
+  color: var(--text2);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.task-todo-item-done .task-todo-marker { color: var(--dimmed); }
+.task-todo-item-done .task-todo-text {
+  color: var(--dimmed);
+  text-decoration: line-through;
+  opacity: 0.65;
+}
+.task-todo-item-in-progress .task-todo-marker { color: var(--yellow); }
+.task-todo-item-in-progress .task-todo-text {
+  color: var(--yellow);
+  font-weight: 600;
+}
+.task-todo-item-pending .task-todo-marker { color: var(--dimmed); }
+
+.task-cadence {
+  font-family: var(--mono);
+}
+
+.task-card-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+
+.task-name {
+  font-weight: 700;
+  font-size: 13px;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hb-pill {
+  background: rgba(88,166,255,0.1);
+  color: var(--accent);
+  border: 1px solid rgba(88,166,255,0.25);
+  border-radius: 20px;
+  padding: 1px 7px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+}
+
+.task-status-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 20px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.task-status-pending { background: rgba(88,166,255,0.1); color: var(--accent); }
+.task-status-working { background: rgba(63,185,80,0.1); color: var(--green); }
+.task-status-finished { background: rgba(139,148,158,0.1); color: var(--muted); }
+.task-status-paused { background: rgba(210,153,34,0.1); color: var(--yellow); }
+
+/* Panel entry status badges (reuse .task-status-badge) */
+.panel-status-running { background: rgba(210,153,34,0.1); color: var(--yellow); }
+.panel-status-completed { background: rgba(63,185,80,0.1); color: var(--green); }
+.panel-status-stalled { background: rgba(219,109,40,0.12); color: #db6d28; }
+.panel-status-killed { background: rgba(248,81,73,0.12); color: var(--red); }
+.panel-status-killed_by_restart { background: rgba(140,40,40,0.18); color: #8c2828; }
+
+/* Panel row (reuses .task-card styles + one-line tail preview).
+ * .task-card intentionally has no default padding, but .panel-row content
+ * hugs the border without it — summary row + tail preview need breathing
+ * room on all four sides. */
+.panel-row {
+  padding: 10px 12px;
+}
+.panel-row.expanded {
+  padding-bottom: 12px;
+}
+
+.panel-row .panel-tid {
+  font-family: var(--mono);
+  font-size: 10px;
+  background: rgba(139,148,158,0.12);
+  color: var(--muted);
+  border: 1px solid var(--border);
+}
+
+.panel-row-header {
+  cursor: pointer;
+}
+
+.panel-tail {
+  font-size: 11px;
+  color: var(--dimmed);
+  font-family: var(--mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-height: none;
+  border-left: none;
+  padding-left: 0;
+  margin: 4px 0 0 0;
+}
+
+.panel-json {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text2);
+  background: rgba(0,0,0,0.2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px;
+  margin: 8px 0;
+  max-height: 260px;
   overflow: auto;
   white-space: pre;
 }
-.shell-edit-input {
-  position: relative;
-  width: 100%;
-  padding: 6px 8px;
-  background: transparent !important;
-  color: transparent;
-  caret-color: var(--text);
-  border: none !important;
-  font-family: var(--mono); font-size: 12px;
-  white-space: pre; overflow: auto;
+
+.panel-output-tail {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text2);
+  background: rgba(0,0,0,0.2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px;
+  margin: 4px 0 8px 0;
+  max-height: 260px;
+  overflow: auto;
+  white-space: pre;
+}
+
+.panel-output-empty {
+  color: var(--muted);
+  font-style: italic;
+  white-space: normal;
+}
+
+.task-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--dimmed);
+  margin-bottom: 6px;
+}
+
+.task-card-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 6px;
+}
+
+.tasks-footer {
+  display: flex;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.tasks-empty {
+  color: var(--muted);
+  font-style: italic;
+  font-size: 13px;
+  padding: 8px 0;
+}
+
+/* ====== TASK EDITOR ====== */
+.task-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.task-editor-header {
+  padding: 0 0 12px;
+  font-size: 14px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 12px;
+}
+
+.task-content-textarea {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 8px;
   resize: vertical;
+  outline: none;
+  width: 100%;
+  min-height: 160px;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.task-content-textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+.task-editor-actions {
+  padding-top: 4px;
+}
+
+/* ---- Shell syntax highlight ------------------------------------------- */
+/* Overlay editor: a <pre> renders the highlighted copy; the textarea sits
+ * on top with transparent text + a visible caret. Both share the same font
+ * metrics, padding, wrapping, tab-size, so selection highlight and caret
+ * line up with the highlighted glyphs underneath. */
+.shell-edit {
+  position: relative;
   min-height: 160px;
 }
-.shell-edit-input:focus { outline: none; }
-.sh-keyword { color: var(--purple); }
-.sh-string { color: var(--green); }
-.sh-comment { color: var(--dimmed); font-style: italic; }
-.sh-variable { color: var(--yellow); }
-.sh-number { color: var(--accent); }
-.sh-builtin { color: var(--accent); }
-
-/* ========== TERMINAL (retained controller DOM) ========== */
-.terminal-container {
-  display: flex; flex-direction: column;
-  background: var(--bg);
-  border: 1px solid var(--border); border-radius: var(--radius);
-  overflow: hidden;
-  font-family: var(--mono); font-size: 12px;
-  height: 100%; min-height: 300px;
+.shell-edit-highlight,
+.shell-edit-input {
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  margin: 0;
+  box-sizing: border-box;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  tab-size: 2;
+  width: 100%;
+  min-height: 160px;
 }
-.terminal-chrome {
-  display: flex; align-items: center; justify-content: space-between;
+.shell-edit-highlight {
+  position: absolute;
+  inset: 0;
+  background: var(--bg);
+  color: var(--text);
+  pointer-events: none;
+  overflow: auto;
+  z-index: 0;
+}
+.shell-edit-highlight code {
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  white-space: inherit;
+}
+.shell-edit-input {
+  position: relative;
+  background: transparent;
+  color: transparent;
+  caret-color: var(--text);
+  outline: none;
+  resize: vertical;
+  z-index: 1;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.shell-edit-input::selection {
+  background: var(--accent-glow);
+  color: transparent;
+}
+.shell-edit-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+/* Shared token palette — used by the editor overlay AND by tool-cell
+ * script arg blocks (task_create / task_update). */
+.sh-comment  { color: #6a9955; font-style: italic; }
+.sh-keyword  { color: #c586c0; font-weight: 600; }
+.sh-builtin  { color: #dcdcaa; }
+.sh-string   { color: #ce9178; }
+.sh-variable { color: #9cdcfe; }
+.sh-number   { color: #b5cea8; }
+
+.tool-pre.lang-bash .sh-comment,  .kv-val.lang-bash .sh-comment  { color: #6a9955; font-style: italic; }
+.tool-pre.lang-bash .sh-keyword,  .kv-val.lang-bash .sh-keyword  { color: #c586c0; font-weight: 600; }
+.tool-pre.lang-bash .sh-builtin,  .kv-val.lang-bash .sh-builtin  { color: #dcdcaa; }
+.tool-pre.lang-bash .sh-string,   .kv-val.lang-bash .sh-string   { color: #ce9178; }
+.tool-pre.lang-bash .sh-variable, .kv-val.lang-bash .sh-variable { color: #9cdcfe; }
+.tool-pre.lang-bash .sh-number,   .kv-val.lang-bash .sh-number   { color: #b5cea8; }
+
+/* ---- Diff view for edit / write / task_update ------------------------ */
+/* When a mutation tool renders as a diff, the original input + result
+ * sections are collapsed into a single view showing old→new. `.tool-body-
+ * diff-only` drops the two-section chrome so the diff block fills the
+ * whole body without duplicate padding. */
+.tool-body.tool-body-diff-only {
+  padding: 6px 10px 10px 10px;
+}
+.tool-diff-header {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--dimmed);
+  padding: 2px 0 4px 0;
+  word-break: break-all;
+}
+.tool-diff-subheader {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--dimmed);
+  padding: 6px 0 2px 0;
+}
+.tool-diff-badge {
+  display: inline-block;
+  background: rgba(100, 200, 100, 0.14);
+  color: #6fbf73;
+  padding: 0 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-left: 4px;
+}
+.diff-block {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 0;
+  margin: 0;
+  overflow: auto;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.diff-block code {
+  font: inherit;
+  display: block;
+  width: 100%;
+}
+.diff-line {
+  display: flex;
+  gap: 6px;
+  padding: 0 10px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.diff-prefix {
+  flex: 0 0 10px;
+  color: var(--dimmed);
+  user-select: none;
+  text-align: center;
+}
+.diff-text {
+  flex: 1 1 auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.diff-add {
+  background: rgba(80, 180, 100, 0.09);
+}
+.diff-add .diff-prefix {
+  color: #6fbf73;
+}
+.diff-add .diff-text {
+  color: #b7e7c2;
+}
+.diff-del {
+  background: rgba(220, 80, 80, 0.09);
+}
+.diff-del .diff-prefix {
+  color: #e07070;
+}
+.diff-del .diff-text {
+  color: #f0b5b5;
+}
+.diff-ctx .diff-text {
+  color: var(--dimmed);
+}
+
+/* ====== CONFIG ====== */
+.config-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.config-table tr:nth-child(even) {
+  background: rgba(255,255,255,0.02);
+}
+
+.config-table tr:hover {
+  background: var(--bg3);
+}
+
+.cfg-key {
+  padding: 6px 8px 6px 0;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+  white-space: nowrap;
+  vertical-align: top;
+  border-bottom: 1px solid rgba(48,54,61,0.5);
+  width: 45%;
+}
+
+.cfg-val {
+  padding: 6px 0 6px 8px;
+  word-break: break-word;
+  border-bottom: 1px solid rgba(48,54,61,0.5);
+  color: var(--text2);
+}
+
+.cfg-null {
+  color: var(--dimmed);
+  font-style: italic;
+}
+
+.cfg-true {
+  color: var(--green);
+}
+
+.cfg-false {
+  color: var(--red);
+}
+
+.config-footer {
+  padding-top: 8px;
+}
+
+.config-json-editor {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 10px;
+  resize: vertical;
+  outline: none;
+  width: 100%;
+  min-height: 300px;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.config-json-editor:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+/* ====== MISC ====== */
+.hidden {
+  display: none !important;
+}
+
+/* ====== HUD v2.0.9 (compact) ====== */
+.hud-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+}
+.hud-dot-idle {
+  background: var(--dimmed);
+}
+.hud-dot-running {
+  background: var(--green);
+  box-shadow: 0 0 6px rgba(63,185,80,0.6);
+  animation: hud-pulse 1.4s ease-in-out infinite;
+}
+@keyframes hud-pulse {
+  0%, 100% { opacity: 0.85; }
+  50% { opacity: 0.4; }
+}
+/* ====== Send-mode toggle (v2.0.12) — wait checkbox in chat input bar ===== */
+/* Replaces the v2.0.9 5 s pending-bar UI; backend dispatcher now owns
+   queue / merge / interrupt semantics, so the per-tab pending buffer is
+   gone. */
+.send-mode-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+}
+.send-mode-toggle input[type="checkbox"] {
+  margin: 0;
+  accent-color: var(--yellow);
+}
+
+/* ====== Tool cell (v2.0.19 inline-expand) ====== */
+.msg-tool {
+  padding: 0 !important;
+  background: transparent !important;
+  border: none !important;
+}
+.msg-tool.done .tool-details {
+  border-left-color: var(--green);
+  opacity: 0.9;
+}
+.tool-status-summary {
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.tool-status-icon {
+  font-weight: 700;
+  color: var(--yellow);
+  width: 12px;
+  text-align: center;
+}
+.msg-tool.done .tool-status-icon {
+  color: var(--green);
+}
+.tool-status-name {
+  color: var(--text);
+  font-weight: 600;
+}
+.tool-status-meta {
+  color: var(--dimmed);
+  font-size: 11px;
+}
+/* Status pill rendered right after the tool name. Shows "running…" while
+   live (dimmed) and the execution duration (e.g. "2.4s", green) once the
+   cell flips to ``.done``. Empty is hidden so stray state stays quiet. */
+.tool-status-duration {
+  color: var(--dimmed);
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 500;
+}
+.msg-tool.done .tool-status-duration {
+  color: var(--green);
+  opacity: 0.9;
+}
+/* v2.0.23: interrupted tool cell. Reached when the run is cancelled mid-tool
+   (user hit ⚡ Interrupt or a new interrupt-mode chat came in) — no tool_done
+   is ever emitted so the frontend sweeps running cells into this terminal
+   state on model_status=idle. Dim yellow border + ✗ icon signals "did not
+   complete" without implying the tool itself errored. */
+.msg-tool.interrupted .tool-details {
+  border-left-color: var(--yellow);
+  opacity: 0.75;
+}
+.msg-tool.interrupted .tool-status-icon {
+  color: var(--yellow);
+}
+.msg-tool.interrupted .tool-status-duration {
+  color: var(--yellow);
+  opacity: 0.85;
+}
+/* v2.0.23: error tool cell. Set when tool_engine.classify_tool_result matches
+   (bash non-zero exit, Traceback, leading "Error:" line) or core/agent caught
+   an exception from the executor. Takes precedence over the default green
+   `.done` chrome — `.error` rules below follow `.done` rules in source order
+   so they win on equal specificity. */
+.msg-tool.error .tool-details {
+  border-left-color: var(--red);
+}
+.msg-tool.error .tool-status-icon {
+  color: var(--red);
+}
+.msg-tool.error .tool-status-duration {
+  color: var(--red);
+  opacity: 0.85;
+}
+.tool-status-duration:empty { display: none; }
+/* Inline arg preview — lives between tool-status-name and tool-status-meta
+   so the tool cell reads as a single line: ✓ bash  ls -la  1.2s. Long args
+   get ellipsised; hover reveals the full value via the title attribute. */
+.tool-status-arg {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  max-width: 420px;
+  display: inline-block;
+  vertical-align: middle;
+}
+.tool-status-arg:empty { display: none; }
+.tool-args-expanded {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+}
+.kv-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+.kv-row .kv-key {
+  min-width: 80px;
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+.kv-row .kv-val {
+  flex: 1;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 4px 6px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text2);
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+}
+
+/* ====== Config form (v2.0.9) ====== */
+.config-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-bottom: 10px;
+}
+.cfg-row {
+  display: grid;
+  grid-template-columns: 140px 1fr;
+  align-items: center;
+  gap: 10px;
+}
+.cfg-row-block {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+}
+.cfg-row-block .cfg-textarea {
+  width: 100%;
+  box-sizing: border-box;
+}
+.cfg-label {
+  color: var(--muted);
+  font-size: 11px;
+  font-family: var(--mono);
+  text-transform: lowercase;
+}
+.cfg-input {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 13px;
+  padding: 6px 10px;
+  outline: none;
+  width: 100%;
+}
+.cfg-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-glow);
+}
+.cfg-readout {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--dimmed);
   padding: 6px 10px;
   background: var(--bg2);
-  border-bottom: 1px solid var(--border);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
 }
-.terminal-title { font-weight: 600; font-size: 12px; font-family: var(--font); }
-.terminal-body { flex: 1; overflow-y: auto; padding: 8px; }
-.terminal-output { white-space: pre-wrap; word-break: break-word; font-family: var(--mono); }
-.terminal-inputbar {
-  display: flex; align-items: center; gap: 6px;
-  padding: 6px 8px;
-  border-top: 1px solid var(--border);
+.config-asset-group {
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
-.terminal-prompt { color: var(--green); font-family: var(--mono); }
-.terminal-input {
-  flex: 1;
-  background: transparent; color: var(--text);
-  border: none; font-family: var(--mono); font-size: 12px;
+.cfg-asset-heading {
+  margin: 0;
+  font-size: 11px;
+  color: var(--dimmed);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
-.terminal-input:focus { outline: none; }
-.terminal-btn-interrupt {
-  background: transparent; color: var(--yellow);
-  border: 1px solid var(--yellow); border-radius: var(--radius-sm);
-  padding: 2px 8px; cursor: pointer;
+.cfg-asset-block {
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.45;
+  padding: 10px 12px;
+  margin: 0;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--fg);
+  white-space: pre-wrap;
+  overflow-x: auto;
+  max-height: 280px;
+  overflow-y: auto;
+}
+.cfg-textarea {
+  font-family: var(--mono);
+  font-size: 12px;
+  min-height: 60px;
+  resize: vertical;
+}
+.cfg-hint {
+  color: var(--dimmed);
+  font-size: 11px;
+  font-style: italic;
+  padding-bottom: 6px;
+}
+
+/* ── Terminal panel ─────────────────────────────────────────────── */
+
+.terminal-container {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 14px;
+  border: 1px solid var(--bg4);
+  border-radius: var(--radius);
+  background: #07090d;
+  overflow: hidden;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.terminal-chrome {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--bg3);
+  border-bottom: 1px solid var(--bg4);
+}
+.terminal-title {
+  color: var(--text2);
+  font-weight: 600;
+  letter-spacing: 0.04em;
 }
 .terminal-status {
-  padding: 4px 10px; font-size: 11px; color: var(--muted);
-  background: var(--bg2); border-top: 1px solid var(--border);
+  display: flex;
+  gap: 6px;
+  align-items: center;
 }
-.terminal-status-idle { color: var(--dimmed); }
-.terminal-status-rejected { color: var(--red); }
+.terminal-lock-pill,
+.terminal-status-idle,
+.terminal-status-rejected {
+  font-size: 10.5px;
+  padding: 1px 7px;
+  border-radius: 10px;
+  border: 1px solid var(--bg4);
+  color: var(--dimmed);
+}
+.lock-agent {
+  color: var(--yellow);
+  border-color: var(--yellow);
+  background: rgba(210,153,34,0.08);
+}
+.lock-user {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.lock-free {
+  color: var(--green);
+  border-color: var(--green);
+}
+.terminal-status-rejected {
+  color: var(--red);
+  border-color: var(--red);
+}
+.terminal-body {
+  position: relative;
+  max-height: 260px;
+  min-height: 120px;
+  overflow: hidden;
+  padding: 0;
+  background: #07090d;
+}
+.terminal-output {
+  margin: 0;
+  padding: 8px 10px;
+  max-height: 260px;
+  min-height: 120px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  line-height: 1.5;
+  color: var(--text2);
+}
+.term-line { display: block; }
+/* Agent-originated lines share the "Agent is working..." yellow. Command
+ * line is bold, output is dimmed — same command/output visual rhythm as
+ * the user path, just in yellow. */
+.term-line.term-agent-cmd { color: var(--yellow); font-weight: 600; }
+.term-line.term-agent-out { color: var(--yellow); opacity: 0.78; }
+.term-line.term-user-cmd { color: var(--green); font-weight: 600; }
+.term-line.term-user-out { color: var(--text); }
+.term-line.term-system { color: var(--dimmed); font-style: italic; }
+.term-prompt-agent { color: var(--yellow); opacity: 0.75; }
+.term-prompt-user { color: var(--green); opacity: 0.8; }
 .terminal-hud {
-  padding: 4px 10px; font-size: 11px;
-  background: var(--bg2); border-bottom: 1px solid var(--border);
+  padding: 4px 10px;
+  background: #080b11;
+  border-top: 1px solid var(--bg4);
+  font-size: 11px;
+  color: var(--text);
+  /* ``min-width: 0`` lets this flex child shrink below content width
+   * so the collapsed ellipsis kicks in (flex items default to
+   * min-width: auto = content width, which would push the row past
+   * the panel's ``overflow: hidden`` edge). */
+  min-width: 0;
+  cursor: pointer;
+  user-select: none;
+  /* Enter / Space focus ring when tabbed to. */
+  outline: none;
+}
+.terminal-hud:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+.terminal-hud:hover {
+  background: #0b0f18;
+}
+/* Collapsed: one line, ellipsis when too long. */
+.terminal-hud[data-expanded="0"] .terminal-hud-line {
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  line-height: 1.4;
+}
+/* Expanded: full content, wraps across lines. */
+.terminal-hud[data-expanded="1"] .terminal-hud-line {
+  display: block;
+  white-space: pre-wrap;
+  word-break: break-all;
+  line-height: 1.5;
+}
+.terminal-hud-venv {
+  color: var(--accent);
+  font-weight: 600;
+  margin-right: 6px;
+}
+.terminal-hud-path {
+  color: var(--text);
+  opacity: 0.9;
+}
+.terminal-hud-sep {
+  color: var(--dimmed);
+  opacity: 0.65;
+  margin: 0 2px;
+}
+/* "git(" and ")" — soft pink self-label. Inner branch span below. */
+.terminal-hud-git-label {
+  color: #ff9ec7;
+  font-weight: 600;
+}
+/* Branch name + dirty marker — sky blue so the two halves read as
+ * distinct zones even on small screens where the parens nearly touch
+ * the letters. */
+.terminal-hud-git-branch {
+  color: #7cc7ff;
+  font-weight: 500;
+}
+.terminal-hud-empty {
+  color: var(--dimmed);
+  opacity: 0.55;
+  font-style: italic;
+}
+.terminal-inputbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: #0a0d13;
+  border-top: 1px solid var(--bg4);
+}
+.terminal-prompt { color: var(--green); font-weight: 600; }
+.terminal-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  outline: none;
+}
+.terminal-input::placeholder {
+  color: var(--dimmed);
+  font-style: italic;
+}
+.terminal-input:disabled {
+  color: var(--dimmed);
+  cursor: not-allowed;
+}
+.terminal-btn-interrupt {
+  background: transparent;
+  border: 1px solid var(--bg4);
+  color: var(--yellow);
+  border-radius: var(--radius-sm);
+  padding: 2px 8px;
   cursor: pointer;
 }
-.terminal-hud-line { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.terminal-hud-empty { color: var(--dimmed); }
-.terminal-hud-path { color: var(--accent); font-family: var(--mono); }
-.terminal-hud-venv { color: var(--yellow); }
-.terminal-hud-sep { color: var(--dimmed); }
-.terminal-hud-git-label { color: var(--muted); }
-.terminal-hud-git-branch { color: var(--green); }
-.terminal-lock-pill { padding: 1px 6px; border-radius: 10px; font-size: 10px; }
-.lock-agent { background: rgba(88, 166, 255, 0.15); color: var(--accent); }
-.lock-user { background: rgba(210, 153, 34, 0.15); color: var(--yellow); }
-.lock-free { background: rgba(63, 185, 80, 0.15); color: var(--green); }
-.term-prompt-agent { color: var(--accent); }
-.term-prompt-user { color: var(--yellow); }
-.term-text { color: var(--text); }
+.terminal-btn-interrupt:hover:not(:disabled) {
+  border-color: var(--yellow);
+  background: rgba(210,153,34,0.08);
+}
+.terminal-btn-interrupt:disabled {
+  color: var(--dimmed);
+  cursor: not-allowed;
+}
+
+/* --- Row 3: todo-list (v2.0.36) --------------------------------------- *
+ * A <details>/<summary> row sitting below the runners row. Collapsed by
+ * default, showing only the backend-built ``progress_line`` (e.g.
+ * "[3/5] Implementing Y"). Expanded, it renders a tight ordered list
+ * of todos with status markers (☑ done · ▤ in progress · ☐ pending).
+ * The native disclosure triangle is suppressed in favour of a CSS
+ * ::before caret that flips ▸ → ▾ on [open]. */
+.hud-row-todo {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+  font-size: 11px;
+  color: var(--dimmed);
+  /* Override .hud-row min-height so the summary row sits flush with the
+   * runners row above. The min-height is applied to the summary itself. */
+  min-height: 0;
+}
+
+.hud-row-todo.hidden { display: none; }
+
+.hud-todo-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 18px;
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+  color: var(--dimmed);
+}
+
+.hud-todo-summary::-webkit-details-marker {
+  display: none;
+}
+
+.hud-todo-caret {
+  display: inline-block;
+  width: 1em;
+  color: var(--dimmed);
+  font-family: var(--mono);
+  transition: color 0.15s;
+}
+
+.hud-todo-caret::before {
+  content: '▸';
+}
+
+.hud-todo-details[open] .hud-todo-caret::before {
+  content: '▾';
+}
+
+.hud-todo-details[open] .hud-todo-caret {
+  color: var(--yellow);
+}
+
+.hud-todo-line {
+  flex: 1;
+  color: var(--text2);
+  font-family: var(--mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Collapsed todo line — only the ``[i/N]`` PREFIX carries the yellow
+ * accent; the activeForm body stays default color + bold, so the row
+ * reads as a calm "what's on" line with a single colored counter. */
+.hud-todo-line-prefix {
+  color: var(--text2);
+}
+.hud-todo-line-prefix-active {
+  color: var(--yellow);
+  font-weight: 600;
+}
+.hud-todo-line-prefix-done {
+  color: var(--dimmed);
+}
+.hud-todo-line-body-active {
+  font-weight: 600;
+}
+
+/* All items done → strikethrough + dim on the full line (prefix +
+ * body), so the row reads "closed" at a glance. */
+.hud-todo-line-done {
+  color: var(--dimmed);
+  text-decoration: line-through;
+  opacity: 0.65;
+}
+
+.hud-todo-list {
+  list-style: none;
+  padding-left: 1rem;
+  margin: 0.25rem 0 0.4rem 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.hud-todo-item {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.hud-todo-marker {
+  display: inline-block;
+  min-width: 1.2em;
+  text-align: center;
+  color: var(--dimmed);
+  flex-shrink: 0;
+}
+
+.hud-todo-text {
+  color: var(--text2);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Completed items — same ▤ glyph as in_progress, but dim + strikethrough
+ * (no yellow accent) so styling distinguishes the two identical markers. */
+.hud-todo-item-done .hud-todo-marker {
+  color: var(--dimmed);
+}
+.hud-todo-item-done .hud-todo-text {
+  color: var(--dimmed);
+  text-decoration: line-through;
+  opacity: 0.65;
+}
+
+.hud-todo-item-in-progress .hud-todo-marker {
+  color: var(--yellow);
+}
+.hud-todo-item-in-progress .hud-todo-text {
+  color: var(--yellow);
+  font-weight: 600;
+}
+
+.hud-todo-item-pending .hud-todo-marker {
+  color: var(--dimmed);
+}
+.hud-todo-item-pending .hud-todo-text {
+  color: var(--text2);
+}

@@ -54,7 +54,7 @@ delete_session(session_id) -> Event
 start_session(session_id) -> Event            # emits control_start
 stop_session(session_id, *, reason="user") -> Event
 
-send_message(session_id, text, *, source="cli", caller=None, display_name=None) -> Event
+send_message(session_id, text, *, source="cli", caller=None, display_name=None, mode="interrupt") -> Event
 interrupt_session(session_id, *, text=None) -> Event     # emits control_interrupt
 
 upsert_task(session_id, name, *, description=None, script=None, check_interval=None, notes=None, progress=None) -> Event
@@ -71,6 +71,8 @@ update_asset(session_id, name, content) -> Event
 ```
 
 Each writer returns the persisted `Event` so callers (tests, CLI) can cursor-advance.
+
+`send_message`'s `mode` ∈ {`"interrupt"`, `"wait"`}. `"interrupt"` (default) cancels the in-flight tick and dispatches the new input immediately; `"wait"` enqueues the message behind the running tick so the agent finishes its current turn first. The mode is recorded on the `user_input` event payload for replay/audit; `build_llm_context` ignores it (only `text` enters the LLM context). The dispatcher in `session_engine` is the enforcer.
 
 ## Error model
 
