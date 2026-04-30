@@ -1,6 +1,6 @@
-# Web UI — HTTP, SSE, and the unified Card
+# Web UI — HTTP, SSE, and the chat transcript
 
-The web backend is a thin shell over `butterfly.runtime.io`. Every route parses its request, calls exactly one `io.*` function, and returns the result as JSON. No business logic in `ui/web/app.py`. The frontend renders one Card per event via one reducer — live SSE and history replay drive the same code path.
+The web backend is a thin shell over `butterfly.runtime.io`. Every route parses its request, calls exactly one `io.*` function, and returns the result as JSON. No business logic in `ui/web/app.py`. The frontend renders the transcript by funnelling every BfEvent through `eventAdapter.bfToDisplay()` before dispatching it to `chat.ts`'s `appendEvent` — live SSE and history replay drive the same code path.
 
 ## HTTP routes
 
@@ -13,7 +13,7 @@ GET    /api/sessions/{id}                    → io.get_session
 DELETE /api/sessions/{id}                    → io.delete_session
 POST   /api/sessions/{id}/start              → io.start_session
 POST   /api/sessions/{id}/stop               → io.stop_session
-POST   /api/sessions/{id}/messages           → io.send_message
+POST   /api/sessions/{id}/messages           → io.send_message  (body.mode ∈ {interrupt, wait})
 POST   /api/sessions/{id}/interrupt          → io.interrupt_session
 GET    /api/sessions/{id}/events?since=...   → io.read_events            (JSON, replay)
 GET    /api/sessions/{id}/history            → io.read_display_history   (JSON, replay)
@@ -60,57 +60,24 @@ No partial-text streaming. No multi-event batching. Shutdown is cooperative: uvi
 
 ## History replay
 
-`GET /api/sessions/{id}/events?since=0` returns the entire event list as a JSON array. The frontend feeds it through the exact same reducer as the SSE stream. **History = SSE, minus the tail.** Both live and replay produce the same Card list (alignment invariant).
+`GET /api/sessions/{id}/events?since=0` returns the entire event list as a JSON array. The frontend feeds it through the exact same `eventAdapter.bfToDisplay()` + `appendEvent` pipeline as the SSE stream. **History = SSE, minus the tail.** Both live and replay produce the same transcript (alignment invariant).
 
-## Unified Card
+## Frontend event model
 
-One event → one Card. Render function is pure:
+The frontend speaks a `DisplayEvent` shape (flat `{type, content, ...}`) rather than the BfEvent envelope on the wire. `eventAdapter.bfToDisplay()` is the single translation seam — every BfEvent crossing SSE or `/history` replay is funneled through it before any view code sees it. Replay and live stream therefore dispatch the same `appendEvent(event)` step in `chat.ts`; alignment is preserved.
 
-```typescript
-function renderCard(props: CardProps): HTMLElement
-```
+The chat pane is multi-event-per-cell: a tool call + its result render as one cell that transitions states; thinking_start + thinking_done pair to flip a spinning placeholder into a finalised cell; bg-tool yellow→green is driven by the `agent_bg_tool_dispatched` marker (call → dispatched → result). Cell pairing keys off `tool_use_id` and `block_id`.
 
-`CardProps` is a small tagged union:
+Lifecycle markers carried for_llm=False on the wire:
 
-```typescript
-interface CardProps {
-  kind: 'user' | 'agent-text' | 'agent-thinking' | 'agent-tool' | 'task' | 'system' | 'error';
-  accent: string;
-  title: string;
-  body: string | HTMLElement;
-  footer?: string;
-  collapsed?: boolean;
-}
-```
+- `agent_thinking_start` / `agent_thinking` — paired by `block_id`. Open renders the spinning placeholder; close finalises it.
+- `agent_tool_call` / `agent_bg_tool_dispatched` / `agent_tool_result` — bg path keys off `tool_use_id`; the dispatched marker keeps the cell yellow until the deferred result lands.
 
-`cardPropsFor(card)` (pure) maps each event type to `CardProps`. Styling varies by `kind` (a CSS class) and `accent`.
-
-### Two cross-event rules (both keyed by `tool_use_id`)
-
-1. `agent_tool_call` without a matching `agent_tool_result` renders "running"; when the result arrives, the same Card re-renders with the result body.
-2. `tool_progress` is appended to the same Card's progress log.
-
-Implementation: a `Map<tool_use_id, Card>` lookup. No other cross-event state. Every other event produces an independent Card.
+Inline tools skip `agent_bg_tool_dispatched`; they go straight from call → result.
 
 ## Reducer and store
 
-`reduce(event)` returns a list of card ids to re-render. `reduceMany(events)` is the replay fast path — used for history. SSE handlers call `reduce` per frame. Store shape:
-
-```typescript
-interface StoreShape {
-  currentSession: string | null;
-  sessions: SessionInfo[];
-  cards: Card[];                       // ordered by event id
-  cardByToolUseId: Map<string, Card>;  // for tool pairing
-  hud: HudSnapshot;
-  tasks: TaskCard[];
-  todoList: TodoList;
-  panel: PanelEntry[];
-  terminal: TerminalState;
-}
-```
-
-Live SSE events and replay events dispatch the identical reducer step. No divergence path.
+The store's chat slice is an append-only event list; per-cell mutations happen inside `chat.ts`'s `appendEvent` handler, which keys off `tool_use_id` and `block_id` for the multi-event pairings above. `eventAdapter.bfToDisplay()` is responsible for shape parity between live SSE and history replay.
 
 ## Source layout
 
@@ -118,11 +85,12 @@ Live SSE events and replay events dispatch the identical reducer step. No diverg
 ui/web/app.py                          # FastAPI routes
 ui/web/frontend/src/api.ts             # fetch() wrappers for the route map
 ui/web/frontend/src/sse.ts             # EventSource wrapper, Last-Event-ID resume
-ui/web/frontend/src/reducer.ts         # reduce(event) → store mutation
+ui/web/frontend/src/eventAdapter.ts    # BfEvent → DisplayEvent translation seam
 ui/web/frontend/src/store.ts           # StoreShape + subscribe
-ui/web/frontend/src/card.ts            # renderCard + cardPropsFor
 ui/web/frontend/src/main.ts            # app entrypoint, DOM wiring
-ui/web/frontend/src/components/        # panel, sidebar, HUD chrome
+ui/web/frontend/src/components/chat.ts # transcript pane: appendEvent dispatch + cell rendering
+ui/web/frontend/src/components/panel.ts# bg task / sub-agent panel
+ui/web/frontend/src/components/header.ts, sidebar.ts  # HUD chrome
 ```
 
-Previous ad-hoc state (streaming bubble promotion, `bashRunningCount` DOM recount, three-phase background-cell transitions, `markRunningToolsInterrupted`, `expandedTasks` sets, `assetCache`, the `diff.ts` module) is gone. The unified Card + one-reducer model replaces all of it.
+The previous unified-Card / single-reducer architecture has been rolled back in favour of restoring the pre-#57 multi-event cell pairings. The data layer (events_v1.jsonl, runtime.io) remains the new design; only the presentation seam was reverted.

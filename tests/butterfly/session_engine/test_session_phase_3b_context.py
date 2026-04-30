@@ -162,6 +162,127 @@ class RebuildHistoryFromEventsTest(unittest.TestCase):
             self.assertEqual(asst.content[0]["type"], "thinking")
             self.assertEqual(asst.content[1]["type"], "text")
 
+    def test_rebuild_remaps_tool_result_role_to_tool(self) -> None:
+        """tool_result blocks must land on role="tool" in Agent._history.
+
+        ``build_llm_context`` groups EVENT_AGENT_TOOL_RESULT under role="user"
+        (DESIGN.md §4 — matches Anthropic's wire shape), but Agent's internal
+        convention is ``Message(role="tool", content=tool_results)``
+        (core/agent.py:380). The OpenAI Responses provider's
+        ``_convert_messages`` dispatches by role: "tool" routes through
+        ``_convert_tool_result`` → function_call_output; "user" through
+        ``_convert_user`` which only handles "text" blocks and SILENTLY
+        DROPS tool_result. That mismatch was the live bug where every user
+        message after a todo-list-edit turn hit a 400 BadRequestError
+        (function_call without matching function_call_output).
+        """
+        with TemporaryDirectory() as tmp:
+            s = _new_session(Path(tmp))
+            # user → assistant(tool_use) → tool(tool_result) chain.
+            s._emit_event(
+                rt_events.EVENT_USER_INPUT,
+                {"text": "do it", "source": "cli", "caller": None, "display_name": None},
+            )
+            s._emit_event(
+                rt_events.EVENT_AGENT_TOOL_CALL,
+                {"tool_use_id": "tu1", "tool_name": "bash", "args": {"cmd": "ls"}},
+            )
+            s._emit_event(
+                rt_events.EVENT_AGENT_TOOL_RESULT,
+                {
+                    "tool_use_id": "tu1",
+                    "tool_name": "bash",
+                    "result": "file1\nfile2",
+                    "is_error": False,
+                    "is_background": False,
+                    "duration_ms": 12.0,
+                },
+            )
+
+            s._rebuild_history_from_events()
+            self.assertEqual(len(s._agent._history), 3)
+            user_msg, asst_msg, tool_msg = s._agent._history
+            self.assertEqual(user_msg.role, "user")
+            self.assertEqual(asst_msg.role, "assistant")
+            # The crucial assertion: rebuild promotes the user-role
+            # tool_result message to role="tool" so the OpenAI Responses
+            # adapter's `_convert_tool_result` dispatcher fires.
+            self.assertEqual(tool_msg.role, "tool")
+            self.assertIsInstance(tool_msg.content, list)
+            self.assertEqual(tool_msg.content[0]["type"], "tool_result")
+            self.assertEqual(tool_msg.content[0]["tool_use_id"], "tu1")
+
+    def test_rebuild_mixed_user_text_and_tool_result_does_not_double_count(self) -> None:
+        """A merged user-role message carrying BOTH a TextBlock and a
+        ToolResultBlock (produced when a bg agent_tool_result lands AFTER
+        a user_input on disk) is split at rebuild: tool_result blocks
+        keep the wire shape so the paired function_call survives, text
+        blocks get their own user-role Message which the trim guard then
+        strips because the dispatcher's ChatItem already owns that text.
+
+        Without this split, on Anthropic the user text appeared twice in
+        the LLM context (once in history via the mixed message, once via
+        Agent.run's prepended input); on OpenAI ``_convert_tool_result``
+        accidentally dropped it. The split + trim path makes it appear
+        exactly once via the input regardless of provider.
+        """
+        with TemporaryDirectory() as tmp:
+            s = _new_session(Path(tmp))
+            # First user turn — handled by a previous tick.
+            s._emit_event(
+                rt_events.EVENT_USER_INPUT,
+                {"text": "run X", "source": "cli", "caller": None, "display_name": None},
+            )
+            # Agent dispatches a bg tool.
+            s._emit_event(
+                rt_events.EVENT_AGENT_TOOL_CALL,
+                {"tool_use_id": "tu_bg", "tool_name": "bash", "args": {"cmd": "sleep 30"}},
+            )
+            # User chats while bg is running — this becomes the next ChatItem.
+            s._emit_event(
+                rt_events.EVENT_USER_INPUT,
+                {"text": "any progress?", "source": "cli", "caller": None, "display_name": None},
+            )
+            # Bg result lands AFTER the new user_input.
+            s._emit_event(
+                rt_events.EVENT_AGENT_TOOL_RESULT,
+                {
+                    "tool_use_id": "tu_bg",
+                    "tool_name": "bash",
+                    "result": "ok",
+                    "is_error": False,
+                    "is_background": True,
+                    "duration_ms": 30000.0,
+                },
+            )
+
+            s._rebuild_history_from_events()
+            history = s._agent._history
+
+            # The trailing message should carry the tool_result so the
+            # paired function_call is preserved …
+            tail = history[-1]
+            blocks = tail.content if isinstance(tail.content, list) else []
+            has_tool_result = any(
+                isinstance(b, dict) and b.get("type") == "tool_result" for b in blocks
+            )
+            self.assertTrue(has_tool_result, "tool_result must survive rebuild")
+
+            # … but NOT the text "any progress?", because the dispatcher
+            # already extracted it as the next ChatItem and Agent.run will
+            # prepend it. Currently FAILS: text is preserved → double count.
+            has_progress_text = any(
+                (isinstance(b, dict) and b.get("type") == "text"
+                 and "any progress" in (b.get("text") or ""))
+                for b in blocks
+            )
+            self.assertFalse(
+                has_progress_text,
+                "text block 'any progress?' should not be in history — "
+                "the dispatched ChatItem owns it; keeping it here causes "
+                "Anthropic to see the text twice (history + Agent.run input).",
+            )
+
     def test_rebuild_matches_build_llm_context_modulo_coercion(self) -> None:
         with TemporaryDirectory() as tmp:
             s = _new_session(Path(tmp))

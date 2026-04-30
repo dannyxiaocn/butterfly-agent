@@ -245,9 +245,26 @@ def test_send_message_appends_user_input_event(session_fs):
     assert event.payload["text"] == "hello world"
     assert event.payload["source"] == "cli"
     assert event.payload["caller"] is None
+    # Default mode is "interrupt" — the dispatcher cancels in-flight ticks.
+    assert event.payload["mode"] == "interrupt"
     events = _read_events(session_fs["system_dir"])
     assert any(e["type"] == EVENT_USER_INPUT and e["payload"]["text"] == "hello world"
                for e in events)
+
+
+def test_send_message_mode_wait_recorded_on_event(session_fs):
+    """``mode="wait"`` is recorded on the user_input event so the dispatcher
+    queues this message behind the running tick instead of interrupting it."""
+    event = io_mod.send_message(session_fs["sid"], "queue me", mode="wait")
+    assert event.payload["mode"] == "wait"
+    # build_llm_context only reads ``text`` from this payload, so adding
+    # ``mode`` is safe — the LLM still sees a clean user turn.
+    assert event.payload["text"] == "queue me"
+
+
+def test_send_message_rejects_bad_mode(session_fs):
+    with pytest.raises(ValueError):
+        io_mod.send_message(session_fs["sid"], "hi", mode="bogus")
 
 
 def test_send_message_with_source_task_and_caller(session_fs):

@@ -41,6 +41,21 @@ EVENT_AGENT_THINKING = "agent_thinking"
 EVENT_AGENT_TOOL_CALL = "agent_tool_call"
 EVENT_AGENT_TOOL_RESULT = "agent_tool_result"
 
+# Agent-side UI lifecycle markers (for_llm=False — purely presentation;
+# do NOT enter the LLM context). These restore the two-phase rendering the
+# pre-PR-#57 frontend depended on:
+#   * `agent_thinking_start` — provider opened a thinking stream; UI shows
+#     the spinning "Thinking…" cell. Paired with the canonical
+#     `agent_thinking` (still for_llm=True) which marks the close.
+#   * `agent_bg_tool_dispatched` — bg-spawn tool returned its placeholder
+#     ("task_id=…") and the panel will track it; UI keeps the cell yellow
+#     until the deferred `agent_tool_result` lands. Lets the old
+#     tool_done(placeholder) → tool_finalize(actual) UX work without
+#     breaking the events_v1 invariant that agent_tool_result is the
+#     single canonical result event.
+EVENT_AGENT_THINKING_START = "agent_thinking_start"
+EVENT_AGENT_BG_TOOL_DISPATCHED = "agent_bg_tool_dispatched"
+
 # System-side (for_llm=False)
 EVENT_SESSION_CREATED = "session_created"
 EVENT_SESSION_STARTED = "session_started"
@@ -94,6 +109,9 @@ _FOR_LLM_DEFAULTS: dict[str, bool] = {
     EVENT_AGENT_THINKING: True,
     EVENT_AGENT_TOOL_CALL: True,
     EVENT_AGENT_TOOL_RESULT: True,
+    # UI lifecycle markers (for_llm=False — see constant block above)
+    EVENT_AGENT_THINKING_START: False,
+    EVENT_AGENT_BG_TOOL_DISPATCHED: False,
     # system-side
     EVENT_SESSION_CREATED: False,
     EVENT_SESSION_STARTED: False,

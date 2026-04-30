@@ -253,11 +253,17 @@ def create_app(
         text = body.get("content", "")
         if not isinstance(text, str):
             raise HTTPException(400, "Body must include 'content' string")
+        # ``mode`` ∈ {"interrupt", "wait"}. Passed through to the dispatcher
+        # so the user can queue a message behind an in-flight tick (the
+        # restored chat input's ⌥+Enter / wait checkbox).
+        mode = body.get("mode", "interrupt")
+        if mode not in ("interrupt", "wait"):
+            raise HTTPException(400, "mode must be 'interrupt' or 'wait'")
         try:
-            event = io.send_message(session_id, text, source="web")
+            event = io.send_message(session_id, text, source="web", mode=mode)
         except Exception as exc:
             raise _http_error(exc) from exc
-        return {"id": event.id, "event_id": event.id}
+        return {"id": event.id, "event_id": event.id, "mode": mode}
 
     @app.post("/api/sessions/{session_id}/interrupt")
     async def interrupt_session(session_id: str):
