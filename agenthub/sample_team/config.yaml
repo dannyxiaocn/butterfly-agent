@@ -1,0 +1,14 @@
+agent: sample_team
+kind: team
+version: "0.1.0"
+description: Two-agent example team — planner gets the user's input, can hand off to the coder via teamchat.
+
+leader: planner
+
+members:
+  - name: planner
+    agent: agent
+    teamchat_mode: default
+  - name: coder
+    agent: butterfly_dev
+    teamchat_mode: silent

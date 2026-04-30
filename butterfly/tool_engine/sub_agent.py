@@ -163,15 +163,22 @@ def _spawn_child(
     sessions_base: Path,
     system_sessions_base: Path,
     agent_base: Path,
+    agent_name: str | None = None,
 ) -> tuple[str, str, str]:
     """Create the child session on disk. Returns ``(child_id, msg_id, agent_name)``.
 
     Raises ``RuntimeError`` when the parent has already reached
     ``_MAX_SUB_AGENT_DEPTH`` — otherwise a runaway executor chain could
     fork sessions unbounded.
+
+    ``agent_name`` lets callers spawn a child running a *different* agent
+    from the parent — used by ``toolhub/workflow`` to chain specialist
+    agents per step. Default is to inherit the parent's agent so direct
+    ``subagent_new`` calls keep their existing semantics.
     """
     parent_manifest = _read_parent_manifest(parent_session_id, system_sessions_base)
-    agent_name = parent_manifest.get("agent", "")
+    if agent_name is None:
+        agent_name = parent_manifest.get("agent", "")
     if not agent_name:
         raise RuntimeError(
             f"sub_agent: cannot read parent agent from {parent_session_id}/manifest.json"
@@ -278,6 +285,12 @@ class SubAgentTool:
             float(kwargs.get("timeout_seconds") or _DEFAULT_TIMEOUT_SECONDS),
             float(_MIN_TIMEOUT_SECONDS),
         )
+        # Optional override — when present, the child runs a different
+        # agent rather than inheriting the parent's. Used by
+        # ``toolhub/workflow`` to chain specialist agents step by step.
+        agent_override = kwargs.get("agent_name") or None
+        if agent_override is not None and not isinstance(agent_override, str):
+            return "Error: agent_name must be a string when provided"
         try:
             child_id, msg_id, _agent = _spawn_child(
                 parent_session_id=self._parent_session_id,
@@ -287,6 +300,7 @@ class SubAgentTool:
                 sessions_base=self._sessions_base,
                 system_sessions_base=self._system_sessions_base,
                 agent_base=self._agent_base,
+                agent_name=agent_override,
             )
         except Exception as exc:  # noqa: BLE001 — surface spawn failures cleanly
             return f"Error: sub_agent spawn failed: {exc}"
@@ -365,6 +379,14 @@ class SubAgentRunner:
             float(input.get("timeout_seconds") or _DEFAULT_TIMEOUT_SECONDS),
             float(_MIN_TIMEOUT_SECONDS),
         )
+        agent_override = input.get("agent_name") or None
+        if agent_override is not None and not isinstance(agent_override, str):
+            entry.meta = {
+                **(entry.meta or {}),
+                "error": "agent_name must be a string when provided",
+            }
+            ctx.save_entry(entry)
+            return -1
         try:
             child_id, msg_id, agent_name = _spawn_child(
                 parent_session_id=self._parent_session_id,
@@ -374,6 +396,7 @@ class SubAgentRunner:
                 sessions_base=self._sessions_base,
                 system_sessions_base=self._system_sessions_base,
                 agent_base=self._agent_base,
+                agent_name=agent_override,
             )
         except Exception as exc:  # noqa: BLE001
             entry.meta = {**(entry.meta or {}), "error": str(exc)}

@@ -148,6 +148,33 @@ class SessionWatcher:
 
         session_dir = self.sessions_dir / session_id
 
+        # Team sessions don't run an Agent — they have a tiny router daemon
+        # that forwards user input to member child sessions and otherwise
+        # stays out of the way. Branch early so we skip the agent / model
+        # / capability bootstrap below entirely.
+        if (manifest.get("kind") or "agent") == "team":
+            from butterfly.session_engine.team_session import TeamSession
+            try:
+                team = TeamSession(
+                    session_id,
+                    base_dir=self.sessions_dir,
+                    system_base=system_dir.parent,
+                )
+            except Exception as exc:
+                print(f"[server] Failed to start team session {session_id}: {exc}")
+                from butterfly.session_engine.session_status import write_session_status
+                write_session_status(system_dir, status="stopped")
+                return
+            ipc = FileIPC(system_dir)
+            try:
+                await team.run_daemon_loop(ipc)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                print(f"[server] Team session {session_id} crashed: {exc}")
+                ipc.append_event({"type": "error", "content": str(exc)})
+            return
+
         try:
             if self._agent_factory is not None:
                 agent = self._agent_factory(manifest)

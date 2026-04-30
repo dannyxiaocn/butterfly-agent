@@ -285,12 +285,25 @@ class Session:
         self._mode: str | None = None
         self._parent_session_id: str | None = None
         self._guardian: Guardian | None = None
+        # AgentTeam membership — populated only when this session was
+        # spawned by ``init_team_session`` as one of a team's members. The
+        # ``team_context`` dict is later threaded into ``ToolLoader`` so
+        # ``teamchat_send`` / ``teamchat_view`` can find their persistence
+        # files. Non-team sessions leave ``team_context`` as None and the
+        # teamchat tools are silently skipped if listed in tools.md.
+        self._team_context: dict | None = None
         manifest_path = self.system_dir / "manifest.json"
         if manifest_path.exists():
             try:
                 manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
                 self._mode = manifest.get("mode")
                 self._parent_session_id = manifest.get("parent_session_id")
+                team_id = manifest.get("member_of_team")
+                member_name = manifest.get("member_name")
+                if team_id and member_name:
+                    self._team_context = self._build_team_context(
+                        team_id, member_name
+                    )
             except (json.JSONDecodeError, OSError):
                 pass
         if self._mode == "explorer":
@@ -345,6 +358,18 @@ class Session:
             agent_base=self._base_dir.parent / "agenthub",
         ))
 
+        # Workflow runner: backgrounded ``workflow`` calls reuse the same
+        # panel/events/notification machinery as backgrounded sub_agent;
+        # the runner's per-step work delegates to ``SubAgentTool`` so each
+        # step still appears as its own child-session card.
+        from butterfly.tool_engine.workflow import WorkflowRunner
+        self._bg_manager.register_runner("workflow", WorkflowRunner(
+            parent_session_id=self._session_id,
+            sessions_base=self._base_dir,
+            system_sessions_base=self._system_base,
+            agent_base=self._base_dir.parent / "agenthub",
+        ))
+
     # ── Capability loading ─────────────────────────────────────────
 
     def _read_core_text(self, name: str) -> str:
@@ -354,6 +379,41 @@ class Session:
             return p.read_text(encoding="utf-8").strip()
         except (FileNotFoundError, PermissionError):
             return ""
+
+    def _build_team_context(
+        self, team_id: str, member_name: str
+    ) -> dict | None:
+        """Resolve team membership into the dict ``ToolLoader`` consumes.
+
+        Reads the team's own manifest (``_sessions/<team_id>/manifest.json``)
+        for the full member roster + chat modes + the name→child-id map.
+        Returns None if the team manifest can't be loaded — the member
+        session still runs, just without teamchat tools wired up.
+        """
+        team_system_dir = self._system_base / team_id
+        team_session_dir = self._base_dir / team_id
+        team_manifest_path = team_system_dir / "manifest.json"
+        try:
+            tm = json.loads(team_manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        members_map = tm.get("members_map") or {}
+        member_modes: dict[str, str] = {}
+        for row in tm.get("members") or []:
+            if isinstance(row, dict) and row.get("name"):
+                member_modes[row["name"]] = row.get(
+                    "teamchat_mode", "default"
+                )
+        return {
+            "team_id":           team_id,
+            "team_core_dir":     team_session_dir / "core",
+            "team_system_dir":   team_system_dir,
+            "member_name":       member_name,
+            "member_system_dir": self.system_dir,
+            "member_modes":      member_modes,
+            "members_map":       dict(members_map),
+            "system_base":       self._system_base,
+        }
 
     def _load_session_capabilities(self) -> None:
         """Reload params, prompts, skills, and tools from core/. Call inside agent lock before each run."""
@@ -502,6 +562,7 @@ class Session:
                 core_dir=self.core_dir,
                 on_todo_list_change=_emit_todo_list_change,
                 terminal_executor=self._terminal_executor,
+                team_context=self._team_context,
             )
             # Load tools from tools.md (toolhub), fallback to legacy tool.md
             tools_md_path = self.core_dir / "tools.md"

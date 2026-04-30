@@ -127,6 +127,14 @@ class ToolLoader:
         # stays alive between agent turns. Tests/CLI can leave this None
         # and a per-loader instance is created instead.
         terminal_executor: Any | None = None,
+        # AgentTeam — optional team membership context. When this loader
+        # is building tools for a member session, ``team_context`` carries
+        # everything ``teamchat_send`` / ``teamchat_view`` need: which
+        # team this member belongs to, where teamchat.jsonl lives, the
+        # member's own session dir + handle, and the full member roster
+        # with modes + child session ids. Absence (the common case) means
+        # the teamchat tools won't be wired up even if listed in tools.md.
+        team_context: dict | None = None,
     ) -> None:
         self._default_workdir = default_workdir
         self._skills = list(skills or [])
@@ -149,6 +157,7 @@ class ToolLoader:
         # Populated when the first terminal_create / terminal_use tool is
         # wired; lets the web Terminal route reach the pty directly.
         self._terminal_executor: Any | None = terminal_executor
+        self._team_context = dict(team_context) if team_context else None
 
     def _ensure_terminal_executor(self) -> Any | None:
         """Return the session-scoped TerminalExecutor, building one when
@@ -261,6 +270,19 @@ class ToolLoader:
                     parent_session_id=self._parent_session_id,
                     sessions_base=self._sessions_base,
                     system_sessions_base=self._system_sessions_base,
+                )
+                async def _impl(**kwargs: Any) -> str:
+                    return await executor.execute(**kwargs)
+                return _impl
+
+        elif tool_name == "workflow":
+            executor_cls = getattr(mod, "WorkflowExecutor", None)
+            if executor_cls:
+                executor = executor_cls(
+                    parent_session_id=self._parent_session_id,
+                    sessions_base=self._sessions_base,
+                    system_sessions_base=self._system_sessions_base,
+                    agent_base=self._agent_base,
                 )
                 async def _impl(**kwargs: Any) -> str:
                     return await executor.execute(**kwargs)
@@ -437,6 +459,40 @@ class ToolLoader:
                 async def _impl(**kwargs: Any) -> str:
                     return await executor.execute(**kwargs)
                 return _impl
+
+        elif tool_name == "teamchat_send":
+            executor_cls = getattr(mod, "TeamchatSendExecutor", None)
+            if executor_cls is None or not self._team_context:
+                # No team membership for this session — silently skip the
+                # tool by returning None. The loader will warn and fall
+                # back to a stub. This matches the "tool listed but not
+                # applicable here" pattern used elsewhere.
+                return None
+            executor = executor_cls(
+                team_core_dir=self._team_context["team_core_dir"],
+                team_system_dir=self._team_context["team_system_dir"],
+                member_name=self._team_context["member_name"],
+                member_modes=self._team_context["member_modes"],
+                members_map=self._team_context["members_map"],
+                system_base=self._team_context["system_base"],
+            )
+            async def _impl(**kwargs: Any) -> str:
+                return await executor.execute(**kwargs)
+            return _impl
+
+        elif tool_name == "teamchat_view":
+            executor_cls = getattr(mod, "TeamchatViewExecutor", None)
+            if executor_cls is None or not self._team_context:
+                return None
+            executor = executor_cls(
+                team_core_dir=self._team_context["team_core_dir"],
+                member_system_dir=self._team_context["member_system_dir"],
+                member_name=self._team_context["member_name"],
+                members_map=self._team_context["members_map"],
+            )
+            async def _impl(**kwargs: Any) -> str:
+                return await executor.execute(**kwargs)
+            return _impl
 
         # Provider-native built-in tools. These executors never actually
         # run — the loader wraps them in a Tool carrying ``builtin_dict``

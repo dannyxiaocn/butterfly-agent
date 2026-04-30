@@ -1,0 +1,14 @@
+{
+  "name": "teamchat_send",
+  "description": "Post a message into the team chat shared by your team. Mention teammates by writing @<name> (e.g. @coder) or @all anywhere in the text — the system parses these and routes the message accordingly. Other members receive your message based on their own teamchat_mode: members in 'default' mode are interrupted immediately on every message; members in 'silent' mode are interrupted only when @-mentioned (or @all) and otherwise see your message as part of an unread summary on their next natural wakeup. The team session's UI displays your message inline so the human can read the team's conversation. Use this for hand-offs (\"@coder I drafted the plan, ready for you\"), broadcasts (\"@all heads up, switching repos\"), and status updates between teammates. Keep messages short and addressed — your normal answers to the user happen via your regular agent reply, not via teamchat.",
+  "input_schema": {
+    "type": "object",
+    "required": ["text"],
+    "properties": {
+      "text": {
+        "type": "string",
+        "description": "The message body. Use @<name> to mention a specific teammate or @all to mention everyone."
+      }
+    }
+  }
+}

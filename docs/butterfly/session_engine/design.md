@@ -92,3 +92,18 @@ Agents drop `sessions/<id>/core/hook/<event>/main.sh` to react to `session_start
 ## Sub-agent identity
 
 `init_session` accepts `parent_session_id`, `mode` (`"explorer"` | `"executor"`), `initial_message_id`, and `display_name`. These are persisted on `manifest.json` and — when present — route the child through guardian-wrapped tools (see [docs/butterfly/core/guardian.md](../core/guardian.md)).
+
+## Team sessions (kind: team)
+
+Sessions whose manifest declares `kind: team` run a different daemon shape: instead of an `Agent` loop, the watcher (`butterfly/runtime/watcher.py:_start_session`) instantiates a `TeamSession` (`butterfly/session_engine/team_session.py`) whose `run_daemon_loop` only routes user input. There is no LLM at this level — the team session is a dispatcher.
+
+Setup: `init_team_session` lays out the team's `sessions/<team_id>/` + `_sessions/<team_id>/` and **spawns one regular sub-agent session per declared member**, recording each member's child session id in `core/members.json` and writing a `TYPE_SUB_AGENT` panel entry per member so the existing UI renders them as sub-session cards.
+
+Routing rules:
+
+  * `user_input` rows on the team's own `context.jsonl` with `caller="human"` are forwarded by `TeamRouter` to the matching member's `BridgeSession` via `send_message(mode="interrupt")`. Recipient is the first `@<name>` in the body that resolves to a real member, falling back to the configured `leader`.
+  * Mention parsing is delegated to `teamchat.parse_mentions` so the router agrees with `teamchat_send` on case-insensitivity and the `(?<![A-Za-z0-9_])` lookbehind that keeps email addresses out of the recipient pool.
+  * Synthetic `user_input` rows produced by the `teamchat_send` tool (where `caller=<member_name>`) are visible to the UI but skipped by the router so members don't recursively echo each other.
+  * `_initial_input_offset()` returns 0 on a fresh team session (signalled by an empty `events.jsonl`) so an `initial_message` written by `init_team_session` is picked up; otherwise it returns end-of-file to avoid replaying already-routed rows on a watcher restart.
+
+See [docs/butterfly/session_engine/agent_team.md](agent_team.md) for the full team layout, the `default` / `silent` member modes, and the persistent `core/teamchat.jsonl` log.

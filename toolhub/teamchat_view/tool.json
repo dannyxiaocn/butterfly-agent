@@ -1,0 +1,8 @@
+{
+  "name": "teamchat_view",
+  "description": "Return all unread teamchat messages visible to you, then advance your read cursor so the next call only shows newer messages. Use this when you receive a teamchat-summary heads-up at the top of your input (\"[teamchat] Unread since …\") to read the full content before replying. The output lists messages in chronological order with sender + timestamp + mentions; an empty inbox returns a fixed '[teamchat] No unread messages.' string.",
+  "input_schema": {
+    "type": "object",
+    "properties": {}
+  }
+}

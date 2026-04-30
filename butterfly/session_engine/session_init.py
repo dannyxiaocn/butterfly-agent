@@ -109,6 +109,7 @@ def init_session(
     mode: str | None = None,
     sub_agent_depth: int | None = None,
     display_name: str | None = None,
+    extra_manifest_fields: dict | None = None,
 ) -> str:
     """Create a new session on disk from an agent, ready for the server to pick up.
 
@@ -364,6 +365,12 @@ def init_session(
     normalized_display = _normalize_display_name(display_name)
     if normalized_display:
         manifest["display_name"] = normalized_display
+    if extra_manifest_fields:
+        # Caller-supplied manifest extensions (team membership, workflow
+        # parent references, …). Reserved fields above always win to keep
+        # core invariants stable.
+        for k, v in extra_manifest_fields.items():
+            manifest.setdefault(k, v)
     (system_dir / "manifest.json").write_text(
         json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
     )
@@ -381,3 +388,163 @@ def init_session(
             f.write(json.dumps(event, ensure_ascii=False) + "\n")
 
     return session_id
+
+
+# ── Team sessions ────────────────────────────────────────────────────────────
+
+
+def init_team_session(
+    team_session_id: str,
+    team_name: str,
+    *,
+    sessions_base: Path | None = None,
+    system_sessions_base: Path | None = None,
+    agent_base: Path | None = None,
+    initial_message: str | None = None,
+    initial_message_id: str | None = None,
+) -> tuple[str, dict[str, str]]:
+    """Create a team session on disk + spawn one child session per member.
+
+    Layout produced::
+
+        sessions/<team_id>/core/{config.yaml, panel/, members.json, teamchat.jsonl}
+        _sessions/<team_id>/{manifest.json (kind=team), context.jsonl, events.jsonl}
+        sessions/<member_session_id>/  …       (one per member, normal session)
+        _sessions/<member_session_id>/manifest.json
+            { parent_session_id: <team_id>,
+              member_of_team:    <team_id>,
+              member_name:       <name>,
+              teamchat_mode:     default | silent }
+
+    Returns ``(team_session_id, {member_name: member_session_id})``. Member
+    session ids are generated fresh; the watcher will pick them up like any
+    other session and start a daemon for each.
+
+    Idempotent: re-invocation only creates files that don't already exist
+    (mirrors ``init_session`` semantics). Re-spawning members is intentionally
+    NOT supported — once the team is on disk, member ids are pinned via
+    ``members.json``.
+    """
+    from butterfly.session_engine.team import load_team_spec
+    from butterfly.session_engine.panel import (
+        TYPE_SUB_AGENT, create_pending_tool_entry,
+    )
+
+    s_base = sessions_base or _DEFAULT_SESSIONS_BASE
+    sys_base = system_sessions_base or _DEFAULT_SYSTEM_SESSIONS_BASE
+    ent_base = agent_base or _DEFAULT_AGENT_BASE
+
+    team_dir = ent_base / team_name
+    if not team_dir.exists():
+        raise FileNotFoundError(
+            f"init_team_session: team manifest not found at {team_dir}"
+        )
+    spec = load_team_spec(team_dir)
+
+    team_session_dir = s_base / team_session_id
+    team_system_dir = sys_base / team_session_id
+    team_core = team_session_dir / "core"
+    team_panel = team_core / "panel"
+    team_core.mkdir(parents=True, exist_ok=True)
+    team_panel.mkdir(parents=True, exist_ok=True)
+    team_system_dir.mkdir(parents=True, exist_ok=True)
+    (team_system_dir / "context.jsonl").touch(exist_ok=True)
+    (team_system_dir / "events.jsonl").touch(exist_ok=True)
+    (team_core / "teamchat.jsonl").touch(exist_ok=True)
+
+    # Members map persists for the team router and for the teamchat tools.
+    members_map_path = team_core / "members.json"
+    if members_map_path.exists():
+        try:
+            members_map = json.loads(
+                members_map_path.read_text(encoding="utf-8")
+            )
+            if not isinstance(members_map, dict):
+                members_map = {}
+        except (json.JSONDecodeError, OSError):
+            members_map = {}
+    else:
+        members_map = {}
+
+    import uuid
+    for member in spec.members:
+        if member.name in members_map:
+            continue                # already spawned; idempotent path
+        member_id = (
+            datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            + "-" + uuid.uuid4().hex[:4]
+        )
+        init_session(
+            session_id=member_id,
+            agent_name=member.agent,
+            sessions_base=s_base,
+            system_sessions_base=sys_base,
+            agent_base=ent_base,
+            parent_session_id=team_session_id,
+            display_name=member.name,
+            extra_manifest_fields={
+                "member_of_team": team_session_id,
+                "member_name":    member.name,
+                "teamchat_mode":  member.mode,
+            },
+        )
+        members_map[member.name] = member_id
+        # Surface the member as a sub-session card in the team's panel —
+        # exact same shape used by SubAgentRunner so the existing UI
+        # renders it without a new code path.
+        create_pending_tool_entry(
+            team_panel,
+            tool_name="team_member",
+            input={"member_name": member.name, "agent": member.agent},
+            entry_type=TYPE_SUB_AGENT,
+            meta={
+                "child_session_id": member_id,
+                "display_name": member.name,
+                "agent": member.agent,
+                "teamchat_mode": member.mode,
+                "kind": "team_member",
+            },
+        )
+
+    # Atomic write — match the tmp+replace pattern used by every other
+    # persistence helper in the team flow (cursor_set, panel save_entry).
+    # Plain write_text leaves a half-written file visible to a racing
+    # reader if the process crashes mid-write.
+    tmp_members = members_map_path.with_suffix(".json.tmp")
+    tmp_members.write_text(
+        json.dumps(members_map, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    tmp_members.replace(members_map_path)
+
+    # Team manifest — last, after every member has its own manifest written
+    # (matches the watcher-race rule on the single-agent path).
+    manifest = {
+        "session_id":  team_session_id,
+        "kind":        "team",
+        "team_name":   team_name,
+        "leader":      spec.leader,
+        "members": [
+            {"name": m.name, "agent": m.agent, "teamchat_mode": m.mode}
+            for m in spec.members
+        ],
+        "members_map": members_map,
+        "created_at":  datetime.now().isoformat(),
+    }
+    (team_system_dir / "manifest.json").write_text(
+        json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+
+    if initial_message:
+        ev = {
+            "type": "user_input",
+            "content": initial_message,
+            "id": initial_message_id or str(uuid.uuid4()),
+            "ts": datetime.now().isoformat(),
+        }
+        with (team_system_dir / "context.jsonl").open(
+            "a", encoding="utf-8"
+        ) as f:
+            f.write(json.dumps(ev, ensure_ascii=False) + "\n")
+
+    return team_session_id, dict(members_map)

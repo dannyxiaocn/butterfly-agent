@@ -1,0 +1,25 @@
+{
+  "name": "workflow",
+  "description": "Run an ordered pipeline of sub-agent steps. Each step spawns a child session through the same machinery as `subagent_new`, so every step shows up in your panel as a sub-session card. Steps run sequentially: the previous step's final reply is substituted for `{prev}` in the next step's `task` (use `{prev}` once per step where you want it). The workflow tool returns the LAST step's reply concatenated with brief per-step headers, so you keep the audit trail in your context. Use this when you have a fixed pipeline of specialist agents — e.g. researcher → critic → drafter — and don't want to call `subagent_new` three times by hand. For one-shot delegations, prefer `subagent_new`. Each step accepts `mode` (explorer for sandboxed reads, executor for write access; default executor) and `agent` (any agent name in agenthub/; defaults to your own). Backgroundable: set `run_in_background=true` to fire-and-forget the whole pipeline and continue working while it runs.",
+  "backgroundable": true,
+  "input_schema": {
+    "type": "object",
+    "required": ["steps"],
+    "properties": {
+      "steps": {
+        "type": "array",
+        "minItems": 1,
+        "items": {
+          "type": "object",
+          "required": ["name", "task"],
+          "properties": {
+            "name":  { "type": "string", "description": "Short display name for this step (≤ 40 chars). Shown as the sub-session label." },
+            "agent": { "type": "string", "description": "Agent name in agenthub/ to spawn for this step. Optional; defaults to the calling agent." },
+            "task":  { "type": "string", "description": "Step prompt. Use the literal token {prev} where you want the previous step's final reply spliced in. The first step's {prev} resolves to an empty string." },
+            "mode":  { "type": "string", "enum": ["explorer", "executor"], "default": "executor", "description": "explorer = sandboxed (writes only inside the child's playground/). executor = full write access." }
+          }
+        }
+      }
+    }
+  }
+}
