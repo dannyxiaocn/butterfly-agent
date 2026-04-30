@@ -625,6 +625,36 @@ class Session:
             # tool_use, which gpt-5 rejects with 400 BadRequestError. So
             # the trim guard skips messages whose blocks are ALL
             # tool_result type — only "real" user-text trailers are stripped.
+            #
+            # Mixed messages (text + tool_result in one user-role Message,
+            # produced when a bg agent_tool_result lands AFTER a user_input
+            # on disk and build_llm_context's adjacent-role grouping merges
+            # them) are split here: tool_result blocks go to a new
+            # role="user" Message that keeps DESIGN.md §4's wire shape and
+            # will be role-coerced to "tool" by the loop below; text blocks
+            # go to a separate role="user" Message that may then be trimmed
+            # if it is the trailing entry (its content is owned by the
+            # dispatcher's ChatItem and will be re-introduced by Agent.run).
+            # The tool_result message is emitted FIRST so the paired
+            # function_call from the prior assistant turn pairs immediately;
+            # text follows.
+            def _split_mixed(m):
+                blocks = list(m.content)
+                if m.role != "user" or len(blocks) <= 1:
+                    return [m]
+                tool_blocks = [b for b in blocks if getattr(b, "type", "") == "tool_result"]
+                text_blocks = [b for b in blocks if getattr(b, "type", "") != "tool_result"]
+                if not tool_blocks or not text_blocks:
+                    return [m]
+                from butterfly.core.types import Message as _Msg
+                return [
+                    _Msg(role="user", content=tuple(tool_blocks)),
+                    _Msg(role="user", content=tuple(text_blocks)),
+                ]
+            split: list = []
+            for m in built:
+                split.extend(_split_mixed(m))
+            built = split
             def _is_text_only_user(m) -> bool:
                 if m.role != "user":
                     return False

@@ -225,12 +225,8 @@ export function bfToDisplay(e: BfEvent): DisplayEvent[] {
       })];
 
     case 'todo_list_changed':
-      // todo_list payload carried; old UI just refreshes via /todo_list when
-      // it sees this event, so a bare type passthrough is enough.
-      return [withCommon(e, {
-        type: 'todo_list_changed',
-        ...(p.todo_list && typeof p.todo_list === 'object' ? { } : { }),
-      })];
+      // Old UI refreshes via /todo_list on this signal — bare type is enough.
+      return [withCommon(e, { type: 'todo_list_changed' })];
 
     // ── System: panel / sub-agents / tool progress ────────────────────
     case 'panel_entry_changed':

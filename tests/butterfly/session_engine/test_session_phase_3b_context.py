@@ -212,38 +212,19 @@ class RebuildHistoryFromEventsTest(unittest.TestCase):
             self.assertEqual(tool_msg.content[0]["type"], "tool_result")
             self.assertEqual(tool_msg.content[0]["tool_use_id"], "tu1")
 
-    @unittest.expectedFailure
     def test_rebuild_mixed_user_text_and_tool_result_does_not_double_count(self) -> None:
-        """Regression flagged in PR #59 review: a merged user-role message
-        carrying BOTH a TextBlock and a ToolResultBlock loses or duplicates
-        the user text depending on provider.
+        """A merged user-role message carrying BOTH a TextBlock and a
+        ToolResultBlock (produced when a bg agent_tool_result lands AFTER
+        a user_input on disk) is split at rebuild: tool_result blocks
+        keep the wire shape so the paired function_call survives, text
+        blocks get their own user-role Message which the trim guard then
+        strips because the dispatcher's ChatItem already owns that text.
 
-        Trigger: user types mid-bg-tool. Disk order ends up
-        ``user_input, agent_tool_call, user_input, agent_tool_result`` —
-        ``build_llm_context`` merges the trailing two user-role events
-        (TextBlock + ToolResultBlock) into one Message because both map to
-        role="user" (DESIGN.md §4). The dispatcher pops the second
-        user_input as the next ChatItem, so ``Agent.run`` will prepend
-        ``[*history, Message(role="user", content=input)]`` for that text.
-
-        Current rebuild then:
-          * trim guard (text-only-user) keeps the mixed message.
-          * coercion flips role="user" → "tool" because any tool_result.
-
-        Result on the wire:
-          * Anthropic provider remaps tool→user, sends BOTH blocks → text
-            "are you there" appears twice in LLM context (history + input).
-          * OpenAI Responses' ``_convert_tool_result`` only emits
-            function_call_output, silently drops the text block —
-            accidentally avoiding the double-count.
-
-        Right behaviour: history after rebuild should contain the
-        tool_result on role="tool" but NOT the text — the text is owned
-        by the dispatched ChatItem and will be reintroduced by Agent.run.
-
-        Marked ``expectedFailure`` so CI stays green until a follow-up
-        either (a) splits mixed messages at coercion or (b) extends the
-        trim guard to strip text blocks alongside tool_result tails.
+        Without this split, on Anthropic the user text appeared twice in
+        the LLM context (once in history via the mixed message, once via
+        Agent.run's prepended input); on OpenAI ``_convert_tool_result``
+        accidentally dropped it. The split + trim path makes it appear
+        exactly once via the input regardless of provider.
         """
         with TemporaryDirectory() as tmp:
             s = _new_session(Path(tmp))
