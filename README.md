@@ -38,5 +38,7 @@ Start here:
 - [`docs/butterfly/runtime/events.md`](docs/butterfly/runtime/events.md) — `events_v1.jsonl` contract (the source of truth)
 - [`docs/butterfly/runtime/io.md`](docs/butterfly/runtime/io.md) — `butterfly.runtime.io` — the only read/write surface
 - [`docs/butterfly/session_engine/design.md`](docs/butterfly/session_engine/design.md) — daemon run loop
+- [`docs/butterfly/session_engine/agent_team.md`](docs/butterfly/session_engine/agent_team.md) — `kind: team` sessions + teamchat
+- [`docs/butterfly/tool_engine/workflow.md`](docs/butterfly/tool_engine/workflow.md) — multi-step sub-agent pipeline tool
 - [`docs/ui/web/design.md`](docs/ui/web/design.md) — HTTP + SSE + unified Card
 - [`docs/ui/cli/design.md`](docs/ui/cli/design.md) — `butterfly io` reflection + friendly aliases

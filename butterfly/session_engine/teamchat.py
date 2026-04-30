@@ -15,8 +15,8 @@ Public surface:
     .messages_since(seq)                      → list[GroupMessage]
     .latest_seq()                             → int
     .summary_lines(messages, *, viewer)       → str
-    .messages_for_viewer(messages, *, viewer,
-                         viewer_mode)         → list[GroupMessage]
+    .is_visible_to(msg, viewer)               → bool
+    .addresses_viewer(msg, viewer)            → bool
 
   cursor_get(member_system_dir)               → int
   cursor_set(member_system_dir, seq)          → None
@@ -214,8 +214,13 @@ class TeamChat:
         if not per_sender:
             return ""
         if since_label is None:
-            earliest = min(messages, key=lambda m: m.ts).ts
-            since_label = _fmt_ts(earliest)
+            # Compute the label off the messages we'll actually display
+            # (post-self-filter) — otherwise the displayed timestamp can
+            # be earlier than any line shown in the summary.
+            earliest_visible = min(
+                (m.ts for ms in per_sender.values() for m in ms),
+            )
+            since_label = _fmt_ts(earliest_visible)
         lines = [f"[teamchat] Unread since {since_label}:"]
         for sender, msgs in per_sender.items():
             n = len(msgs)

@@ -506,10 +506,16 @@ def init_team_session(
             },
         )
 
-    members_map_path.write_text(
+    # Atomic write — match the tmp+replace pattern used by every other
+    # persistence helper in the team flow (cursor_set, panel save_entry).
+    # Plain write_text leaves a half-written file visible to a racing
+    # reader if the process crashes mid-write.
+    tmp_members = members_map_path.with_suffix(".json.tmp")
+    tmp_members.write_text(
         json.dumps(members_map, indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
+    tmp_members.replace(members_map_path)
 
     # Team manifest — last, after every member has its own manifest written
     # (matches the watcher-race rule on the single-agent path).

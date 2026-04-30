@@ -151,7 +151,12 @@ def create_session(
     subsequent `GET /api/sessions` read (PR #37 review finding #1).
     """
     _validate_session_id(session_id)
-    from butterfly.session_engine.session_init import init_session, _normalize_display_name
+    from butterfly.session_engine.session_init import (
+        init_session, init_team_session, _normalize_display_name,
+    )
+    from butterfly.session_engine.agent_config import AgentConfig
+    from butterfly.session_engine.team import is_team_manifest
+
     agent_path = Path(agent)
     if len(agent_path.parts) >= 2 and agent_path.parts[0] == "agenthub":
         agent_name = str(Path(*agent_path.parts[1:]))
@@ -163,15 +168,44 @@ def create_session(
         agent_name = agent
         agent_base = sessions_dir.parent / "agenthub"
     normalized_name = _normalize_display_name(display_name)
-    init_session(
-        session_id=session_id,
-        agent_name=agent_name,
-        sessions_base=sessions_dir,
-        system_sessions_base=system_sessions_dir,
-        agent_base=agent_base,
-        display_name=normalized_name,
-    )
-    return {"id": session_id, "agent": agent, "display_name": normalized_name}
+
+    # Branch on the agenthub config's ``kind`` field — team configs spawn
+    # a team session (router daemon + N member sub-sessions) instead of a
+    # single Agent session. ``is_team_manifest`` reads the manifest dict
+    # directly so we don't have to import the full TeamSpec just to peek.
+    is_team = False
+    try:
+        cfg = AgentConfig.from_path(agent_base / agent_name)
+        is_team = is_team_manifest(cfg.manifest)
+    except (FileNotFoundError, OSError, ValueError):
+        # Single-agent path is the legacy fallback — failing to read a
+        # config.yaml is not fatal at this layer (init_session itself
+        # raises a clearer error downstream).
+        is_team = False
+
+    if is_team:
+        init_team_session(
+            team_session_id=session_id,
+            team_name=agent_name,
+            sessions_base=sessions_dir,
+            system_sessions_base=system_sessions_dir,
+            agent_base=agent_base,
+        )
+    else:
+        init_session(
+            session_id=session_id,
+            agent_name=agent_name,
+            sessions_base=sessions_dir,
+            system_sessions_base=system_sessions_dir,
+            agent_base=agent_base,
+            display_name=normalized_name,
+        )
+    return {
+        "id": session_id,
+        "agent": agent,
+        "display_name": normalized_name,
+        "kind": "team" if is_team else "agent",
+    }
 
 
 def delete_session(session_id: str, sessions_dir: Path, system_sessions_dir: Path) -> bool:

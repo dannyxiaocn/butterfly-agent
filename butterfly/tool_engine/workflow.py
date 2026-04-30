@@ -170,7 +170,18 @@ class WorkflowRunner:
 
         prev = ""
         rendered: list[tuple[dict, str]] = []
+        killed = False
         for i, step in enumerate(steps, 1):
+            # Honour kill-between-steps: re-load the panel entry from disk
+            # so we observe a status flip set by ``kill()`` (or by another
+            # process touching the panel file). Without this check the
+            # runner plows through every step regardless of status —
+            # confirmed in PR #58 review by the test_kill_aborts_remaining_steps
+            # repro.
+            disk = ctx.load_entry(tid)
+            if disk is not None and disk.is_terminal():
+                killed = True
+                break
             entry.meta = {
                 **(entry.meta or {}),
                 "current_step": i,
@@ -203,9 +214,13 @@ class WorkflowRunner:
             "result": _format_full_log(rendered),
             "result_text": prev,
             "step_count": len(steps),
+            "killed": killed,
         }
         ctx.save_entry(cur)
-        return 0
+        # Return None on kill so the BackgroundTaskManager's terminal
+        # event preserves the kill marker the panel entry already
+        # carries; 0 is "success" and would otherwise overwrite it.
+        return None if killed else 0
 
     async def kill(self, ctx: BackgroundContext, tid: str) -> bool:
         # v1: workflow itself doesn't track child PIDs — each step's child

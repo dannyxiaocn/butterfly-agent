@@ -49,6 +49,9 @@ The catalog is split into **toolhub tools** (declared in `toolhub/<name>/`) and 
 | `task_resume` | Resume a paused task | No | `name` |
 | `task_list` | List all task cards | No | — |
 | `tool_output` | Fetch full output of a backgrounded tool call | No | `task_id, delta?` |
+| `workflow` | Run an ordered pipeline of sub-agent steps; each step spawns a child session via the existing `subagent_new` machinery and the previous step's reply substitutes for `{prev}`. See [docs/butterfly/tool_engine/workflow.md](workflow.md). | **Yes** | `steps[{name, task, agent?, mode?}], run_in_background?, polling_interval?` |
+| `teamchat_send` | Post into the AgentTeam's group chat. Auto-injected only on member sessions of a `kind: team` session; mentions parsed from text body (`@<name>` / `@all`). See [docs/butterfly/session_engine/agent_team.md](../session_engine/agent_team.md). | No | `text` |
+| `teamchat_view` | Read all unread teamchat messages and advance the caller's cursor. Auto-injected on team-member sessions. | No | — |
 
 **Removed in v2.0.5**:
 - `shell` — merged into `bash` (pass `.sh` as command: `bash(command="bash my.sh arg")`)

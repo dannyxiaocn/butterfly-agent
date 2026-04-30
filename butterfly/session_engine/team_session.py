@@ -30,9 +30,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
-import re
-from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -49,7 +46,6 @@ if TYPE_CHECKING:
 
 
 _log = logging.getLogger(__name__)
-_MENTION_PROBE = re.compile(r"@([A-Za-z0-9_]+)")
 
 
 class TeamSession:
@@ -110,10 +106,16 @@ class TeamSession:
         addressing everyone still has to land on one queue, and broadcasting
         from the user side would create N concurrent agent runs from a
         single human turn (out of scope for v1).
+
+        Mention parsing is delegated to ``teamchat.parse_mentions`` so the
+        router and the teamchat tool agree on the rules: case-insensitive
+        match against the roster, a `(?<![A-Za-z0-9_])` lookbehind that
+        keeps email addresses (``user@coder.com``) from being misread as
+        a real mention, and unknown handles dropped silently.
         """
-        for raw in _MENTION_PROBE.findall(text or ""):
-            name = raw.strip()
-            if not name:
+        member_names = list(self._members_map.keys())
+        for name in parse_mentions(text or "", member_names):
+            if name == "all":
                 continue
             if name in self._members_map:
                 return name
@@ -175,6 +177,45 @@ class TeamSession:
                 self._team_id, recipient, exc,
             )
 
+    def _initial_input_offset(self) -> int:
+        """Byte offset in the team's ``context.jsonl`` to start polling from.
+
+        Mirrors the rule that single-agent ``Session._initial_input_offset``
+        encodes: rewind to 0 on fresh sessions so any seed ``user_input``
+        written by ``init_team_session(initial_message=...)`` is picked up,
+        and otherwise resume at end-of-file so prior already-routed rows
+        aren't replayed on watcher restart.
+
+        Team sessions have no ``turn`` events to use as a watermark
+        (they don't run an Agent), so the fresh-vs-resume distinction is
+        just "is the file empty?". The router is idempotent on duplicate
+        input — re-routing a row only re-fans it to the same recipient
+        — but doing it on every restart would still echo the original
+        input on every daemon respawn, hence the EOF resume rule.
+        """
+        ctx_path = self.system_dir / "context.jsonl"
+        if not ctx_path.exists():
+            return 0
+        try:
+            size = ctx_path.stat().st_size
+        except OSError:
+            return 0
+        # Fresh: only seed rows present (or genuinely empty file). Treat
+        # both as "rewind to 0" — there are no committed turns to skip.
+        # The presence of any row implies we should consider this a
+        # post-seed state, but on the first daemon start we still want to
+        # read the seed. Distinguish: if a status event has already been
+        # written to events.jsonl (i.e. a previous daemon was up), resume
+        # at EOF; else rewind to 0.
+        events_path = self.system_dir / "events.jsonl"
+        had_prior_run = (
+            events_path.exists()
+            and events_path.stat().st_size > 0
+        )
+        if had_prior_run:
+            return size
+        return 0
+
     # ── daemon loop ───────────────────────────────────────────────────────
 
     async def run_daemon_loop(
@@ -187,7 +228,11 @@ class TeamSession:
         Same signature as ``Session.run_daemon_loop`` so the watcher can
         treat both kinds of sessions uniformly.
         """
-        os.environ["BUTTERFLY_TEAM_SESSION_ID"] = self._team_id
+        # Compute the input offset BEFORE we write the
+        # ``team_router_started`` status event — otherwise events.jsonl
+        # has data on fresh sessions and the resume-at-EOF branch fires
+        # incorrectly, dropping the ``initial_message`` seed.
+        input_offset = self._initial_input_offset()
         ensure_session_status(self.system_dir)
         write_session_status(
             self.system_dir, model_state="idle", model_source="team_router"
@@ -195,7 +240,6 @@ class TeamSession:
         ipc.append_event({
             "type": "status", "value": "team_router_started",
         })
-        input_offset = ipc.context_size()
         try:
             while True:
                 inputs, input_offset = ipc.poll_inputs(input_offset)
