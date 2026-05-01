@@ -1,8 +1,4 @@
-"""PR #19 review coverage: read / write / edit toolhub executors.
-
-These tests exercise happy paths and confirmed review findings on the new
-file-manipulation tools introduced in v2.0.5.
-"""
+"""read / write / edit toolhub executors."""
 from __future__ import annotations
 
 import asyncio

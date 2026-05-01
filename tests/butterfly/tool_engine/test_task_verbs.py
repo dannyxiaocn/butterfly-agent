@@ -1,6 +1,4 @@
-"""Smoke coverage for the task_* verb tools (task_create / _finish / _pause /
-_resume / _list / _update) after the v2.0.29 single-script rewrite.
-"""
+"""task_* verb tools — task_create / _finish / _pause / _resume / _list / _update."""
 from __future__ import annotations
 
 from pathlib import Path

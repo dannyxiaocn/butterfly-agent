@@ -46,7 +46,7 @@ butterfly prompt-edit <sid> <name>            # read_prompt → $EDITOR → upda
 
 Destructive aliases (`delete`, `task-delete`) refuse to run without `--yes` to prevent accidental shell globbing.
 
-The legacy `chat` / `new` / `stop` / `start` / `sessions` / `log` / `tasks` subcommands live in `ui/cli/main.py` and predate the refactor — they kept their UX (pretty tables, `--inject-memory`, `--no-wait`, tail mode) but internally retarget through `runtime.io`. The equivalent reflection calls (`butterfly io send_message …`, `butterfly io create_session …`) still work.
+The `chat` / `new` / `stop` / `start` / `sessions` / `log` / `tasks` subcommands in `ui/cli/main.py` keep their pretty UX (tables, `--inject-memory`, `--no-wait`, tail mode) and internally call through `runtime.io`. The equivalent reflection calls (`butterfly io send_message …`, `butterfly io create_session …`) work too.
 
 ## Server commands
 

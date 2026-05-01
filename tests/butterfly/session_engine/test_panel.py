@@ -1,4 +1,4 @@
-"""PR #19 review coverage: PanelEntry persistence + sweep semantics."""
+"""PanelEntry persistence + sweep semantics."""
 from __future__ import annotations
 
 import json

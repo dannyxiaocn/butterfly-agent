@@ -1,25 +1,24 @@
 """End-to-end alignment: IO write path → SSE → display history → Card reducer.
 
-Phase 9 "money test" (DESIGN.md §11.3 / §11.5). Verifies the core
-invariant of the refactor: **live SSE and history replay emit the exact
-same event payloads for the same event** (I7), and therefore the exact
-same sequence of Cards a frontend reducer would produce.
+Verifies the core invariant: **live SSE and history replay emit the exact
+same event payloads for the same event**, and therefore the exact same
+sequence of Cards a frontend reducer would produce.
 
-Flow, all against a ``TestClient``-backed FastAPI app:
+Flow, all against a `TestClient`-backed FastAPI app:
 
-    1. Create a session via ``io.create_session``.
-    2. Send a user message via ``io.send_message``.
-    3. Directly ``append_event`` a canonical agent sequence: thinking →
+    1. Create a session via `io.create_session`.
+    2. Send a user message via `io.send_message`.
+    3. Directly `append_event` a canonical agent sequence: thinking →
        text → tool_call → tool_result → text. This stands in for a full
-       provider round-trip, without standing up a real Session daemon.
-    4. Collect the SSE stream frames (via ``/events/stream``).
-    5. Collect the display-history JSON (via ``/history``).
+       provider round-trip without standing up a real Session daemon.
+    4. Collect the SSE stream frames (via `/events/stream`).
+    5. Collect the display-history JSON (via `/history`).
     6. Assert the two lists are identical, modulo SSE framing.
     7. Apply the same pure reducer rules to both streams and assert the
        resulting Card sequence is identical.
 
-Design intent of this file is a single money-path test; shape-level
-pins live in ``test_events.py`` / ``test_llm_context.py`` / ``test_app.py``.
+Single money-path test; shape-level pins live in `test_events.py` /
+`test_llm_context.py` / `test_app.py`.
 """
 from __future__ import annotations
 

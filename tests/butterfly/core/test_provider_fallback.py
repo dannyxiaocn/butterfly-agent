@@ -1,3 +1,4 @@
+"""Agent provider fallback — primary failure routing to fallback provider."""
 from __future__ import annotations
 
 import pytest
@@ -7,7 +8,7 @@ from butterfly.core.types import TokenUsage, ToolCall
 from butterfly.core.tool import tool
 
 
-# ── 1. _get_fallback_provider silent failure ─────────────────────────────────
+# ── _get_fallback_provider silent failure ─────────────────────────────────
 
 class _FailingProvider(Provider):
     async def complete(

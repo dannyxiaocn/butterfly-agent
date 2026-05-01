@@ -1,8 +1,6 @@
 # Tool Engine — Design
 
-The tool engine turns tool definitions into executable `Tool` objects. Tools live in `toolhub/` (centralized, repo-wide) and are enabled per-agent via `tools.md` (one tool name per line; legacy `tool.md` is still accepted as a fallback but `tools.md` is canonical). The `ToolLoader` dynamically imports executors at session init and injects session context (workdir, tasks_dir, memory_dir, etc.) into their constructors so agents never pass environmental parameters.
-
-This file is the authoritative spec for v2.0.5. It covers the catalog, the backgroundable protocol, the panel, and the shell / bash split.
+The tool engine turns tool definitions into executable `Tool` objects. Tools live in `toolhub/` (centralized, repo-wide) and are enabled per-agent via `tools.md` (one tool name per line). The `ToolLoader` dynamically imports executors at session init and injects session context (workdir, tasks_dir, memory_dir, etc.) into their constructors so agents never pass environmental parameters.
 
 ---
 
@@ -10,263 +8,171 @@ This file is the authoritative spec for v2.0.5. It covers the catalog, the backg
 
 1. **One tool, one job.** No dispatcher tools. Verb-named tools beat `action:` strings.
 2. **Minimal parameters.** Every deterministic-per-session value is injected at ToolLoader time, not by the agent per call.
-3. **Schema + description define agent UX.** Both are authoritative; sub-agents building tools must treat them as contracts.
+3. **Schema + description define agent UX.** Both are authoritative.
 4. **Structured results.** Tools return strings, but those strings are conventionalized (see §6). Large outputs spill to disk.
-5. **Append-only history.** Any notification or event the agent needs to see is appended to `events_v1.jsonl` exactly once — never re-injected at prompt-build time (see §8 on TTL avoidance). The LLM context is rebuilt from `events_v1.jsonl` via `build_llm_context()` at every tick (see [`docs/butterfly/runtime/events.md`](../runtime/events.md)).
+5. **Append-only history.** Notifications and events are appended to `events_v1.jsonl` exactly once — never re-injected at prompt-build time. The LLM context is rebuilt from `events_v1.jsonl` via `build_llm_context()` at every tick (see [`docs/butterfly/runtime/events.md`](../runtime/events.md)).
+
+Built-in tools follow a `<component>_<action>` naming convention (`memory_recall`, `task_create`, `task_list`, …).
 
 ---
 
-### Naming convention
+## 2. Tool catalog
 
-Built-in tools follow a `<component>_<action>` naming convention: `memory_recall`, `memory_update`, `task_create`, `task_update`, `task_finish`, `task_pause`, `task_resume`, `task_list`. This groups related tools together in alphabetical listings and makes the tool surface readable at a glance.
-
----
-
-## 2. Tool catalog (v2.0.5)
-
-The catalog is split into **toolhub tools** (declared in `toolhub/<name>/`) and **session-authored tools** (`.json`+`.sh` pairs agents create at runtime).
+Toolhub-declared tools (`toolhub/<name>/`) plus session-authored `.json`+`.sh` pairs.
 
 | Name | Purpose | Backgroundable | Agent sees |
 |---|---|---|---|
 | `bash` | One-shot shell command, fresh process every call | **Yes** | `command, timeout?, stdin?, run_in_background?, polling_interval?` |
 | `sub_agent` | Spawn a child session (same agent), return its FINAL reply | **Yes** | `name, task, mode (explorer\|executor), timeout_seconds?, run_in_background?, polling_interval?` |
 | `terminal_create` | Open the session's persistent pty terminal (idempotent). Returns the welcome block `[terminal ready]\nenv: …\npath: …\ngit: …`. | No | — |
-| `terminal_use` | Run one command against the terminal created by `terminal_create`. Fails closed when called before create. Prepends `[env: … | path: … | git: …]` when the fingerprint changes. | No | `command, timeout?, idle_threshold?` |
-| `read` | Read file contents (paginated) | No | `path, offset?, limit?` |
-| `write` | Write/overwrite a file | No | `path, content` |
-| `edit` | Exact string replacement on a file | No | `path, old_string, new_string, replace_all?` |
-| `glob` | Find files by pattern | No | `pattern, path?` |
-| `grep` | Search file contents | No | `pattern, path?, glob?, -i?, -n?, output_mode?` |
-| `web_search` | Multi-provider search (brave/tavily) | No | `query, count?, freshness?, ...` |
-| `web_fetch` | Multi-provider URL fetch + text extraction | No | `url, max_chars?` |
+| `terminal_use` | Run one command against the terminal created by `terminal_create`. Fails closed when called before create. Prepends `[env: … \| path: … \| git: …]` when the fingerprint changes. | No | `command, timeout?, idle_threshold?` |
+| `read` / `write` / `edit` | File reads, writes, exact-string replacement | No | path-shaped args |
+| `glob` / `grep` | Pattern + content search | No | pattern args |
+| `web_search` / `web_fetch` | Multi-provider search + URL fetch | No | query / url |
 | `skill` | Load a SKILL.md into context | No | `skill, args?` |
-| `memory_recall` | Read full sub-memory file | No | `name?` |
-| `memory_update` | Edit sub-memory **and** update main-memory index line | No | `name, old_string, new_string, description?` |
-| `task_create` | Create a bash-driven task card (single script, last line `[skip]`/`[start]`/`[done]`) | No | `name, description, check_interval?, script` |
-| `task_update` | Update a task card (description, check_interval, script, progress, comments) | No | `name, ...` |
-| `task_finish` | Mark a task card finished | No | `name` |
-| `task_pause` | Pause a recurring task | No | `name` |
-| `task_resume` | Resume a paused task | No | `name` |
-| `task_list` | List all task cards | No | — |
+| `memory_recall` / `memory_update` | Read full sub-memory file / Edit sub-memory + main-memory index line | No | name + edit args |
+| `task_create` / `task_update` / `task_finish` / `task_pause` / `task_resume` / `task_list` | Bash-driven task card lifecycle (single script, last line `[skip]`/`[start]`/`[done]`) | No | name + fields |
 | `tool_output` | Fetch full output of a backgrounded tool call | No | `task_id, delta?` |
-| `workflow` | Run an ordered pipeline of sub-agent steps; each step spawns a child session via the existing `subagent_new` machinery and the previous step's reply substitutes for `{prev}`. See [docs/butterfly/tool_engine/workflow.md](workflow.md). | **Yes** | `steps[{name, task, agent?, mode?}], run_in_background?, polling_interval?` |
-| `teamchat_send` | Post into the AgentTeam's group chat. Auto-injected only on member sessions of a `kind: team` session; mentions parsed from text body (`@<name>` / `@all`). See [docs/butterfly/session_engine/agent_team.md](../session_engine/agent_team.md). | No | `text` |
-| `teamchat_view` | Read all unread teamchat messages and advance the caller's cursor. Auto-injected on team-member sessions. | No | — |
-
-**Removed in v2.0.5**:
-- `shell` — merged into `bash` (pass `.sh` as command: `bash(command="bash my.sh arg")`)
-- `manage_task` — split into six verb tools above
-- `reload_capabilities` — removed; a runtime-level filesystem watcher will replace it (tracked in `runtime/todo.md`)
+| `workflow` | Run an ordered pipeline of sub-agent steps; previous step's reply substitutes for `{prev}`. See [workflow.md](workflow.md). | **Yes** | `steps[{name, task, agent?, mode?}], run_in_background?, polling_interval?` |
+| `teamchat_send` / `teamchat_view` | Group chat in a `kind: team` session. Auto-injected on member sessions. See [agent_team.md](../session_engine/agent_team.md). | No | `text` / — |
 
 ---
 
 ## 3. Bash (one-shot) vs terminal_create + terminal_use (persistent)
 
-The two cover distinct use cases. Their descriptions point at each other.
-
 ### 3.1 `bash` — stateless one-shot
 
-- Every call spawns a fresh subprocess via `asyncio.create_subprocess_shell`.
-- `cd`, `export`, aliases **do not persist** across calls.
-- Auto-injected `workdir` = session directory (agent uses relative paths).
-- Auto-activates session venv (`sessions/<id>/.venv`) if present, via env injection.
-- **No PTY.** Removed. Output is clean bytes; stderr merged with stdout via `2>&1` inside command if agent needs separation.
-- Optional `stdin: str` parameter is piped to the process for pre-feeding interactive prompts (`bash(command="apt install foo", stdin="y\n")`).
+- Every call spawns a fresh subprocess via `asyncio.create_subprocess_shell`. `cd` / `export` / aliases **do not persist** across calls.
+- Auto-injected `workdir` = session directory (agent uses relative paths). Session venv (`sessions/<id>/.venv`) is auto-activated via env injection if present.
+- No PTY. Output is clean bytes; stderr merged with stdout via `2>&1` inside the command if separation is needed.
+- Optional `stdin: str` parameter pipes to the process for pre-feeding interactive prompts.
 - Backgroundable (see §4).
 
-Structured output (returned as a single string, but formatted):
-```
-<stdout/stderr combined>
-[exit N, duration 2.3s, truncated false]
-```
-If output > `max_output_chars` (default 10_000), the tail is kept and a `[spilled: _sessions/<id>/tool_results/<uuid>.txt]` line is appended; `tool_output` or `read` can fetch the full file.
+Output shape: `<stdout/stderr combined>\n[exit N, duration 2.3s, truncated false]`. Output > `max_output_chars` (default 10_000) tail-truncates and appends `[spilled: _sessions/<id>/tool_results/<uuid>.txt]`; `tool_output` or `read` fetches the full file.
 
 ### 3.2 `terminal_create` + `terminal_use` — persistent
 
-- **One long-lived `bash --norc --noprofile` per session.** `terminal_create`
-  spawns it (idempotent; re-calling a live terminal just re-reports the
-  fingerprint). `terminal_use` runs one command at a time against the
-  existing terminal.
-- **Fail-closed ordering**: `terminal_use` before `terminal_create`
-  returns *"Error: Terminal not created, please use terminal_create
-  tool to create one first"* verbatim. The v2.0.33 single-verb
-  `session_shell(reset=true)` path collapsed "open" and "run" into one
-  kwarg and silently dropped the command on fresh shells — the split
-  makes the ordering explicit.
-- **Sentinel protocol**: each `terminal_use` writes `{command}\nprintf '\n__BFY_DONE_<marker>_%d__\n' $?\n` and reads until the marker; the exit code is embedded in the marker.
-- **Env fingerprint**: both verbs probe `(venv, cwd, git_branch)`
-  inside the pty. `terminal_create` returns the snapshot as a welcome
-  block; `terminal_use` prepends `[env: <venv> | path: <cwd> | git: <branch>]`
-  when the fingerprint changes since the last call (so the agent
-  notices `cd` / `conda activate` / `git switch` without re-probing).
+- One long-lived `bash --norc --noprofile` per session, attached to a pseudo-tty. `terminal_create` spawns it (idempotent); `terminal_use` runs one command at a time against it.
+- Fail-closed ordering: `terminal_use` before `terminal_create` returns `Error: Terminal not created, please use terminal_create tool to create one first`.
+- Sentinel protocol: each `terminal_use` writes `{command}\nprintf '\n__BFY_DONE_<marker>_%d__\n' $?\n` and reads until the marker; the exit code embeds in the marker.
+- Env fingerprint: both verbs probe `(venv, cwd, git_branch)` inside the pty. `terminal_create` returns the snapshot as a welcome block; `terminal_use` prepends `[env: <venv> | path: <cwd> | git: <branch>]` when the fingerprint changes since the last call.
 - Workdir, env vars, aliases, functions persist between calls.
-- **Single-command timeout**: sends SIGINT through the pty; the shell
-  stays alive and the model can call `terminal_create` again for a
-  hard respawn if it's wedged.
-- **Auto-restart** if the shell dies between calls; next output is prefixed `[shell restarted]`.
-- **Not** backgroundable — long-running work goes in `bash` with `run_in_background=true`. The terminal is for *sequencing*, not for background processes.
-- **No parallel calls within one session**; the lock is enforced inside the executor (concurrent calls queue on the shell's stdin).
+- Single-command timeout sends SIGINT through the pty; the shell stays alive (next `terminal_create` does a hard respawn if it's wedged).
+- Auto-restart if the shell dies between calls; next output is prefixed `[shell restarted]`.
+- Not backgroundable — long-running work goes in `bash` with `run_in_background=true`. The terminal is for sequencing, not background processes.
+- No parallel calls within one session; the lock is enforced inside the executor.
 
-### 3.3 When to use which (agent-facing doc)
+Implementation detail in [pure_context.md](pure_context.md).
 
-The tool descriptions explicitly point at the other:
+### 3.3 When to use which
 
-- `bash.description`: *"One-shot shell command. Each call is a fresh process; `cd`/`export` do NOT persist. Use for independent commands, file operations, git, tests. For long-running work (> 30s) set `run_in_background=true`. For multi-step workflows that need to share environment (venv activate + run, cd into subdir + run), call `terminal_create` once then use `terminal_use` instead."*
-- `terminal_create.description`: *"Open the session's persistent pty terminal and capture its initial environment. Call this ONCE before the first `terminal_use`."*
-- `terminal_use.description`: *"Run a command inside the persistent pty terminal opened by `terminal_create`. State (cwd, exported vars, aliases, active ssh/python REPL) persists between calls. Env-fingerprint changes are surfaced via a `[env: …]` banner. Not for long-running background processes — use `bash(run_in_background=true)` for those."*
+The tool descriptions explicitly point at each other:
+
+- `bash` → "one-shot, fresh process; for multi-step workflows that need to share environment, use `terminal_create` + `terminal_use` instead."
+- `terminal_create` → "open the session's persistent pty terminal; call this ONCE before the first `terminal_use`."
+- `terminal_use` → "run a command inside the persistent pty terminal; not for long-running background processes — use `bash(run_in_background=true)`."
 
 ---
 
 ## 4. Backgroundable tools (non-blocking execution)
 
-v2.0.5 introduces a uniform opt-in non-blocking protocol. Only tools whose `tool.json` sets `"backgroundable": true` participate; currently that is `bash` alone.
+Uniform opt-in non-blocking protocol. Tools whose `tool.json` sets `"backgroundable": true` participate; today: `bash`, `sub_agent`, `workflow`.
 
 ### 4.1 Protocol
 
-When `Tool.backgroundable == True`, the `ToolLoader` automatically:
+When `Tool.backgroundable == True`, `ToolLoader` automatically:
 
-1. **Adds two fields** to the tool's schema `properties`:
-   ```jsonc
-   "run_in_background": {
-     "type": "boolean",
-     "description": "If true, tool starts and returns immediately with a task_id. Use for commands expected to run > 30s, or when you want to keep working while it runs."
-   },
-   "polling_interval": {
-     "type": ["integer", "null"],
-     "description": "Seconds between heartbeat deliveries of new output. Omit for stall-watchdog only (recommended)."
-   }
-   ```
-2. **Appends a standard paragraph** to the tool description:
-   > *"This tool supports non-blocking execution. Set `run_in_background=true` to start and receive a placeholder result immediately; the real output will be delivered later as a notification in your context, and you can fetch it anytime with `tool_output(task_id)`. A stall watchdog notifies you if the task produces no output for 5 minutes. The task's status is also visible in the session panel."*
-
-Neither field goes into `required`.
+1. Adds `run_in_background: bool` and `polling_interval: int|null` to the tool's schema (neither required).
+2. Appends a standard paragraph to the tool description explaining the placeholder result, deferred delivery, `tool_output(task_id)`, the 5-minute stall watchdog, and panel visibility.
 
 ### 4.2 Runtime behaviour
 
 In `Agent._execute_tools` (`butterfly/core/agent.py`):
 
-- `run_in_background=true`: call `BackgroundTaskManager.spawn(tool, kwargs, panel_dir, polling_interval)` and immediately return the placeholder `tool_result`:
-  ```
-  Task started. task_id=<tid>. Output will arrive in a later turn; fetch anytime with tool_output(task_id="<tid>").
-  ```
-- Mixed gather is safe (Q1): `asyncio.gather(...)` runs blocking and background calls together; background returns ≈ instantly.
+- `run_in_background=true` → `BackgroundTaskManager.spawn(tool, kwargs, panel_dir, polling_interval)` returns immediately with a placeholder result `Task started. task_id=<tid>. ...`.
+- `asyncio.gather` mixes blocking and background calls safely; background returns ≈ instantly.
 
 ### 4.3 Result delivery
 
-`BackgroundTaskManager` owns a daemon-side poller (`butterfly/tool_engine/background.py`). When a spawned process completes (or stalls, or is killed), the manager:
+`BackgroundTaskManager` (`butterfly/tool_engine/background.py`). On completion / stall / kill:
 
 1. Writes final state + output-file path into `sessions/<id>/core/panel/<tid>.json`.
-2. Appends a `panel_entry_changed` event to `events_v1.jsonl` (for UI). Legacy `panel_update` is still dual-written to the old `events.jsonl` during the Phase 11 transition; new consumers MUST read the v1 event.
-3. **Appends a single `user_input` event** (`source="task"` / `source="sub_agent"` etc.) to `events_v1.jsonl`:
-   ```
-   Background task <tid> (<tool>) completed with exit 0 in 47s. 2.3KB output.
-   Fetch full output: tool_output(task_id="<tid>").
-   ```
-   Stall and kill notifications use the same one-shot pattern with different wording.
-4. Wakes the daemon loop (same mechanism as user-input wake), which triggers the next agent iteration.
+2. Appends `panel_entry_changed` to `events_v1.jsonl`.
+3. Appends a single `user_input` event (`source="task"` / `source="sub_agent"` / etc.) with the completion message + `tool_output` hint.
+4. Wakes the daemon loop, which triggers the next agent iteration.
 
-Append-once is critical — see §8.
+Append-once is critical (see §8).
 
-### 4.4 Polling / stall watchdog semantics
+### 4.4 Polling / stall watchdog
 
-- **No `polling_interval` set (default)**: only the stall watchdog runs. If 5 minutes pass with no new bytes on stdout, emit a stall notification once (re-arm only if new output then stops again).
-- **`polling_interval` set**: at each tick, if new bytes accumulated since last tick, emit a `progress` notification delivering the delta (see §8 on delta semantics).
-- **On completion**: final notification includes exit code, duration, total bytes. Polling ticks stop.
+- No `polling_interval` → only the stall watchdog runs (5 min of no new bytes ⇒ one-shot stall notification, re-arms only on next stall).
+- `polling_interval` set → progress notification per tick with bytes-since-last-tick (delta semantics).
+- Completion notification carries exit code, duration, total bytes.
 
-The watchdog also scans the tail of stdout for interactive-prompt patterns (`[y/N]`, `Press enter`, `(y/n)`, `Password:`) and surfaces them in the stall notification so the agent knows to kill or respawn.
+The watchdog tail-scans for interactive-prompt patterns (`[y/N]`, `Press enter`, `(y/n)`, `Password:`) and surfaces them in the stall notification.
 
 ---
 
 ## 5. Panel — in-loop work surface
 
-`sessions/<id>/core/panel/` sits alongside `core/tasks/`. It holds per-call state for non-blocking tools and (future) sub-agent references.
-
-### 5.1 Schema (`sessions/<id>/core/panel/<tid>.json`)
+`sessions/<id>/core/panel/<tid>.json` per backgroundable call. Schema (excerpt):
 
 ```jsonc
 {
-  "tid": "bg_a3f1",                    // stable id, also the filename stem
-  "type": "pending_tool",              // "pending_tool" | "sub_agent" (future)
+  "tid": "bg_a3f1",
+  "type": "pending_tool",          // "pending_tool" | "sub_agent"
   "tool_name": "bash",
-  "input": { "command": "..." },       // what agent passed
-
-  "status": "running",                 // running | completed | stalled | killed | killed_by_restart
-  "created_at": 1712345678.0,
-  "started_at": 1712345678.1,
-  "finished_at": null,
-
-  "polling_interval": null,            // seconds | null (stall-watchdog only)
-  "last_delivered_bytes": 0,           // stdout offset already pushed to agent
-  "last_activity_at": 1712345680.4,    // last time bytes were appended to output file
-
+  "input": { ... },
+  "status": "running",             // running | completed | stalled | killed | killed_by_restart
+  "polling_interval": null,
+  "last_delivered_bytes": 0,
+  "last_activity_at": ...,
   "pid": 42817,
   "exit_code": null,
-
   "output_file": "_sessions/<id>/tool_results/bg_a3f1.txt",
-  "output_bytes": 1842,
-
-  "meta": {}                           // free-form tool-specific fields
+  "output_bytes": ...,
+  "meta": {}                       // free-form
 }
 ```
 
-### 5.2 Lifecycle
+Lifecycle: created by `spawn` → updated in place by the manager's poller → transitions to terminal status via the manager. On daemon restart, every `running` entry is marked `killed_by_restart` with a corresponding notification.
 
-- Created by `BackgroundTaskManager.spawn` → status `running`.
-- Updated in place by the manager's poller as bytes arrive.
-- Transitions to `completed` / `stalled` / `killed` via the manager.
-- On server restart, daemon marks every `running` entry `killed_by_restart` on init and emits the corresponding notification (Q3).
-- Never deleted while session exists — persistent audit trail; pruning is future work.
-
-### 5.3 UI surfaces
-
-- **Web**: new **Panel** tab in the right sidebar, parallel to **Tasks**. Lists entries by recency, one row per entry with status badge + first-line summary. Click-through shows full state + `Kill` / `Fetch full output` actions.
-- **CLI**:
-  - `butterfly panel` — one line per entry: `<tid> <tool_name> <status> <last-output-tail-one-line>`
-  - `butterfly panel --tid <tid>` — full entry detail + `--kill` / `--output` subcommands
+UI surfaces: web sidebar Panel tab + CLI `butterfly panel`.
 
 ---
 
 ## 6. Structured tool outputs
 
-All tools return strings for provider compatibility, but adopt conventions so the agent and the UI can parse them.
+All tools return strings, but adopt conventions for parsing.
 
-- **Commands (bash / terminal_use)**: `<output>\n[exit N, duration T, truncated bool]` with optional `[spilled: <path>]` line if output was written to disk.
-- **File tools (read)**: `<content>\n[read N bytes, lines A-B of L]`.
-- **File tools (write/edit)**: `Wrote 1234 bytes to <path>.` / `Replaced 1 occurrence of '...' in <path>.`
-- **Search (grep/glob)**: standard ripgrep-style line output; truncation marker at the end if result size exceeds limit.
-- **Errors**: prefix `Error: ` followed by a concise message. The tool result's `is_error` flag is also set at the agent-loop layer when an exception is raised.
+- Commands (bash / terminal_use): `<output>\n[exit N, duration T, truncated bool]` with optional `[spilled: <path>]`.
+- File reads: `<content>\n[read N bytes, lines A-B of L]`.
+- Writes / edits: `Wrote N bytes to <path>.` / `Replaced N occurrence(s) of '...' in <path>.`
+- Search: ripgrep-style line output; truncation marker if size limit exceeded.
+- Errors: `Error: <message>` prefix; the agent loop also stamps `is_error` on the tool-result event.
 
-### 6.1 Error classification (v2.0.23)
+### 6.1 Error classification
 
-Tools that complete normally (no raised exception) but whose output text encodes a failure — e.g. `bash` returning with `[exit 127, ...]`, an executor echoing a `Traceback (most recent call last):` — used to surface as green ✓ cells in the web UI, which was misleading. `butterfly/tool_engine/result_classifier.py` centralises the detection:
+Some tools complete without raising but encode failure in the body (`bash` returning `[exit 127, ...]`, executor echoing a `Traceback`). `butterfly/tool_engine/result_classifier.py::classify_tool_result(tool_name, result) -> bool` is called from `core/agent.py::_execute_tools` after `tool.execute()`. The flag combines with the exception-path `is_error` and is stamped onto the `agent_tool_result` event.
 
-- `classify_tool_result(tool_name, result) -> bool` — called once per call from `core/agent.py::_execute_tools` right after `tool.execute()` returns. The returned flag is combined with the exception-path `is_error` (tool-not-found, background-spawn-fail, raised exception) and threaded through `on_tool_done(name, input, result, tool_use_id, is_error)` so `Session` stamps `is_error` onto the `agent_tool_result` event in `events_v1.jsonl` (the retired `tool_done` event in legacy `events.jsonl` is still dual-written until Phase 11).
-- Rule table lives at the module top of `result_classifier.py`. `bash` and `terminal_use` share a rule that parses the last `[exit N, ...]` footer (last match wins so trailing multi-command output classifies on the final exit code) and treats any `[timed out after ...]` prefix as error. `terminal_create` has no footer (welcome-block only) and falls through to the default rule, which correctly treats it as success. All other tools fall through to the default rule: `Traceback (most recent call last):` anywhere in the body, or the first non-empty line starting with `Error:` / `ERROR:` / `Error ` / `Traceback …`.
-- The classifier errs on the side of green. An unknown tool produces a false negative (error that should be red stays green) — never a false positive (success painted red). Add a dedicated rule in `_RULES` when a tool's failure idiom slips past the default.
+Per-tool rules live at the top of `result_classifier.py`. `bash` and `terminal_use` parse the last `[exit N, ...]` footer (last match wins); `[timed out after ...]` is always an error. `terminal_create` falls through to default (welcome-block has no footer). Default rule: `Traceback (most recent call last):` anywhere, or first non-empty line starting with `Error:` / `ERROR:` / `Error ` / `Traceback…`.
 
-The web UI renders `is_error` through one path: the `agent_tool_result` event carries `is_error`, and the unified `reducer.ts` upgrades the matching tool Card (looked up via `tool_use_id`) to its error styling. Live SSE and history replay drive the same reducer — there is no separate "history replay path" anymore (see [`docs/ui/web/design.md`](../../ui/web/design.md)).
+The classifier errs on the side of green — unknown tools get false negatives, never false positives. Add a rule when a tool's failure idiom slips past the default.
+
+The web reducer keys off `tool_use_id` to upgrade the matching tool Card to its error styling (live SSE and history replay drive the same reducer; see [`docs/ui/web/design.md`](../../ui/web/design.md)).
 
 ### 6.2 Disk spillover
 
-Per-tool `max_result_chars`. If exceeded:
-1. Write the full result to `_sessions/<id>/tool_results/<tool>_<uuid>.txt`.
-2. Return the last `max_result_chars` bytes + a `[spilled: <path>]` line.
-3. Agent can `read(path=...)` to retrieve the rest.
-
-Defaults:
-- `bash`: 10_000 chars
-- `read`: 100_000 chars (pagination is the primary mechanism)
-- `grep`: 30_000 chars
-- Others: 10_000 chars
+Per-tool `max_result_chars`. If exceeded: write full result to `_sessions/<id>/tool_results/<tool>_<uuid>.txt`, return last `max_result_chars` + `[spilled: <path>]` line. Defaults: `bash` 10_000, `read` 100_000, `grep` 30_000, others 10_000.
 
 ---
 
-## 7. Memory tools (β pattern)
+## 7. Memory tools
 
-Starting in v2.0.5, sub-memory is **not** injected into the system prompt. Only `core/memory.md` (main) is. Full rationale and flow in `docs/butterfly/session_engine/design.md`.
+Sub-memory is **not** injected into the system prompt — only `core/memory.md` (the index) is. Full rationale in `docs/butterfly/session_engine/design.md`.
 
-- `memory_recall(name?)`: read-only. If `name` omitted, lists available sub-memories (derived from main memory's index lines). Otherwise returns full `core/memory/<name>.md`.
-- `memory_update(name, old_string, new_string, description?)`: Edit-style patch on `core/memory/<name>.md` (creates the file if new), AND upserts the one-line index entry `<name>: <description>` in `core/memory.md`. `description` is required the first time a sub-memory is created; optional for subsequent edits (leaves the existing index line alone).
+- `memory_recall(name?)`: read-only. Omit `name` to list available sub-memories (parsed from main-memory index lines); else return full `core/memory/<name>.md`.
+- `memory_update(name, old_string, new_string, description?)`: Edit-style patch on the sub-memory file (creates if new), AND upserts the one-line index entry `<name>: <description>` in `core/memory.md`. `description` required on first creation; optional thereafter.
 
 No free-standing `memory_write` — everything goes through `memory_update` to keep the index in sync.
 
@@ -274,254 +180,137 @@ No free-standing `memory_write` — everything goes through `memory_update` to k
 
 ## 8. Append-once notification lifecycle
 
-Claude Code's prompt-time reminder injection caused context exhaustion when reminders weren't garbage-collected (issues #6854/#11716/#13249). Butterfly avoids this structurally.
+Claude Code's prompt-time reminder injection caused context exhaustion when reminders weren't garbage-collected. Butterfly avoids this structurally.
 
-- **All** notifications — background completion, stall, progress heartbeats, kill-by-restart — are appended to `events_v1.jsonl` **exactly once**, as ordinary `user_input` events (`source` distinguishes background-task vs. sub-agent vs. operator).
-- Nothing is re-injected at prompt-build time. `build_llm_context()` is a pure filter over the event log; each notification appears once, forever, just like any other event.
+- All notifications — background completion, stall, progress heartbeats, kill-by-restart — are appended to `events_v1.jsonl` exactly once, as ordinary `user_input` events (`source` distinguishes background-task vs. sub-agent vs. operator).
+- Nothing is re-injected at prompt-build time. `build_llm_context()` is a pure filter over the event log.
 - Growth is O(N_notifications), not O(N_notifications × N_turns).
-- Progress heartbeats use **delta semantics**: each notification contains only bytes appended since the last delivery for that task, tracked via `panel/<tid>.json#last_delivered_bytes`. Re-reading the file from scratch is never forced on the agent.
+- Progress heartbeats use delta semantics: each notification carries only bytes appended since the last delivery for that task, tracked via `panel/<tid>.json#last_delivered_bytes`.
 
-UI-only system events (e.g. `panel_entry_changed`, `tool_progress`) carry `for_llm=False` in the same `events_v1.jsonl` log; the LLM context builder filters them out, but the web reducer renders them.
+UI-only system events (`panel_entry_changed`, `tool_progress`) carry `for_llm=False` in the same log; the LLM context builder filters them out, the web reducer renders them.
 
 ---
 
-## 9. ToolLoader context injection (unchanged architecture)
+## 9. ToolLoader context injection
 
-Preserved from v2.0.x: `Session._load_session_capabilities` constructs a `ToolLoader` with all context pre-bound. The loader reads `tool.md`, dynamically imports each toolhub executor, and instantiates it with the relevant context.
-
-Per-tool context injection table (v2.0.5):
+`Session._load_session_capabilities` constructs a `ToolLoader` with all context pre-bound. The loader reads `tools.md`, dynamically imports each toolhub executor, and instantiates it with the relevant context.
 
 | Tool | Auto-injected |
 |---|---|
-| `bash` | `workdir`, `tool_results_dir` (for disk spillover) |
+| `bash` | `workdir`, `tool_results_dir` |
 | `terminal_create` / `terminal_use` | `workdir`, `venv_env_provider`, `terminal_logger` (shared `TerminalExecutor`) |
-| `read`/`write`/`edit` | `workdir` (for relative path resolution) |
-| `glob`/`grep` | `workdir` |
-| `web_search`/`web_fetch` | (provider-registry driven; no constructor injection) |
+| `read` / `write` / `edit` | `workdir` |
+| `glob` / `grep` | `workdir` |
+| `web_search` / `web_fetch` | (provider-registry driven; no constructor injection) |
 | `skill` | skills list |
-| `memory_recall` | `memory_dir` |
-| `memory_update` | `memory_dir`, `main_memory_path` |
+| `memory_recall` / `memory_update` | `memory_dir` (+ `main_memory_path` for update) |
 | `task_*` | `tasks_dir` |
 | `tool_output` | `panel_dir`, `tool_results_dir` |
 
-`bash` itself does NOT receive `panel_dir` — the agent-loop layer owns the
-routing to `BackgroundTaskManager`; the bash executor only runs the sync path.
+`bash` does NOT receive `panel_dir` — the agent-loop layer owns the routing to `BackgroundTaskManager`; the bash executor only runs the sync path.
 
 ---
 
-## 10. Session-authored tools (unchanged)
+## 10. Session-authored tools
 
-Agents can still create `.json` + `.sh` pairs in `core/tools/`; the `.sh` script receives kwargs as JSON on stdin. Since `shell` is gone as a separate tool, these are loaded via the same generic `ToolLoader.load_local_tools` path and surface under their declared names.
-
----
-
-## 11. Backward compatibility
-
-**None.** v2.0.5 is a breaking release; `shell`, `manage_task`, `reload_capabilities` are removed. Agents (`agenthub/agent`, `agenthub/butterfly_dev`) have their `tools.md` rewritten as part of this release. Sessions created before v2.0.5 will fail to load removed tools — users must create new sessions or manually edit their session `core/tools.md`.
+Agents can create `.json` + `.sh` pairs in `core/tools/`; the `.sh` script receives kwargs as JSON on stdin. `ToolLoader.load_local_tools` surfaces them under their declared names.
 
 ---
 
-## 12. Sub-agent tool (v2.0.13)
+## 11. Sub-agent tool
 
-`sub_agent` is a backgroundable tool that spawns a **child session** of the
-same agent as the parent. It exists so a parent can delegate context-heavy
-work (research, sandboxed experiments, large refactors) without polluting
-its own conversation history.
+`sub_agent` is a backgroundable tool that spawns a child session of the same agent as the parent. It exists so a parent can delegate context-heavy work (research, sandboxed experiments, large refactors) without polluting its own conversation history.
 
 ### Semantics
 
-- **The parent only ever sees the child's FINAL reply.** Intermediate tool
-  calls, partial messages, and thinking blocks stay in the child session
-  (visible via the sidebar / panel). This is a hard contract — the
-  description in `toolhub/sub_agent/tool.json` and the mode prompts state
-  it explicitly so the LLM doesn't expect a transcript.
-- Sync mode (`run_in_background=false`, default): the parent's turn blocks
-  until the child replies or `timeout_seconds` elapses. On timeout, the
-  child keeps running — its final reply is still delivered via the
-  background-completion path when it lands.
-- Background mode (`run_in_background=true`): identical to bash bg —
-  parent gets a `task_id=…` placeholder immediately and continues; the
-  child's completion arrives later as a `user_input` event (with
-  `source="sub_agent"`) appended to the parent's `events_v1.jsonl` (with
-  the child's full reply inline). The tool description tells the agent
-  this explicitly ("continue with your own work — the runtime handles
-  delivery") to stop it from bash-catting the child's `events_v1.jsonl`
-  out of impatience (v2.0.19).
+- **The parent only ever sees the child's FINAL reply.** Intermediate tool calls, partial messages, and thinking blocks stay in the child session (visible via the sidebar / panel). The tool description and mode prompts state this explicitly.
+- Sync mode (`run_in_background=false`, default): parent's turn blocks until the child replies or `timeout_seconds` elapses. On timeout, the child keeps running — its final reply is delivered later via the background-completion path.
+- Background mode: identical to bash bg — parent gets a `task_id=…` placeholder immediately and continues; the child's completion arrives later as a `user_input` event (`source="sub_agent"`) with the full reply inline.
 
-### Required `name` parameter (v2.0.19)
+### `name` parameter
 
-Every `sub_agent` call must supply a short human-readable `name` (≤ 40
-chars after trim). `name` is threaded through `_spawn_child` →
-`init_session(display_name=…)` → child manifest's `display_name` field,
-and also copied into the parent's `PanelEntry.meta.display_name` so the
-sub_agent card can render it without a round-trip to the child's
-manifest. The sidebar and panel prefer `display_name` over the raw
-`session_id` (which stays the canonical unique key). Truncation is
-defensive (both `_validate_name` and `_normalize_display_name` cap at
-40 chars) so the parent never hits a 400 from a slightly-too-long name.
+Every `sub_agent` call must supply a short human-readable `name` (≤ 40 chars). It threads through `_spawn_child` → `init_session(display_name=…)` → child manifest's `display_name` → parent's `PanelEntry.meta.display_name`. The sidebar and panel prefer `display_name` over the raw `session_id` (which stays the canonical unique key).
 
 ### Modes
 
 | Mode | Permission | Use when |
 |---|---|---|
-| `explorer` | Sandboxed: writes only inside child's `playground/`. Reads anywhere. Bash cwd pinned to playground. | Research, untrusted exploration, parallel investigations. |
-| `executor` | No sandbox. Same tool surface as parent. | The child legitimately needs to modify shared files. |
+| `explorer` | Sandboxed (Guardian): writes only inside child's `playground/`. Reads anywhere. Bash cwd pinned to playground. | Research, untrusted exploration, parallel investigations. |
+| `executor` | No sandbox. Same tool surface as parent. | Child legitimately needs to modify shared files. |
 
-The mode prompt (`toolhub/sub_agent/<mode>.md`) is copied to the child's
-`core/mode.md` at `init_session` time and folded into the child's static
-system prompt by `Session._load_session_capabilities` (between `system.md`
-and `env.md`).
+Mode prompt (`toolhub/sub_agent/<mode>.md`) is copied to child's `core/mode.md` at `init_session` time and folded into the static system prompt by `Session._load_session_capabilities`.
 
-### Sub-agent cancel cascade (v2.0.24)
+### Cancel cascade
 
-A child session's daemon runs independently of the parent's await chain — `init_session` writes the child's manifest, the parent's `SessionWatcher` adopts it, and the child polls its own `events_v1.jsonl` from there. When the parent cancels mid-`sub_agent` (chat-with-mode=interrupt, ⚡ Interrupt button, or Stop), the asyncio cancel propagating up through `_execute_tools → SubAgentTool.execute()` does **not** reach the child daemon — without explicit cascade, the child keeps spending tokens on a discarded task. Two cooperating fixes:
+A child session's daemon runs independently of the parent's await chain. When the parent cancels mid-`sub_agent` (chat-with-mode=interrupt, ⚡ Interrupt button, or Stop), the asyncio cancel propagating up through `_execute_tools → SubAgentTool.execute()` does **not** reach the child daemon — without explicit cascade, the child keeps spending tokens. Two cooperating fixes:
 
-- `SubAgentTool.execute` (blocking path): wraps `await _wait_for_reply` in `try/except CancelledError` that calls `BridgeSession(child).send_interrupt()` before re-raising. Reaches the child via the same control event the bare ⚡ button uses; child's own `_handle_explicit_interrupt` cancels its in-flight run + drops its inbox + cascades to its own background runners (recursive).
-- `SubAgentRunner.kill` (background path): now calls `send_interrupt()` first, then `stop_session()`. Pre-2.0.24 the kill path only set `status=stopped` on the child, but the daemon's stopped-check fires only when a fresh input arrives — so an in-flight chat kept running until a natural break. Sending interrupt first cancels immediately; the stop call then prevents future task wakeups from auto-resuming.
+- `SubAgentTool.execute` (blocking path) wraps `await _wait_for_reply` in `try/except CancelledError` that calls `BridgeSession(child).send_interrupt()` before re-raising.
+- `SubAgentRunner.kill` (background path) calls `send_interrupt()` first, then `stop_session()` — without the interrupt, the daemon's stopped-check only fires when fresh input arrives, leaving in-flight chats running.
 
-The bare-interrupt cascade in `Session._handle_explicit_interrupt` reaches background sub-agents via `_cascade_interrupt_background()` → `BackgroundTaskManager.kill(tid)` → `SubAgentRunner.kill`. Blocking sub-agents are reached through the parent's `_run_task.cancel()` propagating naturally to the awaited `SubAgentTool.execute()`. See `docs/butterfly/session_engine/design.md` "v2.0.24 — bare-interrupt cascade" for the parent-side path.
+The bare-interrupt cascade in `Session._handle_explicit_interrupt` reaches background sub-agents via `_cascade_interrupt_background()` → `BackgroundTaskManager.kill(tid)` → `SubAgentRunner.kill`. Blocking sub-agents are reached through the parent's `_run_task.cancel()` propagating naturally to the awaited `SubAgentTool.execute()`.
 
 ### Implementation split
 
-- `butterfly/tool_engine/sub_agent.py` — both `SubAgentTool` (sync executor)
-  and `SubAgentRunner` (background runner). Shared helper `_spawn_child`
-  factors out the `init_session(...)` call so both paths agree on
-  child-id format, manifest layout, and message composition.
-- `toolhub/sub_agent/executor.py` — re-exports the canonical classes so
-  the `ToolLoader` can find `SubAgentTool` via the conventional discovery
-  path.
-- `toolhub/sub_agent/{tool.json,explorer.md,executor.md}` — schema +
-  mode prompts.
+- `butterfly/tool_engine/sub_agent.py` — `SubAgentTool` (sync executor) + `SubAgentRunner` (background runner). Shared helper `_spawn_child` factors out `init_session(...)`.
+- `toolhub/sub_agent/executor.py` — re-exports for `ToolLoader` discovery.
+- `toolhub/sub_agent/{tool.json, explorer.md, executor.md}` — schema + mode prompts.
 
 ### Parent-side observability
 
-When the runner is in background mode it owns a `PanelEntry` of type
-`sub_agent` (constant `panel.TYPE_SUB_AGENT`). The runner stamps:
+In background mode the runner owns a `PanelEntry` of type `sub_agent`. The runner stamps:
 
 - `meta.child_session_id` — for sidebar pivot + "Open child session" link.
 - `meta.mode` — for the mode chip.
-- `meta.last_child_state` — refreshed every `polling_interval` seconds by
-  tailing the child's `events_v1.jsonl`. Drives the `tool_progress` event
-  the parent's chat UI uses to keep the tool Card in its "running" state
-  with a live summary.
+- `meta.last_child_state` — refreshed every `polling_interval` seconds by tailing the child's `events_v1.jsonl`. Drives the `tool_progress` event the parent's chat UI uses to keep the tool Card in its "running" state.
 - `meta.result` / `meta.result_text` — populated on completion.
 
-Web UI (see `ui/web/frontend/src/components/{chat,sidebar,panel}.ts`):
-
-- Chat HUD shows `⚙ N sub-agents running` while any sub_agent panel
-  entry is non-terminal.
-- The chat-side tool Card stays in its "running" state until the
-  matching `agent_tool_result` event arrives (the unified reducer keys
-  by `tool_use_id`). The retired `tool_finalize` event no longer fires
-  — pairing happens in one place, in `reducer.ts`. This also fixes the
-  prior bash-bg bug where the cell flashed green immediately on the
-  spawn placeholder.
-- The parent's panel renders the sub_agent card with a thumbnail
-  (current activity) and an expandable view of the child's last 5
-  events (via `GET /api/sessions/{child_id}/events_tail?n=5`).
-- The sidebar indents the child session under its parent (markdown-list
-  style) keyed off the new `parent_session_id` field in `manifest.json`.
+Web UI: chat HUD shows `⚙ N sub-agents running` while any sub_agent panel entry is non-terminal; chat-side tool Card stays in "running" state until the matching `agent_tool_result` arrives (the unified reducer keys by `tool_use_id`); sidebar indents children under their parent via `parent_session_id` in `manifest.json`.
 
 ---
 
-## 13. Generalized BackgroundTaskManager (v2.0.13)
+## 12. BackgroundTaskManager — runner registry
 
-v2.0.5 introduced `BackgroundTaskManager` for bash. v2.0.13 splits the
-manager into two orthogonal halves so any backgroundable tool can plug in:
+The manager owns: tid generation, `PanelEntry` lifecycle, the `BackgroundEvent` queue, `sweep_restart` for orphan recovery, and the terminal-event emission contract.
 
-- **The manager** owns: tid generation, `PanelEntry` lifecycle, the
-  `BackgroundEvent` queue, `sweep_restart` for orphan recovery, and the
-  terminal-event emission contract.
-- **A `BackgroundRunner`** owns: "what does this tool actually do in the
-  background?" Plus per-tool `validate(input)` (run synchronously at
-  `spawn()` time so misconfiguration surfaces immediately), `run(ctx, tid,
-  entry, input, polling_interval)`, and `kill(ctx, tid)`.
+A `BackgroundRunner` owns the per-tool work: `validate(input)` (synchronous at `spawn()` time), `run(ctx, tid, entry, input, polling_interval)`, and `kill(ctx, tid)`.
 
-Bash is registered automatically as the default runner (`BashRunner`); it
-implements the same subprocess + drain logic that lived inline before.
-Sub_agent registers `SubAgentRunner` from `Session.__init__`. New
-backgroundable tools can register their own runner without touching the
-manager.
+Bash registers `BashRunner` as the default. `Session.__init__` registers `SubAgentRunner` and `WorkflowRunner`. New backgroundable tools register their own runner without touching the manager.
 
-`spawn(tool_name, input, polling_interval)` defaults `entry_type` to
-`TYPE_SUB_AGENT` when `tool_name == "sub_agent"`, else `TYPE_PENDING_TOOL`.
-This lets the UI render the two card types differently without runners
-having to know about panel taxonomy.
+`spawn(tool_name, input, polling_interval)` defaults `entry_type` to `TYPE_SUB_AGENT` when `tool_name == "sub_agent"`, else `TYPE_PENDING_TOOL`. UI renders the two card types differently.
 
 ---
 
-## 14. Provider-native built-in tools (v2.0.31)
+## 13. Provider-native built-in tools
 
-A second tool kind shipped in v2.0.31: **provider-native built-in tools**.
-Butterfly declares them to the provider at request time but never runs
-them locally — the provider executes them server-side (currently Codex /
-OpenAI Responses only). Function tools (the default) and built-in tools
-share the `Tool` object type; what differs is how providers handle them.
-
-### When to use each
+A second tool kind: **provider-native built-in tools** declared to the provider at request time but executed server-side (currently Codex / OpenAI Responses). Function tools and built-in tools share the `Tool` object type; what differs is how providers handle them.
 
 | Kind | When | Examples |
 |---|---|---|
-| Function tool | Butterfly owns the executor; works on every provider. | `bash`, `read`, `task_create`, `web_search_brave` (API-key local executor). |
-| Provider-native built-in | Leverage the provider's server-side capability without running it locally. Works only on providers that understand the specific tool type (Codex / OpenAI Responses today). | `web_search`, `file_search`, `code_interpreter`. |
+| Function tool | Butterfly owns the executor; works on every provider. | `bash`, `read`, `task_create`, `web_search_brave`. |
+| Provider-native built-in | Leverage the provider's server-side capability. Works only on providers that understand the specific tool type. | `web_search`, `file_search`, `code_interpreter`. |
 
-Prefer a function tool unless the provider-native one offers a
-capability you can't get locally (e.g. provider-side `web_search` gives
-the server access to fresh indexed results the model is tuned against;
-`code_interpreter` gives server-side sandboxed Python without Butterfly
-having to stand up its own sandbox).
+Prefer a function tool unless the provider-native one offers a capability you can't get locally.
 
 ### `builtin_dict` plumbing
 
-`butterfly/core/tool.py::Tool` accepts `builtin_dict: dict | None` at
-construction. When set, `to_builtin_dict()` returns a copy and
-`is_builtin` is True. Providers that support built-in tools call
-`to_builtin_dict()` first when formatting their `tools=[]` list — a
-non-None return is spliced verbatim (as `{"type": "web_search"}`, etc.),
-NOT wrapped as `type: "function"`.
+`butterfly/core/tool.py::Tool` accepts `builtin_dict: dict | None` at construction. When set, `to_builtin_dict()` returns a copy and `is_builtin` is True. Providers that support built-in tools call `to_builtin_dict()` first when formatting `tools=[]` — a non-None return is spliced verbatim (as `{"type": "web_search"}`, etc.), NOT wrapped as `type: "function"`.
 
-### `execute()` behavior
+Direct invocation of a built-in tool's `execute()` raises `NotImplementedError` — surfacing the config mistake (e.g. enabling `web_search` against a Kimi provider) early.
 
-Direct invocation raises `NotImplementedError` with a descriptive
-message. This is intentional: the LLM must understand that the
-provider, not Butterfly, runs the tool — surfacing a clear error early
-catches config mistakes (e.g. enabling `web_search` against a Kimi
-provider, which doesn't understand it).
+### Registration in toolhub
 
-### Registration pattern in toolhub
+A provider-native built-in tool entry under `toolhub/<name>/`:
 
-A provider-native built-in tool entry under `toolhub/<name>/` follows
-the same shape as a function tool plus two conventions:
-
-1. **`tool.json`** — identical to function tools. `input_schema` can be
-   empty (`{"type": "object", "properties": {}, "required": []}`) since
-   the agent doesn't supply parameters for provider-native calls.
-2. **`executor.py`** — declare a module-level class attr `builtin_dict`
-   on the executor class, holding the raw provider spec:
+1. `tool.json` — same shape as a function tool. `input_schema` can be empty since the agent doesn't supply parameters.
+2. `executor.py` — declare a module-level class attr `builtin_dict` on the executor class with the raw provider spec:
    ```python
    class WebSearchExecutor:
        builtin_dict = {"type": "web_search"}
-
        async def execute(self, **_) -> str:
            raise NotImplementedError("provider-native built-in tool — ...")
    ```
-3. **Loader dispatch** — `butterfly/tool_engine/loader.py::_create_executor`
-   gains a dispatch arm matching the tool name, instantiating the
-   executor class. `load_from_toolhub` then calls `_load_builtin_dict`
-   to read the class attr (best-effort — absent ⇒ `None` ⇒ regular
-   function tool).
+3. `butterfly/tool_engine/loader.py::_load_builtin_dict` reads the class attr (best-effort — absent ⇒ `None` ⇒ regular function tool).
 
-Three stubs ship: `toolhub/web_search/`, `toolhub/file_search/`,
-`toolhub/code_interpreter/`. `image_generation` and `computer_use` are
-parsed + replayed by the provider but have no toolhub stub — adding
-them is hand-editing `tool.json` + `executor.py` in the same pattern.
+Three stubs ship: `toolhub/web_search/`, `toolhub/file_search/`, `toolhub/code_interpreter/`.
 
-### UI surface
-
-Not wired in v2.0.31. The provider exposes `consume_builtin_tool_events()`
-to drain progress events (`web_search.searching`,
-`code_interpreter_call.code.delta`, etc.); callers that want to render
-the intermediate states need to poll the drain themselves. A future
-release will emit `tool_progress` events from these drains so the
-chat UI renders live progress the same way it does for background
-bash / sub_agent today.
+The provider exposes `consume_builtin_tool_events()` to drain progress events (`web_search.searching`, `code_interpreter_call.code.delta`, …) for UI / telemetry. Not yet wired into chat-side `tool_progress` rendering.

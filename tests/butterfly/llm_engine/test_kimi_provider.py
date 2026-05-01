@@ -762,3 +762,68 @@ def test_kimi_does_not_use_tc_map_to_list():
     # tool_use blocks arrive whole from the API response.
     # This test documents that Kimi is NOT affected by the empty-name bug.
     assert KimiForCodingProvider.__mro__[1].__name__ == "AnthropicProvider"
+
+
+# ── Name / identity tests for KimiAnthropicProvider ───────────────────────
+
+
+def test_kimi_anthropic_is_subclass_of_anthropic_provider():
+    from butterfly.llm_engine.providers.anthropic import AnthropicProvider
+    from butterfly.llm_engine.providers.kimi import KimiAnthropicProvider
+
+    assert issubclass(KimiAnthropicProvider, AnthropicProvider)
+
+
+def test_kimi_for_coding_alias_matches_anthropic_variant():
+    from butterfly.llm_engine.providers.kimi import (
+        KimiAnthropicProvider,
+        KimiForCodingProvider,
+    )
+
+    assert KimiForCodingProvider is KimiAnthropicProvider
+
+
+def test_kimi_anthropic_class_flags():
+    from butterfly.llm_engine.providers.kimi import KimiAnthropicProvider
+
+    assert KimiAnthropicProvider._supports_cache_control is False
+    assert KimiAnthropicProvider._supports_thinking is True
+    assert KimiAnthropicProvider._thinking_uses_betas is False
+
+
+def test_kimi_anthropic_fails_fast_without_any_key(monkeypatch):
+    from butterfly.llm_engine.errors import AuthError
+    from butterfly.llm_engine.providers.kimi import KimiAnthropicProvider
+
+    monkeypatch.delenv("KIMI_FOR_CODING_API_KEY", raising=False)
+    monkeypatch.delenv("KIMI_API_KEY", raising=False)
+
+    with pytest.raises(AuthError):
+        KimiAnthropicProvider()
+
+
+def test_kimi_anthropic_default_base_url(monkeypatch):
+    from butterfly.llm_engine.providers.anthropic import AnthropicProvider
+    from butterfly.llm_engine.providers.kimi import (
+        KimiAnthropicProvider,
+        _KIMI_ANTHROPIC_BASE_URL,
+    )
+
+    monkeypatch.delenv("KIMI_BASE_URL", raising=False)
+    captured: dict[str, object] = {}
+
+    def _fake_init(self, *, api_key=None, max_tokens=8096, base_url=None, default_headers=None):
+        captured["base_url"] = base_url
+
+    monkeypatch.setattr(AnthropicProvider, "__init__", _fake_init)
+    KimiAnthropicProvider(api_key="k")
+    assert captured["base_url"] == _KIMI_ANTHROPIC_BASE_URL
+
+
+def test_registry_opt_in_key_resolves_to_anthropic(monkeypatch):
+    from butterfly.llm_engine.providers.kimi import KimiAnthropicProvider
+    from butterfly.llm_engine.registry import resolve_provider
+
+    monkeypatch.setenv("KIMI_FOR_CODING_API_KEY", "fake")
+    p = resolve_provider("kimi-coding-plan-anthropic")
+    assert isinstance(p, KimiAnthropicProvider)

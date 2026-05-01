@@ -93,4 +93,4 @@ ui/web/frontend/src/components/panel.ts# bg task / sub-agent panel
 ui/web/frontend/src/components/header.ts, sidebar.ts  # HUD chrome
 ```
 
-The previous unified-Card / single-reducer architecture has been rolled back in favour of restoring the pre-#57 multi-event cell pairings. The data layer (events_v1.jsonl, runtime.io) remains the new design; only the presentation seam was reverted.
+The frontend uses per-cell multi-event pairings (keyed by `tool_use_id` and `block_id`); the data layer is the unified events_v1.jsonl + runtime.io surface.

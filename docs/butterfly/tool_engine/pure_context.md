@@ -5,9 +5,7 @@ ANSI escapes, control characters, prompt fragments) and yield **clean
 text** for the LLM. Shared trait: `strip_ansi()` in
 `butterfly/tool_engine/executor/pure_context/base.py`.
 
-Current members: **`terminal_create`** + **`terminal_use`** (v2.0.33 split
-out of a single `session_shell` tool — the fused shape's `reset` param
-shadowed the first real command with `[shell reset]\n[exit 0]`).
+Current members: **`terminal_create`** + **`terminal_use`**.
 
 ## `terminal_create` + `terminal_use` — persistent pty-backed bash
 
@@ -72,9 +70,8 @@ exported into the env. Semantics unchanged from the pre-pty code.
 The pty is multi-homed: the agent calls it via the two tool verbs, and
 the web user can also type into it. The Session owns one
 `TerminalExecutor` — `ToolLoader` re-uses this across capability
-reloads (the pre-v2.0.30 loader recreated the executor per reload,
-which meant shell state didn't even persist across ticks) and dispatches
-both `terminal_create` → `.create()` and `terminal_use` → `.use()`
+reloads so shell state persists across ticks, and dispatches both
+`terminal_create` → `.create()` and `terminal_use` → `.use()`
 against the same instance.
 
 ### Files under `sessions/<id>/core/terminal/`
@@ -94,14 +91,12 @@ against the same instance.
   Writers go through `runtime.io.terminal_input` / `terminal_interrupt`,
   which append a `terminal_input` event to `events_v1.jsonl` first and
   then enqueue the entry on `input.jsonl` for the executor to consume
-  (the queue file is the effective channel today; Phase 11 will retire
+  (the queue file is the effective channel today; future work: retire
   it once `TerminalExecutor` watches `events_v1` natively). The session
   daemon polls `input.jsonl` at 50 ms and forwards entries to
   `TerminalExecutor.user_input` / `.user_interrupt`. On daemon restart
   `terminal_input_offset` is seeded at the current file size so
-  historical queued entries are never replayed (that bug shipped briefly
-  in v2.0.33 — every server restart re-ran the full shell history as
-  tool output).
+  historical queued entries are never replayed.
 - `snapshot.json` — written on idle-close (§ Idle close). Fields:
   `{ts, cwd}`.
 
@@ -162,5 +157,4 @@ On each accepted `user_input`:
 
 The agent picks the entry up at its next natural break (new LLM call)
 without being preempted — consistent with how `bash(run_in_background=true)`
-notifications flow. (Legacy `context.jsonl` is still dual-written during
-the Phase 11 transition; new code reads from `events_v1.jsonl`.)
+notifications flow.

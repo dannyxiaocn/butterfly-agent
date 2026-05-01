@@ -1,58 +1,15 @@
-"""Phase 3a — dual-write pins.
+"""Per-emit-site dual-write pins.
 
-Every legacy ``events.jsonl`` / ``context.jsonl`` emit site in
-``butterfly/session_engine/session.py`` is mirrored by a call to
-``Session._emit_event`` which appends a schema-v1 event into
-``events_v1.jsonl`` (the new-format log that becomes authoritative in
-Phase 3b). These tests exercise each category and assert both logs got
-content so a later accidental revert — or a new emit site missing its
-mirror — fails here first.
+Every legacy `events.jsonl` / `context.jsonl` emit site in
+`butterfly/session_engine/session.py` is mirrored by a call to
+`Session._emit_event` which appends a schema-v1 event into
+`events_v1.jsonl`. These tests exercise each category and assert both
+logs got content so a later accidental revert — or a new emit site
+missing its mirror — fails here first.
 
-Emit-site inventory (for Phase 3b reference — file:line as of commit
-before 3a dual-write landed):
-
-  session.py:~420   _emit_task_change        → task_card_changed
-  session.py:~442   _emit_todo_list_change   → todo_list_changed
-  session.py:~623   _persist_card_transition → task_card_changed
-  session.py:~673   _poll_card_script        → task_check (+ optional error)
-  session.py:~700   _poll_card_script [done] → task_card_changed
-  session.py:~853   _prune_queue_for_task    → task_queue_pruned (no v1 map)
-  session.py:~1160  _do_tick                 → task_wakeup (context) ↦ user_input
-  session.py:~1281  _do_tick SESSION_FINISHED→ task_finished
-  session.py:~1555  daemon resume from stop  → status=resumed ↦ session_started
-  session.py:~1588  daemon 5h auto-expire    → status=auto-expired ↦ session_started
-  session.py:~1633  daemon cancelled         → status=cancelled ↦ session_stopped
-  session.py:~1641  daemon stopped normally  → status=stopped ↦ session_stopped
-  session.py:~1682  _handle_explicit_interrupt→ interrupted ↦ user_interrupt(None)
-  session.py:~1743  _shutdown_background_man → error
-  session.py:~1760  _shutdown_terminal       → error
-  session.py:~1863+ _dispatch_terminal_input → terminal_rejected / user_input (context)
-  session.py:~2041  _drain_background_events → panel_update ↦ panel_entry_changed
-                                              ↦ user_input (sub_agent/cli source)
-  session.py:~2058  bg progress              → tool_progress
-  session.py:~2105  bg finalize              → tool_finalize ↦ agent_tool_result
-  session.py:~2114  _set_model_status        → model_status
-  session.py:~2148  on_tool_call             → tool_call ↦ agent_tool_call
-  session.py:~2226  on_tool_done             → tool_done ↦ agent_tool_result
-  session.py:~2283  _emit_sub_agent_count    → sub_agent_count
-  session.py:~2297  loop_start               → (not mirrored; retired §3.6)
-  session.py:~2316  loop_end                 → (not mirrored; retired §3.6)
-  session.py:~2370  llm_call_end             → llm_call_usage
-  session.py:~2402  agent_output_done        → (retired §3.6)
-  session.py:~2499  todo-reminder-injected   → todo_list_changed
-  session.py:~2526  version notice           → system_notice
-  session.py:~2624  on_thinking_start        → thinking_start (retired §3.6)
-  session.py:~2639  on_thinking_end          → thinking_done ↦ agent_thinking
-  session.py:~2734  on_chunk first           → agent_output_start (retired §3.6)
-  session.py:~2739  on_chunk 150-char flush  → partial_text (retired §3.6)
-  session.py:~2748  on_chunk final flush     → partial_text (retired §3.6)
-  (new)             flush drain              ↦ agent_text
-  (new)             llm_call_end drain       ↦ agent_text
-
-Notes (see DESIGN.md §3.6): we deliberately DO NOT dual-write
-``partial_text`` / ``agent_output_start`` / ``agent_output_done`` /
-``thinking_start`` / ``iteration_usage`` / ``loop_start`` / ``loop_end``
-— those are the retired types.
+Retired event types (`partial_text`, `agent_output_start`,
+`agent_output_done`, `thinking_start`, `iteration_usage`, `loop_start`,
+`loop_end`) are deliberately NOT dual-written.
 """
 from __future__ import annotations
 
