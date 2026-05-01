@@ -197,9 +197,14 @@ async def test_detect_env_reports_git_dirty_flag(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     # A known-clean repo: init, configure identity, empty initial commit.
+    # ``commit.gpgsign=false`` and ``tag.gpgsign=false`` neutralise any
+    # ambient global config (CI hosts that force-sign every commit) so
+    # this fixture is reproducible regardless of host policy.
     _sp.check_call(["git", "init", "-q"], cwd=repo)
     _sp.check_call(["git", "config", "user.email", "t@e.x"], cwd=repo)
     _sp.check_call(["git", "config", "user.name", "t"], cwd=repo)
+    _sp.check_call(["git", "config", "commit.gpgsign", "false"], cwd=repo)
+    _sp.check_call(["git", "config", "tag.gpgsign", "false"], cwd=repo)
     _sp.check_call(
         ["git", "commit", "--allow-empty", "-q", "-m", "init"], cwd=repo
     )

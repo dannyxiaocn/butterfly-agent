@@ -1,6 +1,8 @@
 """Tests for butterfly.session_engine.task_runner (single-script execution)."""
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from butterfly.session_engine.task_runner import run_script
@@ -8,6 +10,31 @@ from butterfly.session_engine.task_runner import run_script
 
 def _write(path, body: str) -> None:
     path.write_text("#!/bin/bash\n" + body + "\n", encoding="utf-8")
+
+
+def _is_alive(pid: int) -> bool:
+    """Return True only if ``pid`` is a live (non-zombie) process.
+
+    ``os.kill(pid, 0)`` returns success for zombies too, so on hosts
+    where PID 1 doesn't reap orphans (minimal containers without
+    systemd/tini) a SIGKILL'd descendant looks "alive" forever via the
+    bare probe. We additionally consult ``/proc/<pid>/stat`` and treat
+    state ``Z`` as dead — the kill succeeded; only the parent's wait()
+    is missing.
+    """
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    try:
+        with open(f"/proc/{pid}/stat", "r") as f:
+            stat = f.read()
+    except FileNotFoundError:
+        return False
+    # comm is wrapped in parens and may contain spaces/parens itself —
+    # split on the LAST ')' to land on the state field cleanly.
+    state = stat.rsplit(")", 1)[1].split()[0]
+    return state != "Z"
 
 
 @pytest.mark.asyncio
@@ -112,11 +139,11 @@ async def test_timeout_kills_descendants(tmp_path, monkeypatch):
     await run_script(script, cwd=tmp_path)
     assert sentinel.exists(), "test harness failed to capture child PID"
     child_pid = int(sentinel.read_text().strip())
-    # Give the kernel a moment to reap the group.
+    # Give the kernel a moment to reap the group. ``_is_alive`` treats
+    # zombies as dead so this still works on hosts whose PID 1 doesn't
+    # reap orphans (CI containers without an init).
     for _ in range(20):
-        try:
-            os.kill(child_pid, 0)  # probe
-        except ProcessLookupError:
+        if not _is_alive(child_pid):
             return  # success — process group died with parent
         await _asyncio.sleep(0.05)
     # Best-effort cleanup if the assertion is about to fail.

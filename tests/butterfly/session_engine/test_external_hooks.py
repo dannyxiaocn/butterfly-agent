@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import os
+
 import pytest
 
 from butterfly.session_engine.external_hooks import (
@@ -14,6 +16,26 @@ from butterfly.session_engine.external_hooks import (
 def _prep(hook_dir, event: str, body: str) -> None:
     (hook_dir / event).mkdir(parents=True, exist_ok=True)
     main_script_path(hook_dir, event).write_text(f"#!/bin/bash\n{body}\n", encoding="utf-8")
+
+
+def _is_alive(pid: int) -> bool:
+    """Return True only if ``pid`` is a live (non-zombie) process.
+
+    See ``test_task_runner._is_alive`` for the rationale: on hosts where
+    PID 1 doesn't reap orphans, SIGKILL'd descendants linger as zombies
+    and the bare ``os.kill(pid, 0)`` probe misreads them as alive.
+    """
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    try:
+        with open(f"/proc/{pid}/stat", "r") as f:
+            stat = f.read()
+    except FileNotFoundError:
+        return False
+    state = stat.rsplit(")", 1)[1].split()[0]
+    return state != "Z"
 
 
 async def _collect(events_list):
@@ -162,10 +184,9 @@ async def test_hook_timeout_kills_descendants(tmp_path, monkeypatch):
     assert events[0].get("timed_out") is True
     assert sentinel.exists(), "test harness failed to capture child PID"
     child_pid = int(sentinel.read_text().strip())
+    # Treat zombies as dead — see ``_is_alive`` docstring.
     for _ in range(20):
-        try:
-            os.kill(child_pid, 0)
-        except ProcessLookupError:
+        if not _is_alive(child_pid):
             return
         await _asyncio.sleep(0.05)
     try:
