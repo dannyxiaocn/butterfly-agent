@@ -1,30 +1,24 @@
-"""Phase 3b pins — events_v1.jsonl as the LLM context source.
+"""events_v1.jsonl as the LLM context source.
 
-Phase 3a (commit a59008b) wired every Session emit site to mirror into
-``events_v1.jsonl`` alongside the legacy ``context.jsonl`` /
-``events.jsonl`` writes. Phase 3b flips the read path: every tick
-rebuilds ``_agent._history`` from events_v1 so the event log is the
-single source of truth for LLM context (DESIGN.md §2 I3).
+`Session._rebuild_history_from_events` produces the same messages as
+`build_llm_context(read_events(session_dir))`, and `load_history()` is a
+thin wrapper that populates `_agent._history` from events_v1.
 
 These tests pin:
 
-- ``_rebuild_history_from_events`` produces the same messages as
-  ``build_llm_context(read_events(session_dir))``, modulo the
-  ``core.types.Message`` coercion.
-- ``load_history()`` is now a thin wrapper over the rebuild — it
-  populates ``_agent._history`` from events_v1.
-- Rebuild is resilient: empty events file → ``_history = []``; cancelled
-  run (partial events only) → rebuild reflects whatever events_v1 has.
-- The F1-F4 asymmetry fixes hold:
-    * F1 — no placeholder EVENT_AGENT_TOOL_RESULT when is_background=True
-    * F2 — EVENT_AGENT_TOOL_RESULT / EVENT_TOOL_PROGRESS carry the
-      ORIGINATING tool_use_id, not the tid
-    * F3 — EVENT_MODEL_STATUS carries the agent's model name
-    * F4 — EVENT_AGENT_THINKING emitted with interrupted=True when the
-      run is cancelled mid-thought
+- Rebuild parity with the pure builder (modulo `core.types.Message` coercion).
+- Rebuild resilience: empty events file → `_history = []`; cancelled run
+  (partial events only) → rebuild reflects whatever events_v1 has.
+- Per-emit invariants:
+    * No placeholder EVENT_AGENT_TOOL_RESULT when `is_background=True`.
+    * EVENT_AGENT_TOOL_RESULT / EVENT_TOOL_PROGRESS carry the originating
+      `tool_use_id`, not the bg `tid`.
+    * EVENT_MODEL_STATUS carries the agent's model name.
+    * EVENT_AGENT_THINKING is emitted with `interrupted=True` when the
+      run is cancelled mid-thought.
 
-Does NOT cover end-to-end Agent.run against a real provider — that lives
-in ``test_session_dual_emit.py`` for the per-emit assertions.
+Per-emit-site mirroring (legacy dual-write) is covered in
+`test_session_emit_sites.py`.
 """
 from __future__ import annotations
 

@@ -1,8 +1,4 @@
-"""PR #19 review coverage: tool_output tool (happy path + path-traversal guard).
-
-Includes a confirmed cubic P1 finding: `tool_output(task_id="../evil")` lets
-the caller read panel JSON files outside the session's panel directory.
-"""
+"""tool_output tool — happy path + path-traversal guard."""
 from __future__ import annotations
 
 import json

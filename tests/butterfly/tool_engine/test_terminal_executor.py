@@ -1,10 +1,4 @@
-"""PR #19 review coverage + v2.0.34 split: persistent TerminalExecutor.
-
-Filename retained for git-blame continuity; the tool surface is now
-``terminal_create`` + ``terminal_use`` (see docs/butterfly/tool_engine/
-pure_context.md for the split rationale — v2.0.33 ``session_shell``
-collapsed "open" and "run" into one verb, which swallowed the first
-command when ``reset=true`` was passed)."""
+"""Persistent TerminalExecutor — `terminal_create` + `terminal_use`."""
 from __future__ import annotations
 
 import sys

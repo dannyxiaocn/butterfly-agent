@@ -1,23 +1,14 @@
-"""PR #28 second-round review: Guardian wired through ALL shell paths.
+"""Guardian wired through ALL shell paths.
 
-The first round shipped a Guardian for inline ``bash`` / ``write`` / ``edit``
-but missed two ways an explorer-mode child could still escape:
-
-  - Bug #4: ``terminal_use`` (persistent shell) ran with the session's
-    own workdir, ignoring the Guardian boundary.
-  - Bug #5: background-mode ``bash`` (``run_in_background=true``) routed
-    through ``BashRunner`` which read ``input["workdir"]`` without
-    consulting the Guardian.
-
-Plus two UX gaps:
-
-  - Gap #6: A sub-agent child had no easy hand-off to the parent's
-    playground (the parent's working files were unreachable without an
-    absolute-path read).
-  - Gap #7: HUD ``⚙ N sub-agents running`` count was lost on page
-    refresh because the SSE stream only re-broadcasts on state change.
-
-These tests pin the post-fix invariants.
+- Background-mode `bash` (`BashRunner`) honours the Guardian: cwd pinned to
+  guardian root, `BUTTERFLY_GUARDIAN_ROOT` exported, caller-supplied workdir
+  outside the boundary is ignored.
+- Persistent terminal (`terminal_create` + `terminal_use`) honours the
+  Guardian the same way.
+- Sub-agent child sees the parent's playground via a `playground/parent`
+  symlink (read-through), but Guardian still blocks writes through it.
+- HUD endpoint reports `sub_agents_running` derived from on-disk panel
+  entries (so the badge survives a page refresh).
 """
 from __future__ import annotations
 

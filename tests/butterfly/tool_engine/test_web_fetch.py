@@ -1,4 +1,4 @@
-"""PR #19 review coverage: web_fetch executor (happy path + SSRF guard)."""
+"""web_fetch executor (happy path + SSRF guard)."""
 from __future__ import annotations
 
 import os

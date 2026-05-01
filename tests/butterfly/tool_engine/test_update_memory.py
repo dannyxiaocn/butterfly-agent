@@ -1,11 +1,4 @@
-"""PR #19 review coverage: memory_update executor + main-memory index sync.
-
-Checks:
-- Creation writes sub-memory and upserts index line.
-- Edit syncs/upserts index line (only when description is provided).
-- Path-traversal attempts are rejected.
-- Main memory missing → tool creates index section.
-"""
+"""memory_update executor — sub-memory + main-memory index sync, path-traversal guard."""
 from __future__ import annotations
 
 from pathlib import Path

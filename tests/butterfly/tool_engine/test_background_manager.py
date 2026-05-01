@@ -1,4 +1,4 @@
-"""PR #19 review coverage: BackgroundTaskManager round-trip + events."""
+"""BackgroundTaskManager — round-trip + events."""
 from __future__ import annotations
 
 import asyncio

@@ -15,13 +15,15 @@ from butterfly.service.models_service import get_models_catalog
 def test_every_registry_provider_has_ui_metadata():
     """Every key in the provider registry must appear in the UI catalog.
 
-    The one documented exception is the opt-in ``kimi-coding-plan-anthropic``
-    alias, which exists only for callers who need the Anthropic-shape usage
-    fields and is intentionally hidden from the UI dropdown.
+    Documented exceptions are the opt-in Anthropic-compat aliases
+    (``kimi-coding-plan-anthropic``, ``deepseek-anthropic``), which exist
+    only for callers who need the Anthropic-shape messages/usage fields
+    and are intentionally hidden from the UI dropdown — see the comments
+    next to each entry in ``butterfly/llm_engine/registry.py``.
     """
     catalog = get_models_catalog()
     exposed = {p["provider"] for p in catalog["providers"]}
-    hidden_by_design = {"kimi-coding-plan-anthropic"}
+    hidden_by_design = {"kimi-coding-plan-anthropic", "deepseek-anthropic"}
     missing = set(_REGISTRY) - exposed - hidden_by_design
     assert not missing, (
         f"Providers registered in _REGISTRY but absent from the UI catalog: "

@@ -1,12 +1,10 @@
-"""PR #19 review coverage: agent `_execute_tools` routing of backgroundable calls.
+"""Agent `_execute_tools` routing of backgroundable calls.
 
-- When `run_in_background=true` on a backgroundable tool AND a `background_spawn`
-  is configured, the tool's real executor MUST NOT be called; a placeholder
-  result with the `task_id` is returned instead.
-- When `run_in_background=true` but no spawner is wired, the agent falls back
-  to synchronous execution. Control-only kwargs (`run_in_background`,
-  `polling_interval`) leak into the tool call in this path — today bash
-  tolerates unknown kwargs but that's an implicit contract worth pinning.
+- `run_in_background=true` + `background_spawn` configured: the tool's real
+  executor MUST NOT be called; a placeholder result with `task_id` is returned.
+- `run_in_background=true` without a spawner: falls back to synchronous
+  execution. Control-only kwargs (`run_in_background`, `polling_interval`)
+  leak into the tool call; bash tolerates unknown kwargs.
 """
 from __future__ import annotations
 

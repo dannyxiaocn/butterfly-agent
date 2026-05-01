@@ -54,3 +54,17 @@ class AgentLoaderUnitTests(unittest.TestCase):
             agent = AgentLoader().load(agent_dir)
         self.assertEqual(agent.task_prompt, "task prompt")
         self.assertEqual(agent.env_template, "env template")
+
+
+# ── Smoke: real agenthub/ agents load without error ──────────────────────
+
+
+def test_active_agenthub_agents_load_without_errors() -> None:
+    """The agents shipped under agenthub/ load via AgentLoader."""
+    from conftest import REPO_ROOT
+
+    agent_root = REPO_ROOT / "agenthub"
+    loader = AgentLoader()
+    for agent in ("agent", "butterfly_dev"):
+        loaded = loader.load(agent_root / agent)
+        assert loaded.model

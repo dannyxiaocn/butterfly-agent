@@ -1,4 +1,4 @@
-"""PR #19 review coverage: glob + grep executors."""
+"""glob + grep executors."""
 from __future__ import annotations
 
 from pathlib import Path

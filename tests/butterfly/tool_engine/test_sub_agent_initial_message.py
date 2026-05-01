@@ -1,12 +1,4 @@
-"""PR #28 review findings — executable regressions pinning the bugs.
-
-Each test in this file asserts the CURRENT (buggy) behaviour or the
-EXPECTED (post-fix) behaviour; the docstring of each test states which.
-If these tests go red after a real fix, update the assertions accordingly.
-
-Scope: correctness issues in the v2.0.13 sub_agent feature that the
-existing structural tests do not cover.
-"""
+"""sub_agent — initial_message handoff + tid parsing + lifecycle correctness."""
 from __future__ import annotations
 
 import asyncio

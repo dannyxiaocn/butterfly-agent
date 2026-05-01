@@ -1,20 +1,12 @@
-"""Regression tests for the four bugs flagged in PR #58 review.
+"""TeamSession recipient resolution + WorkflowRunner kill semantics.
 
-These pin the post-fix behaviour so the bugs don't reappear:
-
-  1. ``TeamSession._pick_recipient`` uses case-insensitive lookup +
-     reuses ``parse_mentions`` so `@CODER` routes to ``coder`` and
-     ``boss@coder.com`` does NOT route to anyone.
-  2. (covered alongside #1)
-  3. ``TeamSession.run_daemon_loop`` rewinds to byte 0 on fresh team
-     sessions so an ``initial_message`` written by
-     ``init_team_session`` lands.
-  4. ``WorkflowRunner`` re-checks the panel entry each iteration and
-     breaks the loop when ``kill()`` flips it terminal.
-
-PR #60's ``test_team_router.py`` carries `@unittest.expectedFailure`
-markers documenting the bugs prior to the fix; the equivalent
-post-fix behaviour is locked down here.
+- `TeamSession._pick_recipient`: case-insensitive lookup, ignores email
+  addresses, falls back to leader for `@all` and unparseable mentions.
+- `TeamSession.run_daemon_loop`: rewinds to byte 0 on fresh team sessions
+  so an `initial_message` written by `init_team_session` lands; resumes at
+  EOF when `events.jsonl` is non-empty so old inputs don't re-route.
+- `WorkflowRunner`: re-checks the panel entry each iteration and aborts
+  when `kill()` flips it terminal.
 """
 from __future__ import annotations
 

@@ -6,7 +6,7 @@ Butterfly is a file-backed Python agent runtime. The design follows these princi
 2. **Engines fill the loop's slots** — `llm_engine` → Provider, `tool_engine` → Tools, `skill_engine` → Skills, `session_engine` → Session wrapping the agent loop.
 3. **`runtime/` is the central coordinator** — watches sessions on disk, starts daemons, provides file-based IPC.
 4. **`agenthub/` is assets** — read-only config (prompts, tools, skills) seeded into sessions at creation.
-5. **Filesystem as agent's backend** — agents read/write their session dir; the daemon, the web UI, and the CLI all communicate through one append-only event log: `_sessions/<id>/events_v1.jsonl`. See [`runtime/events.md`](runtime/events.md) for the schema and [`runtime/io.md`](runtime/io.md) for the only read/write surface. No sockets, no databases. (Legacy `context.jsonl` + `events.jsonl` are still dual-written during the Phase 11 transition; new code MUST NOT consume them.)
+5. **Filesystem as agent's backend** — agents read/write their session dir; the daemon, the web UI, and the CLI all communicate through one append-only event log: `_sessions/<id>/events_v1.jsonl`. See [`runtime/events.md`](runtime/events.md) for the schema and [`runtime/io.md`](runtime/io.md) for the only read/write surface. No sockets, no databases.
 6. **CLI is the primary user interface**.
 ## Layer Diagram
 
