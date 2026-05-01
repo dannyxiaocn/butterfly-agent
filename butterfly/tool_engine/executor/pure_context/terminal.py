@@ -856,7 +856,13 @@ class TerminalExecutor:
         e_idx = text.find(end, s_idx + 1 if s_idx >= 0 else 0)
         if s_idx < 0 or e_idx < 0:
             return null_fp
-        body = text[s_idx + len(start):e_idx].strip("\n")
+        # `printf "{start}\\n"` emits a newline immediately after the
+        # marker; skip that one specifically so an empty leading field
+        # (e.g. no venv set) doesn't get stripped and slide every
+        # subsequent field up by one.
+        body = text[s_idx + len(start):e_idx]
+        if body.startswith("\n"):
+            body = body[1:]
         lines = body.splitlines()
         venv = lines[0].strip() if len(lines) >= 1 else ""
         cwd = lines[1].strip() if len(lines) >= 2 else ""
