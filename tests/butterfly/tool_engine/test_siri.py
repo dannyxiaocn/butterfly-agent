@@ -63,16 +63,35 @@ def test_tool_agent_pins_kimi_for_coding() -> None:
     assert "agent: tool_agent" in text
 
 
+def _tool_agent_tools() -> set[str]:
+    raw = (_AGENT_DIR / "tools.md").read_text(encoding="utf-8").splitlines()
+    return {t.strip() for t in raw if t.strip() and not t.strip().startswith("#")}
+
+
 def test_tool_agent_does_not_recurse() -> None:
     """tool_agent must NOT list siri / subagent_new / workflow in its tool
     set — otherwise it could fork another sub-session and we lose the
     "leaf executor" contract the system prompt promises."""
-    tools = (_AGENT_DIR / "tools.md").read_text(encoding="utf-8").splitlines()
-    enabled = {t.strip() for t in tools if t.strip() and not t.strip().startswith("#")}
+    enabled = _tool_agent_tools()
     forbidden = {"siri", "subagent_new", "workflow"}
     assert enabled.isdisjoint(forbidden), (
         f"tool_agent tools.md must not include {sorted(enabled & forbidden)} — "
         "tool_agent is the leaf executor of the siri chain."
+    )
+
+
+def test_tool_agent_has_minimum_leaf_capabilities() -> None:
+    """Pair the negative recursion guard with a positive assertion: the
+    leaf agent must keep enough basic tools to actually do real work
+    (read/write files, run shell commands, search the tree). Catches
+    accidental deletion of the executor's hands."""
+    enabled = _tool_agent_tools()
+    required = {"bash", "read", "write", "edit", "grep"}
+    missing = required - enabled
+    assert not missing, (
+        f"tool_agent tools.md is missing required leaf-executor tools: "
+        f"{sorted(missing)}. Without these the agent can't act on most "
+        "natural-language requests routed through siri."
     )
 
 
@@ -94,7 +113,6 @@ def test_default_name_collapses_whitespace_and_caps_length() -> None:
     assert name == "do thing X"
     big = _default_name("x" * 200)
     assert len(big) <= 40
-    assert _default_name("") == "siri"
 
 
 def test_compose_task_includes_request_and_terminator_hint() -> None:
@@ -200,6 +218,23 @@ def test_runner_validate_requires_request() -> None:
     with pytest.raises(ValueError, match="request"):
         runner.validate({"request": "   "})
     runner.validate({"request": "do something"})  # ok
+
+
+def test_runner_validate_rejects_bad_name_at_submit_time() -> None:
+    """Mirror SubAgentRunner.validate: caller-supplied ``name`` is shape-
+    checked at submit time so a bad value fails fast on the queue, not
+    later inside _rewrite() when run() finally fires."""
+    runner = SiriRunner(
+        parent_session_id="p",
+        sessions_base=Path("/tmp"),
+        system_sessions_base=Path("/tmp"),
+        agent_base=Path("/tmp"),
+    )
+    with pytest.raises(ValueError, match="name"):
+        runner.validate({"request": "x", "name": ""})
+    with pytest.raises(ValueError, match="name"):
+        runner.validate({"request": "x", "name": 123})
+    runner.validate({"request": "x", "name": "ok"})  # ok
 
 
 def test_runner_rewrite_pins_agent_and_mode() -> None:

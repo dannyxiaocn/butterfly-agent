@@ -15,7 +15,7 @@
         "description": "Optional short label (≤ 40 chars) shown as the sub-session title in the sidebar. Defaults to the first ~40 chars of `request`."
       },
       "timeout_seconds": {
-        "type": "number",
+        "type": "integer",
         "description": "Maximum wall-time to wait for the child to reply (default 600s, minimum 30s). On timeout the child keeps running — open it in the sidebar to see progress."
       }
     }

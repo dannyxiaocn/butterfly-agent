@@ -38,8 +38,7 @@ _NAME_FALLBACK_LEN = 40
 
 
 def _default_name(request: str) -> str:
-    trimmed = " ".join(request.split())[:_NAME_FALLBACK_LEN].strip()
-    return trimmed or "siri"
+    return " ".join(request.split())[:_NAME_FALLBACK_LEN].strip()
 
 
 def _compose_task(request: str) -> str:
@@ -151,10 +150,13 @@ class SiriRunner:
         return out
 
     def validate(self, input: dict[str, Any]) -> None:
-        # Bare-bones: ``request`` must be a non-empty string. The
-        # downstream SubAgentRunner.validate then re-checks the rewritten
-        # task/mode/name shape, so any further surprises surface there.
+        # Mirror SubAgentRunner.validate's submit-time strictness: check
+        # ``request`` shape AND any caller-supplied ``name``. The runner-side
+        # rewrite would catch a bad name eventually, but only at run-time —
+        # validating here surfaces the failure when the task is queued.
         _validate_request(input.get("request"))
+        if input.get("name") is not None:
+            _validate_name(input["name"])
 
     async def run(
         self,

@@ -3,8 +3,6 @@ version: "1.0.0"
 description: Lightweight tool-execution sub-agent. Receives a natural-language request via the `siri` tool, picks the right tool calls, runs them, and reports back.
 model: kimi-for-coding
 provider: kimi-coding-plan
-fallback_model: kimi-for-coding
-fallback_provider: kimi-coding-plan
 max_iterations: 50
 thinking: false
 prompts:
