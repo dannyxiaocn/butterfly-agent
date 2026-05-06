@@ -1,0 +1,9 @@
+bash
+read
+write
+edit
+glob
+grep
+web_search_brave
+web_fetch
+tool_output

@@ -1,0 +1,23 @@
+{
+  "name": "siri",
+  "description": "Natural-language tool dispatch. Describe in one sentence what you want done with the available tools (e.g. \"grep TODO under src/ and write the count to playground/todo_count.txt\") and a sub-session running the lightweight `tool_agent` (powered by a weak model, kimi-for-coding) will pick the tool calls, execute them, and return a short report of WHAT it did plus the actual tool-call OUTPUT. The parent only sees the child's final reply — intermediate tool calls and thinking stay in the child session (open it from the sidebar to inspect). Use this to offload concrete, bounded \"do X with the tools\" chores so your own context stays focused on the high-level task. Backgroundable: set `run_in_background=true` to fire-and-forget while you continue working.",
+  "backgroundable": true,
+  "input_schema": {
+    "type": "object",
+    "required": ["request"],
+    "properties": {
+      "request": {
+        "type": "string",
+        "description": "Plain-English description of the tool action(s) to perform. Be specific about file paths, commands, or URLs. The child agent will pick which tools to call."
+      },
+      "name": {
+        "type": "string",
+        "description": "Optional short label (≤ 40 chars) shown as the sub-session title in the sidebar. Defaults to the first ~40 chars of `request`."
+      },
+      "timeout_seconds": {
+        "type": "number",
+        "description": "Maximum wall-time to wait for the child to reply (default 600s, minimum 30s). On timeout the child keeps running — open it in the sidebar to see progress."
+      }
+    }
+  }
+}

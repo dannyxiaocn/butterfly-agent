@@ -22,3 +22,4 @@ todo_list
 subagent_new
 subagent_list
 subagent_resume
+siri

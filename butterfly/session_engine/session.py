@@ -370,6 +370,18 @@ class Session:
             agent_base=self._base_dir.parent / "agenthub",
         ))
 
+        # Siri runner: backgrounded ``siri`` calls flow through the same
+        # plumbing as sub_agent. ``SiriRunner`` rewrites the ``request``
+        # input into the sub_agent shape and delegates to ``SubAgentRunner``,
+        # so each call still appears as its own child-session card.
+        from butterfly.tool_engine.siri import SiriRunner
+        self._bg_manager.register_runner("siri", SiriRunner(
+            parent_session_id=self._session_id,
+            sessions_base=self._base_dir,
+            system_sessions_base=self._system_base,
+            agent_base=self._base_dir.parent / "agenthub",
+        ))
+
     # ── Capability loading ─────────────────────────────────────────
 
     def _read_core_text(self, name: str) -> str:
