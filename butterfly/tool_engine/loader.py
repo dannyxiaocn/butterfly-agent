@@ -288,6 +288,22 @@ class ToolLoader:
                     return await executor.execute(**kwargs)
                 return _impl
 
+        elif tool_name == "siri":
+            # Same context shape as subagent_new / workflow: siri spawns a
+            # child session running the ``tool_agent`` agent (pinned to
+            # ``kimi-for-coding``) and returns its final reply.
+            executor_cls = getattr(mod, "SiriExecutor", None)
+            if executor_cls:
+                executor = executor_cls(
+                    parent_session_id=self._parent_session_id,
+                    sessions_base=self._sessions_base,
+                    system_sessions_base=self._system_sessions_base,
+                    agent_base=self._agent_base,
+                )
+                async def _impl(**kwargs: Any) -> str:
+                    return await executor.execute(**kwargs)
+                return _impl
+
         elif tool_name == "subagent_resume":
             executor_cls = getattr(mod, "SubAgentResumeTool", None)
             if executor_cls:
