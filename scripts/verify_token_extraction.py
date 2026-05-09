@@ -1,6 +1,6 @@
 """Verify provider token extraction against live APIs.
 
-Runs Codex (gpt-5.4) and Kimi (kimi-for-coding) against a fixed short prompt,
+Runs Codex (gpt-5.5) and Kimi (kimi-for-coding) against a fixed short prompt,
 monkey-patches the extraction helpers to log the raw usage dict, and prints
 both raw-provider-shape and our TokenUsage-shape side-by-side so we can
 confirm input / output / cache_read / reasoning fields are extracted correctly.
@@ -122,7 +122,7 @@ async def main() -> None:
 
     try:
         codex_provider = CodexProvider()
-        tasks.append(("codex-oauth", codex_provider, "gpt-5.4"))
+        tasks.append(("codex-oauth", codex_provider, "gpt-5.5"))
     except Exception as e:
         print(f"[skip codex] {type(e).__name__}: {e}")
 
