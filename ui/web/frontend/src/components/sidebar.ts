@@ -58,9 +58,31 @@ export function createSidebar(): HTMLElement {
   function renderAgentOptions(): string {
     if (agentOptions === null) return '<option value="">Loading…</option>';
     if (!agentOptions.length) return '<option value="">(no agents found)</option>';
-    return agentOptions
-      .map(a => `<option value="${escHtml(a)}">${escHtml(a)}</option>`)
-      .join('');
+    // Entries whose name starts with `create_` are agenthub "creator" agents
+    // (e.g. `create_team`, `create_workflow`) — interactive sessions that
+    // interview the user and author a new team/workflow on disk. Group them
+    // at the top with a friendly "Create <thing>" label so they read like a
+    // session-type chooser rather than just another agent name.
+    const creators = agentOptions.filter(a => a.startsWith('create_'));
+    const regular = agentOptions.filter(a => !a.startsWith('create_'));
+    const opt = (a: string, label?: string) =>
+      `<option value="${escHtml(a)}">${escHtml(label ?? a)}</option>`;
+    const creatorLabel = (a: string) => {
+      const rest = a.slice('create_'.length).replace(/_/g, ' ');
+      return rest ? `Create ${rest}` : a;
+    };
+    const out: string[] = [];
+    if (creators.length) {
+      out.push('<optgroup label="Create new">');
+      for (const a of creators) out.push(opt(a, creatorLabel(a)));
+      out.push('</optgroup>');
+    }
+    if (regular.length) {
+      out.push('<optgroup label="Agents">');
+      for (const a of regular) out.push(opt(a));
+      out.push('</optgroup>');
+    }
+    return out.join('');
   }
 
   function updateAgentOptions() {
