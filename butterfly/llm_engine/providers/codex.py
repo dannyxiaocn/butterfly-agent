@@ -15,10 +15,11 @@ auto-refreshes the access token when it expires, and calls:
 The response format is the OpenAI Responses API over SSE, not Chat Completions.
 
 Behavioral notes (aligned with openai/codex rust CLI `codex-rs`):
-  * Default model is ``gpt-5.4``. (codex-rs defaults to ``gpt-5-codex``, but
+  * Default model is ``gpt-5.5``. (codex-rs defaults to ``gpt-5-codex``, but
     the ChatGPT-OAuth backend rejects ``gpt-5-codex`` with a 400
-    — confirmed by live test on 2026-04-15 — so we keep the legacy
-    working default here until the backend advertises support.)
+    — confirmed by live test on 2026-04-15 — so we pin to the latest
+    working ``gpt-5`` family release here until the backend advertises
+    support for the codex model IDs.)
   * When ``thinking=True`` we send ``include=["reasoning.encrypted_content"]``
     and re-echo reasoning items on subsequent turns so the server can retain
     chain-of-thought across turns.
@@ -145,9 +146,10 @@ class CodexProvider(Provider):
 
     _supports_thinking: ClassVar[bool] = True
     # ChatGPT-OAuth backend rejects "gpt-5-codex" with 400 as of 2026-04-15 even
-    # though codex-rs defaults to it — keep gpt-5.4 here until the backend
-    # supports codex model IDs. See docstring for details.
-    DEFAULT_MODEL: ClassVar[str] = "gpt-5.4"
+    # though codex-rs defaults to it — pin to gpt-5.5 (latest working gpt-5
+    # family release on the OAuth backend) until codex model IDs are
+    # supported. See docstring for details.
+    DEFAULT_MODEL: ClassVar[str] = "gpt-5.5"
 
     def __init__(self, max_tokens: int | None = None) -> None:
         # The ChatGPT-OAuth backend rejects ``max_output_tokens`` with HTTP

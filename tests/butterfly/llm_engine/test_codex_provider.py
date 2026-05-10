@@ -37,9 +37,10 @@ from butterfly.llm_engine.providers.codex import (
 
 def test_default_model_is_gpt5():
     # ChatGPT-OAuth backend rejects "gpt-5-codex" with 400 even though
-    # codex-rs defaults to it; we keep "gpt-5.4" until the backend supports
-    # the codex model IDs.
-    assert CodexProvider.DEFAULT_MODEL == "gpt-5.4"
+    # codex-rs defaults to it; we pin to "gpt-5.5" (latest working gpt-5
+    # family release on the OAuth backend) until the backend supports the
+    # codex model IDs.
+    assert CodexProvider.DEFAULT_MODEL == "gpt-5.5"
 
 
 def test_build_request_body_thinking_includes_encrypted_content():
