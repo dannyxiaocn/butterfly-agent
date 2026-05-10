@@ -15,16 +15,25 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 import os
 import struct
 import time
+import traceback
 import uuid
+from collections import deque
 from datetime import datetime
 from pathlib import Path
 
 import httpx
 from butterfly.service import send_message as service_send_message, start_session as service_start_session, stop_session as service_stop_session, wait_for_reply as service_wait_for_reply
+
+# Eagerly import session_init at module load so a missing/broken install
+# fails the web server at startup rather than after a partial /new succeeds —
+# ``create_session`` lazy-imports it inside the call, and intermittent import
+# errors there leak as opaque "No module named …" replies in WeChat.
+from butterfly.session_engine import session_init as _session_init  # noqa: F401
 
 _WEIXIN_STATE_DIR = Path.home() / ".openclaw" / "openclaw-weixin"
 _WEIXIN_ACCOUNTS_INDEX = _WEIXIN_STATE_DIR / "accounts.json"
@@ -34,6 +43,7 @@ _DEFAULT_BASE_URL = "https://ilinkai.weixin.qq.com"
 _CHANNEL_VERSION = "1.0.3"
 _LONG_POLL_TIMEOUT = 38.0   # slightly above server's 35-second timeout
 _REPLY_TIMEOUT = 120.0       # max seconds to wait for agent reply
+_DEDUPE_WINDOW = 64         # remember the last N message fingerprints
 
 
 def _is_meta_session_id(session_id: str | None) -> bool:
@@ -73,6 +83,12 @@ class WeixinBridge:
         self._lock = asyncio.Lock()                 # serialises send+wait pairs
         self._task: asyncio.Task | None = None
         self._pending: set[asyncio.Task] = set()
+        # Bounded ring of recently-seen message fingerprints. The ilink long-poll
+        # occasionally redelivers the same msg (cursor reset, network retry,
+        # parallel pollers): without dedup the same /new would fire create_session
+        # repeatedly, producing the "创建失败" duplicates we saw in the field.
+        self._seen_msgs: deque[str] = deque(maxlen=_DEDUPE_WINDOW)
+        self._seen_set: set[str] = set()
         self.status: str = "idle"
         self.error: str | None = None
 
@@ -243,7 +259,10 @@ class WeixinBridge:
                 self._current_session = sid
                 reply = f"✅ 新 session 已创建: {sid}\nAgent: {agent}"
             except Exception as exc:
-                reply = f"⚠️ 创建失败: {exc}"
+                # Print the full traceback to the web server log so an opaque
+                # "No module named …" reply on WeChat is debuggable post-hoc.
+                traceback.print_exc()
+                reply = f"⚠️ 创建失败: {type(exc).__name__}: {exc}"
 
         elif cmd == "/stop":
             if not self._current_session:
@@ -323,6 +342,36 @@ class WeixinBridge:
 
     # ── Message processing ────────────────────────────────────────────────────
 
+    def _msg_fingerprint(self, msg: dict) -> str:
+        """Stable hash of fields the WeChat API does *not* mutate on redelivery.
+
+        ``context_token`` rotates per-poll so it can't be part of the key;
+        ``from_user_id`` + ``item_list`` text content is what actually
+        identifies the user's send. Time bucketing protects against the rare
+        case of a user genuinely typing the same word twice in a row.
+        """
+        text = ""
+        for item in msg.get("item_list") or []:
+            if item.get("type") == 1:
+                text = ((item.get("text_item") or {}).get("text") or "")
+                break
+        bucket = int(time.time()) // 5  # 5-second window
+        h = hashlib.sha1()
+        h.update(f"{msg.get('from_user_id','')}|{text}|{bucket}".encode("utf-8", "replace"))
+        return h.hexdigest()
+
+    def _seen_or_record(self, fp: str) -> bool:
+        if fp in self._seen_set:
+            return True
+        self._seen_msgs.append(fp)
+        self._seen_set.add(fp)
+        # Trim the set to match the deque (deque auto-evicts oldest).
+        while len(self._seen_set) > len(self._seen_msgs):
+            # Rebuild from the current deque — cheap; deque is bounded.
+            self._seen_set = set(self._seen_msgs)
+            break
+        return False
+
     async def _process_message(self, client: httpx.AsyncClient, msg: dict) -> None:
         from_user = msg.get("from_user_id", "")
         ctx_token = msg.get("context_token")
@@ -393,6 +442,8 @@ class WeixinBridge:
                     for msg in data.get("msgs") or []:
                         if msg.get("message_type") == 2:  # skip bot's own messages
                             continue
+                        if self._seen_or_record(self._msg_fingerprint(msg)):
+                            continue  # ilink redelivery — already handled
                         task = asyncio.create_task(self._process_message(client, msg))
                         self._pending.add(task)
                         task.add_done_callback(self._pending.discard)
