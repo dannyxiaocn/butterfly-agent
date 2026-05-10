@@ -343,8 +343,6 @@ def test_read_config_happy_path(session_fs):
     assert cfg["agent"] == "agent"
     # Merged with DEFAULT_CONFIG.
     assert "max_iterations" in cfg
-    # is_meta_session flag surfaced (fixture sid does NOT end with _meta).
-    assert cfg["is_meta_session"] is False
 
 
 def test_read_prompt_happy_path(session_fs):

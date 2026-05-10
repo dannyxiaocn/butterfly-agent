@@ -7,7 +7,7 @@ from butterfly.session_engine.session_config import (
     read_config,
     write_config,
 )
-from .sessions_service import _validate_session_id, is_meta_session
+from .sessions_service import _validate_session_id
 
 # Whitelist of keys update_config_yaml / update_config will persist. Anything
 # else is silently dropped to prevent schema pollution through the network-
@@ -21,8 +21,7 @@ def get_config(session_id: str, sessions_dir: Path, system_sessions_dir: Path) -
     system_dir = system_sessions_dir / session_id
     if not system_dir.exists() or not session_dir.exists():
         raise FileNotFoundError(session_id)
-    cfg = read_config(session_dir)
-    return {**cfg, 'is_meta_session': is_meta_session(session_id)}
+    return read_config(session_dir)
 
 
 def update_config(session_id: str, sessions_dir: Path, system_sessions_dir: Path, params: dict) -> dict:
@@ -61,8 +60,7 @@ def update_config(session_id: str, sessions_dir: Path, system_sessions_dir: Path
             )
 
     write_config(session_dir, **params)
-    saved = read_config(session_dir)
-    return {**saved, 'is_meta_session': is_meta_session(session_id)}
+    return read_config(session_dir)
 
 
 # ── Per-file editors for tools.md / skills.md / prompts/*.md ──────────────────

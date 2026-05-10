@@ -1258,9 +1258,8 @@ class Session:
         interrupt-mode cancel hook (and ``_handle_explicit_interrupt``)
         could not reach an in-flight tick — interrupt-mode chats and the
         bare ⚡ Interrupt button silently queued behind task wakeups,
-        which bit hardest on meta sessions whose only activity is the
-        heartbeat tick. Routing both paths through the same handle lets
-        the cancel propagate uniformly.
+        which bit hardest on task-heavy sessions. Routing both paths
+        through the same handle lets the cancel propagate uniformly.
         """
         self._current_chat_item = item if isinstance(item, ChatItem) else None
         if isinstance(item, ChatItem):
@@ -1543,8 +1542,8 @@ class Session:
             # survive reload after ⚡ interrupt. Pre-v2.0.34 this branch
             # rolled history back to ``history_snapshot`` and wrote an
             # empty-``messages`` turn, which broke tool-history reload
-            # for meta sessions (100% TaskItem workload). Card is marked
-            # pending by ``_dispatch_one``.
+            # for task-heavy sessions. Card is marked pending by
+            # ``_dispatch_one``.
             self._set_model_status("idle", triggered_by)
             on_chunk.flush()
 
@@ -1880,7 +1879,6 @@ class Session:
         os.environ["BUTTERFLY_SESSION_ID"] = self._session_id
         write_session_status(self.system_dir, model_state="idle", model_source="system")
 
-        self._emit_version_notice_if_stale()
         self._bg_manager.sweep_restart()
         await self._fire_external_hook("session_start", {
             "resumed": bool(self._initial_input_offset()),
@@ -3176,45 +3174,6 @@ class Session:
             rt_events.EVENT_TODO_LIST_CHANGED,
             {"todo_list": {"todos": todos}, "change": "reminder_injected"},
         )
-
-    def _emit_version_notice_if_stale(self) -> None:
-        """Emit system_notice if the meta session is at a newer version than this session."""
-        manifest_path = self.system_dir / "manifest.json"
-        if not manifest_path.exists():
-            return
-        try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except Exception:
-            return
-        agent_name = manifest.get("agent", "")
-        if not agent_name:
-            return
-        # Skip the meta session itself
-        if self._session_id == f"{agent_name}_meta":
-            return
-        try:
-            from butterfly.session_engine.agent_state import get_meta_version
-            meta_version = get_meta_version(agent_name)
-        except Exception:
-            return
-        session_version = read_session_status(self.system_dir).get("agent_version")
-        if meta_version and session_version and meta_version != session_version:
-            _notice_text = (
-                f"Agent updated to v{meta_version} "
-                f"(this session is on v{session_version}). "
-                "Start a new session to get the latest configuration."
-            )
-            self._append_event({
-                "type": "system_notice",
-                "message": _notice_text,
-                "meta_version": meta_version,
-                "session_version": session_version,
-            })
-            # Phase 3a dual-write (§3.5).
-            self._emit_event(
-                rt_events.EVENT_SYSTEM_NOTICE,
-                {"text": _notice_text, "level": "info"},
-            )
 
     def _reshape_history(self, new_content: str) -> str:
         """Clean up orphaned trailing user message before processing new user input.

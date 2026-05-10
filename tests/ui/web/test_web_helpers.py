@@ -68,32 +68,23 @@ class WebHelpersTest(unittest.TestCase):
         kwargs = init_mock.call_args.kwargs
         self.assertEqual(kwargs["agent_name"], "agent")
 
-    def test_create_app_lists_seeded_sessions_and_blocks_meta_chat(self) -> None:
+    def test_create_app_lists_seeded_sessions(self) -> None:
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             sessions_dir = root / "sessions"
             system_sessions_dir = root / "_sessions"
             (sessions_dir / "demo" / "core").mkdir(parents=True)
-            (sessions_dir / "agent_meta" / "core").mkdir(parents=True)
             (system_sessions_dir / "demo").mkdir(parents=True)
-            (system_sessions_dir / "agent_meta").mkdir(parents=True)
             (system_sessions_dir / "demo" / "manifest.json").write_text(
                 json.dumps({"agent": "agent", "created_at": "2026-01-01T00:00:00"}),
                 encoding="utf-8",
             )
-            (system_sessions_dir / "agent_meta" / "manifest.json").write_text(
-                json.dumps({"agent": "agent", "created_at": "2026-01-01T00:00:00"}),
-                encoding="utf-8",
-            )
             (system_sessions_dir / "demo" / "status.json").write_text(json.dumps({"status": "active"}), encoding="utf-8")
-            (system_sessions_dir / "agent_meta" / "status.json").write_text(json.dumps({"status": "active"}), encoding="utf-8")
             with patch("ui.web.weixin.WeixinBridge.start"), patch("ui.web.weixin.WeixinBridge.stop"):
                 client = TestClient(create_app(sessions_dir, system_sessions_dir))
                 sessions = client.get("/api/sessions")
-                blocked = client.post("/api/sessions/agent_meta/messages", json={"content": "hi"})
         self.assertEqual(sessions.status_code, 200)
-        self.assertEqual(len(sessions.json()), 2)
-        self.assertEqual(blocked.status_code, 403)
+        self.assertEqual(len(sessions.json()), 1)
 
     def test_weixin_new_command_generates_unique_session_ids(self) -> None:
         with TemporaryDirectory() as tmp:

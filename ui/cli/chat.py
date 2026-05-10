@@ -38,9 +38,6 @@ _POLL_INTERVAL = 0.5
 
 # ── Shared helpers ────────────────────────────────────────────────────────────
 
-def _is_meta_session_id(session_id: str) -> bool:
-    return session_id.endswith("_meta")
-
 def _append_jsonl(path: Path, event: dict) -> None:
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(event, ensure_ascii=False) + "\n")
@@ -127,12 +124,6 @@ def _continue_session(
     if not (system_dir / "manifest.json").exists():
         print(
             f"Error: session '{session_id}' not found in {system_base}",
-            file=sys.stderr,
-        )
-        return 1
-    if _is_meta_session_id(session_id):
-        print(
-            f"Error: direct chat with meta session '{session_id}' is disabled",
             file=sys.stderr,
         )
         return 1
