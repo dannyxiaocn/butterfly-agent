@@ -915,7 +915,15 @@ class FeishuBridge:
     # ── Main loop / lifecycle ────────────────────────────────────────────────
 
     async def _run(self) -> None:
-        """Build the Lark client, spawn the WS thread, drain inbound forever."""
+        """Build the Lark client, spawn the WS thread, drain inbound forever.
+
+        ``status`` stays at ``"starting"`` until every setup step succeeds and
+        we're about to enter the drain loop, then flips to ``"running"``.
+        Setting it optimistically in :py:meth:`start` opens a window where
+        ``/api/feishu/status`` reports ``running`` for a tick before the
+        Lark-client build or WS-thread spawn fails and we'd flip to
+        ``"error"`` / ``"unavailable"``.
+        """
         if not FEISHU_AVAILABLE:
             self.status = "unavailable"
             self.error = (
@@ -940,6 +948,11 @@ class FeishuBridge:
             self.status = "error"
             self.error = f"Failed to start WS client: {type(exc).__name__}: {exc}"
             return
+
+        # Setup complete — promote to "running" now, not in start(), so the
+        # status endpoint can't catch us mid-setup with a stale "running".
+        self.status = "running"
+        self.error = None
 
         try:
             await self._drain_inbound()
@@ -966,7 +979,10 @@ class FeishuBridge:
                 "enable the Feishu bridge."
             )
             return
-        self.status = "running"
+        # Stay at "starting" until ``_run`` has built the client + spawned
+        # the WS thread; ``_run`` flips us to "running" once drain begins.
+        self.status = "starting"
+        self.error = None
         self._task = asyncio.create_task(self._run())
 
     def stop(self) -> None:
