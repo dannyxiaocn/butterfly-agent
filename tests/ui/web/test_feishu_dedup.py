@@ -25,9 +25,9 @@ from datetime import datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
-from ui.web.feishu import _DEDUPE_WINDOW, FeishuBridge
+from ui.web.feishu import _DEDUPE_WINDOW, _FEISHU_REPLY_FALLBACK_CODES, FeishuBridge
 
 
 def _bridge(tmp: str) -> FeishuBridge:
@@ -285,6 +285,211 @@ class EagerSessionInitImportTest(unittest.TestCase):
             feishu_mod._session_init.__name__,
             "butterfly.session_engine.session_init",
         )
+
+
+class PerChatLockTest(unittest.TestCase):
+    """``_get_chat_lock`` must hand out one ``asyncio.Lock`` per chat_id
+    and reuse it on subsequent calls. The whole point of per-chat
+    serialisation (vs hermes' previous global lock) is that a 120s agent
+    reply in group X does not freeze group Y — the test pins the *shape*
+    that makes that possible (one lock per chat, distinct from each other).
+    """
+
+    def test_same_chat_returns_same_lock(self) -> None:
+        with TemporaryDirectory() as tmp:
+            bridge = _bridge(tmp)
+
+            async def _go() -> None:
+                a = bridge._get_chat_lock("oc_chat_X")
+                b = bridge._get_chat_lock("oc_chat_X")
+                self.assertIs(a, b)
+
+            asyncio.run(_go())
+
+    def test_different_chats_get_different_locks(self) -> None:
+        with TemporaryDirectory() as tmp:
+            bridge = _bridge(tmp)
+
+            async def _go() -> None:
+                x = bridge._get_chat_lock("oc_chat_X")
+                y = bridge._get_chat_lock("oc_chat_Y")
+                self.assertIsNot(x, y)
+
+            asyncio.run(_go())
+
+    def test_lock_in_chat_x_does_not_block_chat_y(self) -> None:
+        # The end-to-end contract: a long task in chat X must not delay
+        # chat Y. This is the regression the per-chat lock fixes vs the
+        # previous global lock — without it both chats would serialise.
+        with TemporaryDirectory() as tmp:
+            bridge = _bridge(tmp)
+
+            async def _go() -> None:
+                lock_x = bridge._get_chat_lock("oc_chat_X")
+                lock_y = bridge._get_chat_lock("oc_chat_Y")
+                acquired_y = asyncio.Event()
+
+                async def _hold_x() -> None:
+                    async with lock_x:
+                        await acquired_y.wait()  # let Y prove it ran first
+
+                async def _run_y() -> None:
+                    async with lock_y:
+                        acquired_y.set()
+
+                # Start the long X task, then verify Y completes without
+                # waiting for X. asyncio.wait_for tightens "without
+                # waiting" to "within 200ms".
+                x_task = asyncio.create_task(_hold_x())
+                await asyncio.wait_for(_run_y(), timeout=0.2)
+                self.assertTrue(acquired_y.is_set())
+                x_task.cancel()
+                try:
+                    await x_task
+                except asyncio.CancelledError:
+                    pass
+
+            asyncio.run(_go())
+
+
+class BotIdentityHydrationTest(unittest.TestCase):
+    """``_hydrate_bot_identity`` reads bot open_id + name from /bot/v3/info
+    so the group @mention gate works without manual env config. The
+    contract: on a 0-code response we overwrite the configured values
+    with what the API returned; on failure we leave them alone.
+    """
+
+    def test_hydration_populates_open_id_and_name(self) -> None:
+        with TemporaryDirectory() as tmp:
+            bridge = _bridge(tmp)
+            # Lark Client.request() is what /bot/v3/info goes through; we
+            # never actually invoke it (asyncio.to_thread is mocked) but
+            # the attribute must exist so the to_thread arg expression
+            # evaluates without an AttributeError.
+            bridge._client = SimpleNamespace(request=lambda req: None)
+
+            fake_content = (
+                '{"code": 0, "bot": {"open_id": "ou_realbot", '
+                '"app_name": "Real Bot"}}'
+            )
+            fake_resp = SimpleNamespace(raw=SimpleNamespace(content=fake_content))
+
+            async def _run() -> None:
+                with patch("ui.web.feishu.BaseRequest") as mock_br, \
+                        patch("ui.web.feishu.HttpMethod"), \
+                        patch("ui.web.feishu.AccessTokenType"), \
+                        patch("ui.web.feishu.asyncio.to_thread",
+                              new=AsyncMock(return_value=fake_resp)):
+                    # BaseRequest.builder().http_method(...).uri(...).token_types(...).build()
+                    mock_br.builder.return_value.http_method.return_value.uri.return_value.token_types.return_value.build.return_value = object()
+                    await bridge._hydrate_bot_identity()
+
+            asyncio.run(_run())
+            self.assertEqual(bridge._bot_open_id, "ou_realbot")
+            self.assertEqual(bridge._bot_name, "Real Bot")
+
+    def test_hydration_failure_preserves_existing_values(self) -> None:
+        # If /bot/v3/info fails (network / scope / whatever) we must keep
+        # whatever the user provided via env — silently zeroing the
+        # identity would break group @mention gating in the wild.
+        with TemporaryDirectory() as tmp:
+            bridge = _bridge(tmp)
+            bridge._client = SimpleNamespace(request=lambda req: None)
+            bridge._bot_open_id = "ou_env"
+            bridge._bot_name = "EnvBot"
+
+            async def _run() -> None:
+                with patch("ui.web.feishu.BaseRequest") as mock_br, \
+                        patch("ui.web.feishu.HttpMethod"), \
+                        patch("ui.web.feishu.AccessTokenType"), \
+                        patch("ui.web.feishu.asyncio.to_thread",
+                              new=AsyncMock(side_effect=RuntimeError("network"))):
+                    mock_br.builder.return_value.http_method.return_value.uri.return_value.token_types.return_value.build.return_value = object()
+                    await bridge._hydrate_bot_identity()
+
+            asyncio.run(_run())
+            self.assertEqual(bridge._bot_open_id, "ou_env")
+            self.assertEqual(bridge._bot_name, "EnvBot")
+            self.assertIn("hydrate_bot_identity", bridge.error or "")
+
+    def test_hydration_skipped_when_client_not_built(self) -> None:
+        # Defensive: no client = no probe (we'd NPE otherwise).
+        with TemporaryDirectory() as tmp:
+            bridge = _bridge(tmp)
+            self.assertIsNone(bridge._client)
+
+            async def _run() -> None:
+                # No mocks needed — must early-return.
+                await bridge._hydrate_bot_identity()
+
+            asyncio.run(_run())
+
+
+class SendRetrySemanticsTest(unittest.TestCase):
+    """``_send_reply`` mirrors hermes' ``_feishu_send_with_retry``:
+
+    * Non-success responses are returned, never retried (Feishu's 4xx
+      codes are permanent — retry would just burn the user's time).
+    * Reply-target-withdrawn codes (230011 / 231003) fall back to
+      ``message.create`` exactly once.
+    * Python exceptions are retried with 2**attempt backoff.
+    """
+
+    def test_constants_match_hermes(self) -> None:
+        # Pin the exact set so a typo / drift trips the test.
+        self.assertEqual(_FEISHU_REPLY_FALLBACK_CODES, frozenset({230011, 231003}))
+
+    def test_non_success_non_fallback_does_not_create(self) -> None:
+        # A generic 4xx (e.g. 240001 permission denied) must NOT trigger
+        # the create-fallback. Hermes' contract: only the two specific
+        # codes warrant the fallback; everything else stays a failure.
+        with TemporaryDirectory() as tmp:
+            bridge = _bridge(tmp)
+            bridge._client = object()
+
+            reply_resp = SimpleNamespace(
+                code=240001,
+                success=lambda: False,
+                data=SimpleNamespace(message_id=None),
+            )
+
+            create_mock = AsyncMock()
+
+            async def _run() -> None:
+                with patch.object(bridge, "_send_reply_once",
+                                  new=AsyncMock(return_value=reply_resp)), \
+                        patch.object(bridge, "_send_create_once", new=create_mock):
+                    await bridge._send_reply("oc_chat", "om_msg", "hi")
+
+            asyncio.run(_run())
+            create_mock.assert_not_awaited()
+
+    def test_fallback_code_triggers_create(self) -> None:
+        with TemporaryDirectory() as tmp:
+            bridge = _bridge(tmp)
+            bridge._client = object()
+
+            reply_resp = SimpleNamespace(
+                code=230011,
+                success=lambda: False,
+                data=SimpleNamespace(message_id=None),
+            )
+            create_resp = SimpleNamespace(
+                code=0,
+                success=lambda: True,
+                data=SimpleNamespace(message_id="om_new"),
+            )
+
+            create_mock = AsyncMock(return_value=create_resp)
+
+            async def _run() -> None:
+                with patch.object(bridge, "_send_reply_once",
+                                  new=AsyncMock(return_value=reply_resp)), \
+                        patch.object(bridge, "_send_create_once", new=create_mock):
+                    await bridge._send_reply("oc_chat", "om_msg", "hi")
+
+            asyncio.run(_run())
+            create_mock.assert_awaited_once()
 
 
 class StatusEndpointFieldsTest(unittest.TestCase):

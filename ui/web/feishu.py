@@ -78,7 +78,9 @@ try:
         ReplyMessageRequest,
         ReplyMessageRequestBody,
     )
+    from lark_oapi.core import AccessTokenType, HttpMethod  # type: ignore
     from lark_oapi.core.const import FEISHU_DOMAIN, LARK_DOMAIN  # type: ignore
+    from lark_oapi.core.model import BaseRequest  # type: ignore
     from lark_oapi.event.dispatcher_handler import EventDispatcherHandler  # type: ignore
     from lark_oapi.ws import Client as FeishuWSClient  # type: ignore
 
@@ -89,6 +91,9 @@ except ImportError:  # pragma: no cover - exercised only without the SDK
     CreateMessageRequestBody = None  # type: ignore[assignment]
     ReplyMessageRequest = None  # type: ignore[assignment]
     ReplyMessageRequestBody = None  # type: ignore[assignment]
+    AccessTokenType = None  # type: ignore[assignment]
+    HttpMethod = None  # type: ignore[assignment]
+    BaseRequest = None  # type: ignore[assignment]
     FEISHU_DOMAIN = "https://open.feishu.cn"  # type: ignore[assignment]
     LARK_DOMAIN = "https://open.larksuite.com"  # type: ignore[assignment]
     EventDispatcherHandler = None  # type: ignore[assignment]
@@ -105,6 +110,11 @@ _REPLY_TIMEOUT = 120.0
 # Rule of thumb: enough to absorb a WS reconnect storm without burning RAM.
 _DEDUPE_WINDOW = 256
 _FEISHU_SEND_ATTEMPTS = 3
+# Reply-target-withdrawn / not-found error codes. When a Feishu reply
+# fails with one of these, the original message is gone and we should
+# fall back to ``im.v1.message.create`` rather than retrying the reply.
+# Matches hermes-agent's ``_FEISHU_REPLY_FALLBACK_CODES``.
+_FEISHU_REPLY_FALLBACK_CODES = frozenset({230011, 231003})
 # Bound on the inbound queue depth — beyond this the oldest event is dropped
 # rather than blocking the SDK callback thread (which would back-pressure the
 # entire WS connection).
@@ -237,7 +247,13 @@ class FeishuBridge:
         # exists, which keeps the single-DM-user flow weixin-shaped.
         self._chat_sessions: dict[str, str] = {}
 
-        self._lock = asyncio.Lock()      # serialises send+wait_for_reply pairs
+        self._lock = asyncio.Lock()      # legacy: only used in tests
+        # Per-chat serial processing — mirrors hermes' ``_chat_locks``. A
+        # global lock would head-of-line-block: a 120s agent reply in group
+        # X would freeze every other chat too. Per-chat locks let unrelated
+        # conversations run in parallel while still serialising sends in
+        # the same chat (preserves message order on Feishu's side).
+        self._chat_locks: dict[str, asyncio.Lock] = {}
         self._task: asyncio.Task | None = None
         self._pending: set[asyncio.Task] = set()
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -453,6 +469,52 @@ class FeishuBridge:
             .build()
         )
 
+    async def _hydrate_bot_identity(self) -> None:
+        """Best-effort fetch of bot ``open_id`` + ``name`` from /bot/v3/info.
+
+        Ports hermes-agent's ``_hydrate_bot_identity``. The endpoint needs
+        only the tenant access token (no extra scopes) and is the same one
+        Hermes' onboarding wizard uses. Populating these two fields fixes
+        the group ``@mention`` gate so the bridge works out of the box —
+        without hydration, the user has to manually configure
+        ``FEISHU_BOT_OPEN_ID`` or every group message gets dropped.
+
+        On failure we keep whatever the user provided (env / accounts.json)
+        and log to the bridge state so ``/api/feishu/status`` can surface
+        the diagnostic.
+        """
+        if not self._client or BaseRequest is None:
+            return
+        try:
+            req = (
+                BaseRequest.builder()
+                .http_method(HttpMethod.GET)
+                .uri("/open-apis/bot/v3/info")
+                .token_types({AccessTokenType.TENANT})
+                .build()
+            )
+            resp = await asyncio.to_thread(self._client.request, req)
+            content = getattr(getattr(resp, "raw", None), "content", None)
+            if not content:
+                return
+            payload = json.loads(content)
+            if payload.get("code") != 0:
+                return
+            bot = payload.get("bot") or (payload.get("data") or {}).get("bot") or {}
+            open_id = str(bot.get("open_id") or "").strip()
+            name = str(bot.get("app_name") or bot.get("bot_name") or "").strip()
+            if open_id:
+                self._bot_open_id = open_id
+            if name:
+                self._bot_name = name
+        except Exception as exc:
+            # Don't fail startup — env-provided values still work if set.
+            # The state is observable via /api/feishu/status.error.
+            self.error = (
+                f"[hydrate_bot_identity] {type(exc).__name__}: {exc} "
+                "(group @mention gate may misfire without FEISHU_BOT_OPEN_ID)"
+            )
+
     def _start_ws_client(self) -> None:
         domain = LARK_DOMAIN if self._domain_name == "lark" else FEISHU_DOMAIN
         self._ws_client = FeishuWSClient(
@@ -650,7 +712,7 @@ class FeishuBridge:
             self._save_chat_sessions()
             return
 
-        async with self._lock:
+        async with self._get_chat_lock(chat_id):
             msg_id = service_send_message(session_id, text, self._sys_dir, caller="human")
             reply = await service_wait_for_reply(
                 session_id, msg_id, self._sys_dir, timeout=_REPLY_TIMEOUT,
@@ -659,6 +721,21 @@ class FeishuBridge:
             await self._send_reply(chat_id, message_id, reply)
         else:
             await self._send_reply(chat_id, message_id, "⚠️ Agent 未回复（超时）")
+
+    def _get_chat_lock(self, chat_id: str) -> asyncio.Lock:
+        """Return (creating if needed) the per-chat asyncio.Lock.
+
+        Mirrors hermes-agent's ``_get_chat_lock``: lazy allocation so a
+        long-lived bridge holds N locks for N distinct chats. Empty chat_id
+        (rare — only from malformed events) collapses into a shared bucket
+        rather than creating a new lock per malformed event.
+        """
+        key = chat_id or "__empty__"
+        lock = self._chat_locks.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._chat_locks[key] = lock
+        return lock
 
     # ── Command handling ─────────────────────────────────────────────────────
 
@@ -780,39 +857,49 @@ class FeishuBridge:
     async def _send_reply(self, chat_id: str, reply_to_message_id: str, text: str) -> None:
         """Reply to a Feishu message; falls back to a fresh chat send on failure.
 
-        ``im.v1.message.reply`` threads under the user's original message
-        which is the conversational behaviour we want. When Feishu returns a
-        ``reply target withdrawn`` error (codes 230011 / 231003) we degrade
-        to a plain ``message.create`` so the user still sees the response.
+        Mirrors hermes-agent's ``_feishu_send_with_retry`` semantics:
+
+        * Retry only on **Python exceptions** (network glitch, SDK error).
+          Non-success responses are returned directly — Feishu's 4xx-style
+          codes (invalid receiver, permission denied, …) are not transient
+          and retrying would just burn time.
+        * Fall back to ``message.create`` only when the response code is
+          one of the **reply-target-withdrawn** codes (230011 / 231003).
+          Any other failure stays a failure.
+        * Backoff is ``2 ** attempt`` (1s, 2s, 4s) — same as hermes.
         """
         if not self._client:
             return
         payload = json.dumps({"text": text}, ensure_ascii=False)
+
         last_exc: Exception | None = None
+        response: Any = None
         for attempt in range(_FEISHU_SEND_ATTEMPTS):
             try:
                 response = await self._send_reply_once(reply_to_message_id, payload)
+                break  # got a response (success or not) — don't retry
+            except Exception as exc:
+                last_exc = exc
+                if attempt >= _FEISHU_SEND_ATTEMPTS - 1:
+                    break
+                await asyncio.sleep(2 ** attempt)
+
+        if _response_succeeded(response):
+            self._record_own_message_id(response)
+            return
+
+        # Only the two reply-target codes warrant the create fallback —
+        # everything else is a permanent failure we should surface.
+        code = getattr(response, "code", None) if response is not None else None
+        if code in _FEISHU_REPLY_FALLBACK_CODES:
+            try:
+                response = await self._send_create_once(chat_id, payload)
                 if _response_succeeded(response):
                     self._record_own_message_id(response)
                     return
-                code = getattr(response, "code", 0)
-                if code in (230011, 231003):
-                    # Reply target gone — fall through to create.
-                    break
-                # Transient: retry with backoff.
-                await asyncio.sleep(0.5 * (2 ** attempt))
             except Exception as exc:
                 last_exc = exc
-                await asyncio.sleep(0.5 * (2 ** attempt))
 
-        # Fallback: send fresh in the chat.
-        try:
-            response = await self._send_create_once(chat_id, payload)
-            if _response_succeeded(response):
-                self._record_own_message_id(response)
-                return
-        except Exception as exc:
-            last_exc = exc
         if last_exc is not None:
             traceback.print_exc()
 
@@ -941,6 +1028,11 @@ class FeishuBridge:
             self.status = "error"
             self.error = f"Failed to build lark client: {type(exc).__name__}: {exc}"
             return
+
+        # Best-effort: discover bot open_id / name from /bot/v3/info so the
+        # group @mention gate works without manual env config. Failure here
+        # is non-fatal (the env-provided values, if any, are preserved).
+        await self._hydrate_bot_identity()
 
         try:
             self._start_ws_client()
