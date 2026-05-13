@@ -1,0 +1,13 @@
+agent: dm_checker
+version: "0.1.0"
+description: Develop-Machine checker — runs end-to-end tests on draft PRs, hunts for related-code bugs, and bridges developer ↔ reviewer.
+model: gpt-5.5
+provider: codex-oauth
+fallback_model: kimi-for-coding
+fallback_provider: kimi-coding-plan
+max_iterations: 1000
+thinking: true
+thinking_budget: 8000
+thinking_effort: high
+prompts:
+  system: prompts/system.md
