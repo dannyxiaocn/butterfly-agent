@@ -2,8 +2,6 @@ bash
 terminal_create
 terminal_use
 read
-write
-edit
 glob
 grep
 web_search_brave
@@ -19,8 +17,3 @@ task_pause
 task_resume
 task_list
 todo_list
-subagent_new
-subagent_list
-subagent_resume
-workflow
-siri

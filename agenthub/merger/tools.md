@@ -6,8 +6,6 @@ write
 edit
 glob
 grep
-web_search_brave
-web_fetch
 skill
 memory_recall
 memory_update
@@ -19,8 +17,3 @@ task_pause
 task_resume
 task_list
 todo_list
-subagent_new
-subagent_list
-subagent_resume
-workflow
-siri
