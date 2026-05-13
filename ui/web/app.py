@@ -126,18 +126,22 @@ def create_app(
     from contextlib import asynccontextmanager
 
     from .weixin import WeixinBridge
+    from .feishu import FeishuBridge
     weixin = WeixinBridge(sessions_dir, system_sessions_dir)
+    feishu = FeishuBridge(sessions_dir, system_sessions_dir)
 
     shutdown_event = asyncio.Event()
 
     @asynccontextmanager
     async def _lifespan(app):
         weixin.start()
+        feishu.start()
         try:
             yield
         finally:
             shutdown_event.set()
             weixin.stop()
+            feishu.stop()
 
     app = FastAPI(
         title="Butterfly Web UI",
@@ -623,6 +627,20 @@ def create_app(
             "error": weixin.error,
             "session": weixin._current_session,
             "account": weixin._account_id,
+        }
+
+    # ── Feishu bridge status ─────────────────────────────────────────────
+
+    @app.get("/api/feishu/status")
+    async def feishu_status():
+        return {
+            "status": feishu.status,
+            "error": feishu.error,
+            "session": feishu._current_session,
+            "account": feishu._app_id,
+            "domain": feishu._domain_name,
+            "bot_open_id": feishu._bot_open_id,
+            "bot_name": feishu._bot_name,
         }
 
     return app
