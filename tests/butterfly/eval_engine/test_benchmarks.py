@@ -152,6 +152,15 @@ def test_tau_smoke_line_trace_passes():
     assert result.status == "passed", result.details
 
 
+def test_tau_smoke_unquoted_args_strip_trailing_paren():
+    """Regression: _ARG_RE used to greedily capture the closing `)` from
+    line-form tool calls with unquoted values, so ``f(x=1)`` parsed
+    as ``x="1)"``."""
+    from butterfly.eval_engine.benchmarks.tau_bench import _parse_trace
+    parsed = _parse_trace("lookup_order(order_id=A1042)")
+    assert parsed == [{"name": "lookup_order", "arguments": {"order_id": "A1042"}}]
+
+
 def test_tau_smoke_missing_call_fails():
     bench = TauBenchAdapter(mode="smoke")
     task = next(iter(bench.iter_tasks()))

@@ -158,8 +158,12 @@ class EvalService:
             finally:
                 self._cancellers.pop(run.run_id, None)
 
-        loop = asyncio.get_event_loop()
-        self._tasks[run.run_id] = loop.create_task(_go())
+        loop = asyncio.get_running_loop()
+        task = loop.create_task(_go())
+        # Drop from the in-flight table on completion so a long-lived
+        # server doesn't accumulate finished tasks forever.
+        task.add_done_callback(lambda _t, rid=run.run_id: self._tasks.pop(rid, None))
+        self._tasks[run.run_id] = task
         return run.to_dict()
 
 

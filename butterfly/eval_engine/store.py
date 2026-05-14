@@ -65,11 +65,17 @@ class EvalStore:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return None
-        # Hand-roll the round-trip — dataclasses.fields lets us be strict
-        # about extras without pulling pydantic in.
+        # Hand-roll the round-trip — dataclasses.fields lets us drop
+        # unknown keys (forward-compat) without pulling pydantic in.
+        from dataclasses import fields
         from butterfly.eval_engine.types import RunSummary
-        summary = RunSummary(**data.pop("summary", {}))
-        return EvalRun(summary=summary, **data)
+        summary_fields = {f.name for f in fields(RunSummary)}
+        run_fields = {f.name for f in fields(EvalRun)}
+        summary_data = {
+            k: v for k, v in data.pop("summary", {}).items() if k in summary_fields
+        }
+        run_data = {k: v for k, v in data.items() if k in run_fields}
+        return EvalRun(summary=RunSummary(**summary_data), **run_data)
 
     def list(self) -> list[EvalRun]:
         out: list[EvalRun] = []

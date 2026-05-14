@@ -105,7 +105,10 @@ _SMOKE_TASKS: list[dict] = [
 
 
 _LINE_CALL_RE = re.compile(r"(\w+)\s*\((.*)\)\s*$")
-_ARG_RE = re.compile(r"(\w+)\s*=\s*(\"[^\"]*\"|'[^']*'|[^,]+)")
+# Unquoted values stop at the next comma OR the closing paren; we strip
+# the captured group with .rstrip(") ") below as a belt-and-braces guard
+# for matches that come from inputs without an outer wrap.
+_ARG_RE = re.compile(r"(\w+)\s*=\s*(\"[^\"]*\"|'[^']*'|[^,)]+)")
 
 
 def _parse_trace(output: str) -> list[dict]:
@@ -143,7 +146,7 @@ def _parse_trace(output: str) -> list[dict]:
         name, args_blob = m.group(1), m.group(2)
         args: dict[str, Any] = {}
         for am in _ARG_RE.finditer(args_blob):
-            k, v = am.group(1), am.group(2).strip().strip("\"'")
+            k, v = am.group(1), am.group(2).strip().rstrip(")").strip("\"'")
             args[k] = v
         calls.append({"name": name, "arguments": args})
     return calls
