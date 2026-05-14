@@ -625,6 +625,18 @@ def create_app(
             "account": weixin._account_id,
         }
 
+    # ── EvalEngine — long-horizon agent benchmarks ───────────────────────
+    # Mounts /api/eval/{benchmarks,adapters,runs,...}. The reviewer
+    # registers their agent via butterfly.eval_engine.api.register_adapter()
+    # on startup; if nothing is registered the only available adapter is
+    # the no-op "echo" baseline.
+    from butterfly.eval_engine.api import create_router as _eval_router
+    from butterfly.eval_engine.service import EvalService, set_default_service
+    eval_root = sessions_dir.parent / "_evals"
+    eval_service = EvalService(eval_root)
+    set_default_service(eval_service)
+    app.include_router(_eval_router(eval_service))
+
     return app
 
 
