@@ -1,15 +1,6 @@
 """TAU-bench adapter.
 
 Upstream: https://github.com/sierra-research/tau-bench
-
-τ-bench evaluates multi-turn tool-use against a simulated user + a
-domain database (retail / airline). Unlike SWE-bench and Terminal-bench
-it's pure-Python — no Docker, no shell — which makes it the natural
-"first integration" for any agent.
-
-Smoke mode ships a tiny self-contained policy/database so the runner
-can be exercised end-to-end. Upstream mode delegates to the official
-``tau_bench`` package when installed.
 """
 from __future__ import annotations
 
@@ -18,7 +9,7 @@ import re
 from importlib import util as _util
 from typing import Any, Iterator
 
-from butterfly.eval_engine.benchmarks.base import Benchmark
+from butterfly.eval_engine.benchmark import Benchmark
 from butterfly.eval_engine.types import (
     BenchmarkInfo,
     EvalTask,
@@ -27,35 +18,10 @@ from butterfly.eval_engine.types import (
 )
 
 
-_INFO = BenchmarkInfo(
-    id="tau-bench",
-    name="TAU-bench (retail + airline)",
-    description=(
-        "Sierra's τ-bench — multi-turn tool-use dialogue against a "
-        "simulated user and a domain database. Reported by Claude "
-        "Opus 4.x and Kimi K2.x; pure-Python, no Docker needed."
-    ),
-    homepage="https://github.com/sierra-research/tau-bench",
-    task_type="tool_use_dialogue",
-    metric="success_rate",
-    requires_docker=False,
-    default_limit=5,
-)
-
-
 def _upstream_available() -> bool:
     return _util.find_spec("tau_bench") is not None
 
 
-# Each smoke task lists the database state, the user request, and the
-# expected final tool-call sequence (action verbs + key args). The
-# grader looks for those calls in the agent's submission as a free-form
-# trace, so the agent can output either:
-#
-#   * a JSON list of {"name": ..., "arguments": {...}} entries, OR
-#   * one tool call per line in the form ``tool_name(arg=value, ...)``
-#
-# Both shapes are accepted to keep the smoke mode model-agnostic.
 _SMOKE_TASKS: list[dict] = [
     {
         "task_id": "smoke__retail-refund-001",
@@ -105,24 +71,13 @@ _SMOKE_TASKS: list[dict] = [
 
 
 _LINE_CALL_RE = re.compile(r"(\w+)\s*\((.*)\)\s*$")
-# Unquoted values stop at the next comma OR the closing paren; we strip
-# the captured group with .rstrip(") ") below as a belt-and-braces guard
-# for matches that come from inputs without an outer wrap.
 _ARG_RE = re.compile(r"(\w+)\s*=\s*(\"[^\"]*\"|'[^']*'|[^,)]+)")
 
 
 def _parse_trace(output: str) -> list[dict]:
-    """Best-effort parse of the agent's reply into a list of tool calls.
-
-    Accepts:
-      * a JSON list of ``{"name", "arguments"}`` dicts,
-      * a JSON dict with a top-level ``tool_calls`` list,
-      * or one ``tool(name=value, ...)`` line per call.
-    """
     text = (output or "").strip()
     if not text:
         return []
-    # Strip Markdown code fences if present.
     if text.startswith("```"):
         text = re.sub(r"^```[a-zA-Z]*\n", "", text)
         text = re.sub(r"\n```\s*$", "", text)
@@ -134,7 +89,6 @@ def _parse_trace(output: str) -> list[dict]:
         return [c for c in data if isinstance(c, dict) and "name" in c]
     if isinstance(data, dict) and isinstance(data.get("tool_calls"), list):
         return [c for c in data["tool_calls"] if isinstance(c, dict) and "name" in c]
-    # Line-by-line fallback.
     calls: list[dict] = []
     for raw in text.splitlines():
         line = raw.strip().rstrip(",")
@@ -159,16 +113,21 @@ def _arg_matches(expected: dict, got: dict) -> bool:
     return True
 
 
-class TauBenchAdapter(Benchmark):
-    info = _INFO
-
-    def __init__(self, *, mode: str = "auto", domain: str | None = None) -> None:
+class Adapter(Benchmark):
+    def __init__(
+        self,
+        info: BenchmarkInfo,
+        *,
+        mode: str = "auto",
+        domain: str | None = None,
+    ) -> None:
         if mode not in ("auto", "smoke", "upstream"):
             raise ValueError(f"Unknown mode: {mode!r}")
         if mode == "auto":
             mode = "upstream" if _upstream_available() else "smoke"
+        self.info = info
         self.mode = mode
-        self.domain = domain  # None → both domains
+        self.domain = domain
 
     def iter_tasks(self, *, limit: int | None = None) -> Iterator[EvalTask]:
         if self.mode == "upstream":
@@ -199,9 +158,6 @@ class TauBenchAdapter(Benchmark):
             )
 
     def _iter_upstream(self, *, limit: int | None) -> Iterator[EvalTask]:
-        # The official ``tau_bench`` package exposes domain task lists
-        # via ``tau_bench.envs.<domain>.tasks.TASKS``. We import lazily
-        # so the smoke path stays dependency-free.
         try:
             from tau_bench.envs.retail.tasks import TASKS as retail_tasks  # type: ignore[import-not-found]
             from tau_bench.envs.airline.tasks import TASKS as airline_tasks  # type: ignore[import-not-found]
@@ -252,7 +208,6 @@ class TauBenchAdapter(Benchmark):
     def _grade_smoke(self, task: EvalTask, submission: Submission) -> TaskResult:
         expected = task.metadata.get("expected_calls", [])
         got = _parse_trace(submission.output)
-        # Check each expected call appears (in order) somewhere in the trace.
         cursor = 0
         misses: list[dict] = []
         for exp in expected:

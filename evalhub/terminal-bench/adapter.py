@@ -2,17 +2,14 @@
 
 Upstream: https://github.com/laude-institute/terminal-bench
 
-Like SWE-bench, the real harness runs each task in a Docker container
-with a tmux session attached. We run the agent's command(s) on the host
-in **smoke mode** (sandboxed under a tmp directory) and delegate to the
-upstream ``tb`` CLI in **upstream mode** when it's available.
-
-Submission contract: the agent's ``output`` is a single shell command
-(or a ``\n``-separated sequence). Each smoke task ships a checker
-function that inspects the post-run state (file contents, exit code).
+Smoke mode runs the agent's command in a host-side tempdir sandbox with
+defence-in-depth banned-token filtering. Upstream mode delegates to the
+official ``tb`` CLI when ``terminal_bench`` is installed and Docker is
+available.
 """
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -21,28 +18,12 @@ from importlib import util as _util
 from pathlib import Path
 from typing import Callable, Iterator
 
-from butterfly.eval_engine.benchmarks.base import Benchmark
+from butterfly.eval_engine.benchmark import Benchmark
 from butterfly.eval_engine.types import (
     BenchmarkInfo,
     EvalTask,
     Submission,
     TaskResult,
-)
-
-
-_INFO = BenchmarkInfo(
-    id="terminal-bench",
-    name="Terminal-bench",
-    description=(
-        "Laude Institute's terminal/shell agent benchmark — multi-step "
-        "tasks where the agent must drive a real shell to completion. "
-        "Reported by Claude Opus 4.x and Kimi K2.x."
-    ),
-    homepage="https://github.com/laude-institute/terminal-bench",
-    task_type="terminal",
-    metric="success_rate",
-    requires_docker=True,
-    default_limit=5,
 )
 
 
@@ -64,7 +45,9 @@ def _check_count_files(workdir: Path) -> tuple[bool, dict]:
     target = workdir / "count.txt"
     if not target.is_file():
         return False, {"reason": "count.txt missing"}
-    expected = sum(1 for p in workdir.iterdir() if p.is_file() and p.name != "count.txt")
+    expected = sum(
+        1 for p in workdir.iterdir() if p.is_file() and p.name != "count.txt"
+    )
     try:
         actual = int(target.read_text(encoding="utf-8").strip())
     except ValueError:
@@ -112,32 +95,11 @@ _SMOKE_TASKS: list[dict] = [
 ]
 
 
-# Commands we refuse to execute even in the host-sandbox smoke runner.
-# This is a defence-in-depth layer; the real protection is the dedicated
-# tmpdir + the fact that the agent is asked to solve a tiny task. We
-# still reject anything pointing outside the workdir or invoking package
-# managers / network tooling.
 _BANNED_TOKENS = (
-    "sudo",
-    "rm -rf /",
-    "rm -rf ~",
-    "rm -rf $HOME",
-    "mkfs",
-    ":(){:|:&};:",
-    "curl ",
-    "wget ",
-    "scp ",
-    "ssh ",
-    "apt ",
-    "apt-get",
-    "yum ",
-    "pip ",
-    "npm ",
-    "shutdown",
-    "reboot",
-    "chmod 777 /",
-    "/etc/passwd",
-    "/etc/shadow",
+    "sudo", "rm -rf /", "rm -rf ~", "rm -rf $HOME", "mkfs",
+    ":(){:|:&};:", "curl ", "wget ", "scp ", "ssh ",
+    "apt ", "apt-get", "yum ", "pip ", "npm ",
+    "shutdown", "reboot", "chmod 777 /", "/etc/passwd", "/etc/shadow",
 )
 
 
@@ -149,14 +111,19 @@ def _is_safe(command: str) -> tuple[bool, str | None]:
     return True, None
 
 
-class TerminalBenchAdapter(Benchmark):
-    info = _INFO
-
-    def __init__(self, *, mode: str = "auto", timeout_s: float = 20.0) -> None:
+class Adapter(Benchmark):
+    def __init__(
+        self,
+        info: BenchmarkInfo,
+        *,
+        mode: str = "auto",
+        timeout_s: float = 20.0,
+    ) -> None:
         if mode not in ("auto", "smoke", "upstream"):
             raise ValueError(f"Unknown mode: {mode!r}")
         if mode == "auto":
             mode = "upstream" if _upstream_available() else "smoke"
+        self.info = info
         self.mode = mode
         self.timeout_s = timeout_s
 
@@ -182,16 +149,12 @@ class TerminalBenchAdapter(Benchmark):
             )
 
     def _iter_upstream(self, *, limit: int | None) -> Iterator[EvalTask]:
-        # Upstream mode mirrors the swebench-adapter pattern: we don't
-        # ship the dataset, the reviewer points TBENCH_DATASET at a
-        # task-index JSONL produced by ``tb tasks list --json``.
         path = Path(os.environ.get("TBENCH_DATASET", ""))
         if not path or not path.is_file():
             raise FileNotFoundError(
                 "Terminal-bench task index not found. Export "
                 "TBENCH_DATASET=<path-to-tasks.jsonl>."
             )
-        import json
         with path.open("r", encoding="utf-8") as fh:
             for i, line in enumerate(fh):
                 if limit is not None and i >= limit:
@@ -201,10 +164,7 @@ class TerminalBenchAdapter(Benchmark):
                     task_id=spec["task_id"],
                     benchmark=self.info.id,
                     prompt=spec.get("instructions", ""),
-                    metadata={
-                        "task_id": spec["task_id"],
-                        "mode": "upstream",
-                    },
+                    metadata={"task_id": spec["task_id"], "mode": "upstream"},
                 )
 
     def grade(self, task: EvalTask, submission: Submission) -> TaskResult:
@@ -272,8 +232,12 @@ class TerminalBenchAdapter(Benchmark):
                 return TaskResult(
                     task_id=task.task_id,
                     status="errored",
-                    details={"reason": "command timed out", "command": command,
-                             "timeout_s": self.timeout_s, "stderr": exc.stderr or ""},
+                    details={
+                        "reason": "command timed out",
+                        "command": command,
+                        "timeout_s": self.timeout_s,
+                        "stderr": exc.stderr or "",
+                    },
                     submission=submission,
                 )
             check_fn: Callable[[Path], tuple[bool, dict]] = spec["checker"]

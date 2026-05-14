@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from typing import Iterable
 
 from butterfly.eval_engine.agent_adapter import AgentAdapter
-from butterfly.eval_engine.benchmarks.base import Benchmark
+from butterfly.eval_engine.benchmark import Benchmark
 from butterfly.eval_engine.store import EvalStore
 from butterfly.eval_engine.types import (
     EvalRun,

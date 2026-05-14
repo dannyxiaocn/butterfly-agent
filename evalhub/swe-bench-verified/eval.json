@@ -1,0 +1,11 @@
+{
+  "id": "swe-bench-verified",
+  "name": "SWE-bench Verified",
+  "description": "Princeton/OpenAI's Verified subset of SWE-bench — real GitHub issues paired with hidden tests. Reported by Claude Opus 4.x and Kimi K2.x as the headline coding-agent metric.",
+  "homepage": "https://github.com/princeton-nlp/SWE-bench",
+  "task_type": "code_patch",
+  "metric": "resolved_pct",
+  "requires_docker": true,
+  "requires_network": true,
+  "default_limit": 5
+}

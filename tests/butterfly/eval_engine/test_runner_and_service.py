@@ -14,7 +14,7 @@ import pytest
 
 from butterfly.eval_engine import registry
 from butterfly.eval_engine.agent_adapter import CallableAdapter
-from butterfly.eval_engine.benchmarks.base import Benchmark
+from butterfly.eval_engine.benchmark import Benchmark
 from butterfly.eval_engine.service import EvalService
 from butterfly.eval_engine.types import (
     BenchmarkInfo,
@@ -67,7 +67,7 @@ class StubBenchmark(Benchmark):
 def _register_stub():
     registry.register("stub", StubBenchmark)
     yield
-    registry.reset_to_builtins()
+    registry.reset_overrides()
 
 
 # ── run_benchmark (synchronous await) ────────────────────────────────────────
