@@ -112,8 +112,22 @@ Branch: dm/<slug>
 …
 ```
 
-Only the developer flips `Status:`. Comments are append-only — every
-role appends, none rewrite.
+Authority for the `Status:` field is split by transition:
+
+| Transition                                | Who flips it |
+| ----------------------------------------- | ------------ |
+| `draft` → `check-pending`                 | developer    |
+| `check-pending` → `check-failed`          | checker      |
+| `check-failed` → `check-pending`          | developer    |
+| `check-pending` → `review-pending`        | checker      |
+| `review-pending` → `check-pending`        | checker (forwarding reviewer concerns) |
+| `review-pending` → `approved`             | checker      |
+| `approved` → `merged`                     | developer    |
+
+Reviewer never flips `Status:` directly — concerns and approvals reach
+the file as a comment block, and checker translates them into the
+status change. Comments are append-only — every role appends, none
+rewrite.
 
 ### Why a markdown file and not real `gh pr create`?
 
@@ -136,13 +150,24 @@ team-level agent loop to do it. Developer bootstraps the workspace on
 its first activation:
 
 ```bash
-team_id=$(jq -r .member_of_team _sessions/$(basename $(pwd))/manifest.json)
+member_id=$(basename "$(pwd)")
+team_id=$(jq -r .member_of_team "../../_sessions/$member_id/manifest.json")
 mkdir -p "../$team_id/workspace"
 ```
 
-Each role's prompt repeats this snippet so any member can recover the
-workspace path independently if they wake first (e.g. after a
-restart). The team session id is the parent in their manifest.
+Path notes:
+- Each member's bash cwd defaults to `sessions/<member_session_id>/`
+  (see `butterfly_dev/prompts/env.md`), so the `_sessions/` sibling is
+  reached via `../../_sessions/` and the team session via
+  `../<team_id>/`.
+- Checker and reviewer carry a read-only variant of the snippet (no
+  `mkdir`) in their own prompts so any role can recover the workspace
+  path independently.
+
+Only the developer's prompt invokes `mkdir`; the developer owns the
+workspace lifecycle. There is exactly one `<feature_slug>` directory
+under `workspace/` at any time, so checker and reviewer discover it
+by `ls`-ing the workspace.
 
 ## State machine
 

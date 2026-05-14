@@ -86,13 +86,22 @@ The Develop-Machine team uses a shared workspace at:
 ```
 
 `<team_id>` is the `member_of_team` field in your own
-`_sessions/<your_session_id>/manifest.json`. Bootstrap the directory on
+`_sessions/<your_session_id>/manifest.json`. Your bash default cwd is
+`sessions/<your_session_id>/`, so `_sessions/` is at `../../_sessions/`
+and the team session sits at `../<team_id>/`. Bootstrap the directory on
 your first activation:
 
 ```bash
-team_id=$(jq -r .member_of_team _sessions/$(basename $(pwd))/manifest.json)
+member_id=$(basename "$(pwd)")
+team_id=$(jq -r .member_of_team "../../_sessions/$member_id/manifest.json")
 mkdir -p "../$team_id/workspace"
 ```
+
+Pick a stable `<feature_slug>` once (e.g. `add-csv-export`) and reuse
+it for the lifetime of the PR. Checker and reviewer will discover the
+slug by listing `../$team_id/workspace/` — keep exactly one
+sub-directory there at a time. If you start a fresh feature, finish
+or archive the previous one first.
 
 All three roles read this workspace; nobody else writes to your
 `PR.md`. Keep edits append-only in `## Comments` so the audit trail is

@@ -1,3 +1,6 @@
+# Develop-Machine roles intentionally drop task_create / subagent_new —
+# coordination is via teamchat, not task cards or nested sub-agents.
+# See docs/agenthub/develop_machine/design.md.
 bash
 terminal_create
 terminal_use

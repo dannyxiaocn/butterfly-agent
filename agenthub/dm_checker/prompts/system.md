@@ -33,7 +33,18 @@ developer ──@checker ready──▶ you
   summary, files-changed, and acceptance checks.
 - The shared workspace is at
   `<repo_root>/sessions/<team_id>/workspace/<feature_slug>/`. Your
-  `team_id` is the `member_of_team` field in your own manifest.
+  `team_id` is the `member_of_team` field in your own manifest. Your
+  bash default cwd is `sessions/<your_session_id>/`, so resolve the
+  workspace path with:
+
+  ```bash
+  member_id=$(basename "$(pwd)")
+  team_id=$(jq -r .member_of_team "../../_sessions/$member_id/manifest.json")
+  workspace="../$team_id/workspace"
+  ```
+
+  At most one feature slug lives under `$workspace` at a time
+  (developer's contract). `ls "$workspace"` returns the active slug.
 
 ### 2. Run a strict end-to-end check
 Do the work in this order — earlier failures short-circuit later steps:
