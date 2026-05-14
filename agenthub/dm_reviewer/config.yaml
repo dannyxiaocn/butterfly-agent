@@ -1,0 +1,13 @@
+agent: dm_reviewer
+version: "0.1.0"
+description: Develop-Machine reviewer — PR-level reviewer who checks alignment with requirements and repo style, and decides merge.
+model: gpt-5.5
+provider: codex-oauth
+fallback_model: kimi-for-coding
+fallback_provider: kimi-coding-plan
+max_iterations: 1000
+thinking: true
+thinking_budget: 8000
+thinking_effort: high
+prompts:
+  system: prompts/system.md
