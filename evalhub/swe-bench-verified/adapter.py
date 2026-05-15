@@ -2,21 +2,11 @@
 
 Upstream: https://github.com/princeton-nlp/SWE-bench
 
-The real harness clones each instance's repo, applies the agent's patch,
-and runs the test suite inside a Docker image. That's a heavyweight
-dependency we don't want to bake into this codebase, so the adapter has
-two modes:
-
-* **upstream** — install the ``swebench`` package and a Docker daemon;
-  the adapter delegates grading to ``swebench.harness.run_evaluation``.
-* **smoke** — ships a tiny curated set of instances (a synthetic
-  unified-diff + a check that the diff applies to the bundled file).
-  This mode is what CI and the test suite use; it exercises the runner
-  end-to-end without any external dependencies.
-
-The mode is picked automatically: upstream wins when ``swebench`` and a
-Docker socket are available, otherwise we fall back to smoke. The
-reviewer can force a mode via the run config.
+Smoke mode ships a tiny curated set of instances we can grade in-process
+(unified-diff syntax + a target file/substring check). Upstream mode
+delegates to the official ``swebench`` harness when ``swebench`` is
+installed and a Docker daemon is reachable. Auto-detected; force a
+mode with ``adapter_config: {"mode": "smoke" | "upstream"}``.
 """
 from __future__ import annotations
 
@@ -28,28 +18,12 @@ from importlib import util as _util
 from pathlib import Path
 from typing import Iterator
 
-from butterfly.eval_engine.benchmarks.base import Benchmark
+from butterfly.eval_engine.benchmark import Benchmark
 from butterfly.eval_engine.types import (
     BenchmarkInfo,
     EvalTask,
     Submission,
     TaskResult,
-)
-
-
-_INFO = BenchmarkInfo(
-    id="swe-bench-verified",
-    name="SWE-bench Verified",
-    description=(
-        "Princeton/OpenAI's Verified subset of SWE-bench — real GitHub "
-        "issues paired with hidden tests. Reported by Claude Opus 4.x "
-        "and Kimi K2.x as the headline coding-agent metric."
-    ),
-    homepage="https://github.com/princeton-nlp/SWE-bench",
-    task_type="code_patch",
-    metric="resolved_pct",
-    requires_docker=True,
-    default_limit=5,
 )
 
 
@@ -59,13 +33,6 @@ def _upstream_available() -> bool:
     )
 
 
-# A tiny seed of three Verified-flavoured instances. We only need *some*
-# task that exercises the runner; the real upstream harness is gated
-# behind ``_upstream_available()``. Each instance ships:
-#   * an instance_id (the canonical SWE-bench naming convention)
-#   * a problem_statement (what the model is told to fix)
-#   * a target file + an expected substring that the model's patch
-#     should produce when applied
 _SMOKE_INSTANCES: list[dict] = [
     {
         "instance_id": "smoke__off-by-one",
@@ -108,14 +75,21 @@ def _extract_changed_files(patch: str) -> list[str]:
     return sorted({m.group(2) for m in _DIFF_PATH_RE.finditer(patch)})
 
 
-class SWEBenchAdapter(Benchmark):
-    info = _INFO
+class Adapter(Benchmark):
+    """SWE-bench Verified — exposed via evalhub plugin conventions."""
 
-    def __init__(self, *, mode: str = "auto", dataset_dir: Path | None = None) -> None:
+    def __init__(
+        self,
+        info: BenchmarkInfo,
+        *,
+        mode: str = "auto",
+        dataset_dir: Path | None = None,
+    ) -> None:
         if mode not in ("auto", "smoke", "upstream"):
             raise ValueError(f"Unknown mode: {mode!r}")
         if mode == "auto":
             mode = "upstream" if _upstream_available() else "smoke"
+        self.info = info
         self.mode = mode
         self._dataset_dir = dataset_dir
 
@@ -124,6 +98,19 @@ class SWEBenchAdapter(Benchmark):
             yield from self._iter_upstream(limit=limit)
             return
         for inst in _SMOKE_INSTANCES[: limit or len(_SMOKE_INSTANCES)]:
+            target_file = inst["expected_changed_files"][0]
+            expected_line = inst["expected_substrings"][0]
+            # Pre-canned reference solution — used by the CLI's
+            # mock-passing adapter as a universal "pass" signal so the
+            # wiring sanity check works for every benchmark, not just
+            # tau-bench (PR #72 review item 1).
+            expected_output = (
+                f"diff --git a/{target_file} b/{target_file}\n"
+                f"--- a/{target_file}\n"
+                f"+++ b/{target_file}\n"
+                "@@\n"
+                f"+    {expected_line}\n"
+            )
             yield EvalTask(
                 task_id=inst["instance_id"],
                 benchmark=self.info.id,
@@ -137,18 +124,13 @@ class SWEBenchAdapter(Benchmark):
                     "instance_id": inst["instance_id"],
                     "expected_substrings": inst["expected_substrings"],
                     "expected_changed_files": inst["expected_changed_files"],
+                    "expected_output": expected_output,
                     "mode": "smoke",
                 },
             )
 
     def _iter_upstream(self, *, limit: int | None) -> Iterator[EvalTask]:
-        # We deliberately don't pull HF datasets here — that's a large
-        # dependency and the reviewer running the upstream mode will have
-        # already pre-staged a JSONL of instances. The convention follows
-        # the official swebench format.
-        path = self._dataset_dir or Path(
-            os.environ.get("SWEBENCH_DATASET", "")
-        )
+        path = self._dataset_dir or Path(os.environ.get("SWEBENCH_DATASET", ""))
         if not path or not path.is_file():
             raise FileNotFoundError(
                 "SWE-bench Verified dataset JSONL not found. Set "
@@ -190,12 +172,8 @@ class SWEBenchAdapter(Benchmark):
         expected_files = task.metadata.get("expected_changed_files", [])
         changed = _extract_changed_files(patch)
         sub_hit = all(s in patch for s in expected_subs)
-        # A patch that touches the wrong files is wrong even if the
-        # substring shows up — guard against the model echoing the
-        # expected line into the wrong place.
         file_hit = (
-            not expected_files
-            or any(f in changed for f in expected_files)
+            not expected_files or any(f in changed for f in expected_files)
         )
         looks_like_patch = patch.lstrip().startswith("diff --git ")
         passed = sub_hit and file_hit and looks_like_patch
@@ -213,12 +191,6 @@ class SWEBenchAdapter(Benchmark):
         )
 
     def _grade_upstream(self, task: EvalTask, submission: Submission) -> TaskResult:
-        # Upstream grading needs Docker + the swebench package. We
-        # deliberately don't shell out from here — instead we drop the
-        # patch on disk under the run's workspace and surface a
-        # "deferred" status. The reviewer's CI job invokes the official
-        # ``python -m swebench.harness.run_evaluation`` over the same
-        # directory after the run finishes.
         return TaskResult(
             task_id=task.task_id,
             status="skipped",

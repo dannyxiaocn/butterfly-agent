@@ -1304,6 +1304,10 @@ def main() -> None:
     _add_kimi_parser(subparsers)
     _add_server_parser(subparsers)
 
+    # EvalEngine — `butterfly eval [list|run]`.
+    from butterfly.eval_engine.cli import add_eval_parser
+    add_eval_parser(subparsers)
+
     # Phase 6 — generic reflection + net-new write aliases.
     from ui.cli.io_command import register_io_commands
     register_io_commands(subparsers)

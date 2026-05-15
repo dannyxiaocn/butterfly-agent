@@ -1,15 +1,14 @@
 """Benchmark adapter interface.
 
+Promoted out of ``benchmarks/base.py`` so evalhub plugins can import
+``from butterfly.eval_engine.benchmark import Benchmark`` directly,
+mirroring how toolhub plugins import from ``butterfly.core.tool``.
+
 A benchmark adapter knows three things:
 
 1. how to enumerate its task instances (``iter_tasks``)
 2. what static info to expose (``info``)
 3. how to grade a submission (``grade``)
-
-The runner is benchmark-agnostic; everything benchmark-specific lives
-behind these three methods. Real benchmarks shell out to upstream
-harnesses (Docker, swebench's evaluator, terminal-bench's runner); the
-adapter is the seam where that machinery hides.
 """
 from __future__ import annotations
 

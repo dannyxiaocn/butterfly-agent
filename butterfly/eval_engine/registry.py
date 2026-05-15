@@ -1,86 +1,100 @@
-"""Benchmark registry.
+"""Benchmark registry — thin shim over :class:`EvalLoader`.
 
-Centralises the {id: factory} mapping. The runner and the API both ask
-the registry for an adapter instance — neither imports a concrete
-benchmark module directly.
+Two coexisting discovery paths:
+
+1. **evalhub** (production) — :class:`EvalLoader` scans
+   ``evalhub/<name>/`` and instantiates the plugin's ``Adapter``.
+   This is the default ``get()`` / ``list_benchmarks()`` path.
+
+2. **in-process** (tests + external integrations) — ``register()``
+   binds a factory callable to a benchmark id, taking precedence over
+   the evalhub plugin with the same id. Used by tests to swap in a
+   ``StubBenchmark`` without dropping files on disk.
+
+The registry remembers no global state across processes; the loader is
+the source of truth.
 """
 from __future__ import annotations
 
 from typing import Any, Callable
 
-from butterfly.eval_engine.benchmarks import (
-    Benchmark,
-    SWEBenchAdapter,
-    TauBenchAdapter,
-    TerminalBenchAdapter,
-)
+from butterfly.eval_engine.benchmark import Benchmark
+from butterfly.eval_engine.loader import EvalLoader
 
 
 BenchmarkFactory = Callable[..., Benchmark]
 
 
-_BUILTINS: dict[str, BenchmarkFactory] = {
-    "swe-bench-verified": SWEBenchAdapter,
-    "terminal-bench": TerminalBenchAdapter,
-    "tau-bench": TauBenchAdapter,
-}
+_loader: EvalLoader = EvalLoader()
+_overrides: dict[str, BenchmarkFactory] = {}
 
 
-_registry: dict[str, BenchmarkFactory] = dict(_BUILTINS)
+def set_loader(loader: EvalLoader) -> None:
+    """Swap the loader (used by tests pointing at a tmp evalhub)."""
+    global _loader
+    _loader = loader
+
+
+def get_loader() -> EvalLoader:
+    return _loader
 
 
 def register(benchmark_id: str, factory: BenchmarkFactory) -> None:
     """Register a custom benchmark factory.
 
-    Re-registering an id is allowed — useful for tests that need to
-    swap in a stub.
+    Takes precedence over the evalhub plugin with the same id.
+    Re-registering is allowed — useful for tests that swap stubs.
     """
-    _registry[benchmark_id] = factory
+    _overrides[benchmark_id] = factory
 
 
 def unregister(benchmark_id: str) -> None:
-    _registry.pop(benchmark_id, None)
+    _overrides.pop(benchmark_id, None)
 
 
-def reset_to_builtins() -> None:
-    """Drop every registered benchmark except the three built-ins."""
-    _registry.clear()
-    _registry.update(_BUILTINS)
+def reset_overrides() -> None:
+    """Drop every in-process override; evalhub plugins remain visible."""
+    _overrides.clear()
 
 
 def list_benchmarks() -> list[dict]:
-    """Return the static info for every registered benchmark.
+    """Catalog: every evalhub plugin + every in-process override.
 
-    Each entry follows :class:`BenchmarkInfo.to_dict()` — id, name,
-    description, homepage, metric, etc.
+    Each entry follows :class:`BenchmarkInfo.to_dict()` with an extra
+    ``available`` boolean (currently always true; reserved for future
+    capability checks).
     """
-    out: list[dict] = []
-    for bid, factory in _registry.items():
+    out: dict[str, dict] = {}
+    for info in _loader.list_available():
+        d = info.to_dict()
+        d["available"] = True
+        d["source"] = "evalhub"
+        out[info.id] = d
+    for bid, factory in _overrides.items():
         try:
             adapter = factory()
-        except Exception as exc:  # noqa: BLE001 - keep the catalog usable
-            out.append({
-                "id": bid,
-                "name": bid,
-                "description": f"(adapter init failed: {exc})",
-                "available": False,
-            })
-            continue
-        info = adapter.info.to_dict()
-        info["available"] = True
-        out.append(info)
-    return out
+            d = adapter.info.to_dict()
+            d["available"] = True
+        except Exception as exc:  # noqa: BLE001
+            d = {"id": bid, "name": bid, "description": f"(init failed: {exc})",
+                 "available": False}
+        d["source"] = "override"
+        out[bid] = d
+    return list(out.values())
 
 
 def get(benchmark_id: str, **kwargs: Any) -> Benchmark:
     """Resolve a benchmark id to an adapter instance.
 
-    Extra kwargs flow into the factory — adapters accept ``mode=`` so
-    the reviewer can pin ``mode="smoke"`` from the API.
+    Lookup order: in-process overrides → evalhub plugins.
     """
-    if benchmark_id not in _registry:
+    if benchmark_id in _overrides:
+        return _overrides[benchmark_id](**kwargs)
+    try:
+        return _loader.load(benchmark_id, **kwargs)
+    except KeyError as exc:
+        # Re-raise with the friendlier message used by the API.
+        known = sorted({b["id"] for b in list_benchmarks()})
         raise KeyError(
-            f"Unknown benchmark {benchmark_id!r}. Known ids: "
-            f"{sorted(_registry)}"
-        )
-    return _registry[benchmark_id](**kwargs)
+            f"Unknown benchmark {benchmark_id!r}. Known ids: {known}"
+        ) from exc

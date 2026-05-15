@@ -1,0 +1,11 @@
+{
+  "id": "terminal-bench",
+  "name": "Terminal-bench",
+  "description": "Laude Institute's terminal/shell agent benchmark — multi-step tasks where the agent must drive a real shell to completion. Reported by Claude Opus 4.x and Kimi K2.x.",
+  "homepage": "https://github.com/laude-institute/terminal-bench",
+  "task_type": "terminal",
+  "metric": "success_rate",
+  "requires_docker": true,
+  "requires_network": false,
+  "default_limit": 5
+}

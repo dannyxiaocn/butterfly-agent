@@ -15,7 +15,7 @@ from butterfly.eval_engine.api import (
     register_adapter,
     unregister_adapter,
 )
-from butterfly.eval_engine.benchmarks.base import Benchmark
+from butterfly.eval_engine.benchmark import Benchmark
 from butterfly.eval_engine.service import EvalService
 from butterfly.eval_engine.types import BenchmarkInfo, EvalTask, TaskResult
 
@@ -56,7 +56,7 @@ def client(tmp_path):
     with TestClient(app) as c:
         yield c
     unregister_adapter("perfect")
-    registry.reset_to_builtins()
+    registry.reset_overrides()
 
 
 def test_list_benchmarks(client):

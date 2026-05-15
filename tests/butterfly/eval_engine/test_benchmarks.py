@@ -1,9 +1,6 @@
-"""Per-benchmark smoke tests.
-
-Each adapter must:
-1. enumerate at least one smoke task
-2. grade a hand-crafted "good" submission as passed
-3. grade an obviously-bad submission as failed
+"""Per-benchmark smoke tests — go through ``EvalLoader`` so the
+production discovery path (``evalhub/<name>/eval.json`` +
+``adapter.py``) is exercised, not the in-process registry.
 """
 from __future__ import annotations
 
@@ -11,29 +8,28 @@ import json
 
 import pytest
 
-from butterfly.eval_engine.benchmarks import (
-    SWEBenchAdapter,
-    TauBenchAdapter,
-    TerminalBenchAdapter,
-)
+from butterfly.eval_engine.loader import EvalLoader
 from butterfly.eval_engine.types import Submission
+
+
+@pytest.fixture
+def loader() -> EvalLoader:
+    return EvalLoader()
 
 
 # ── SWE-bench ────────────────────────────────────────────────────────────────
 
-def test_swe_smoke_iter_tasks():
-    bench = SWEBenchAdapter(mode="smoke")
+def test_swe_smoke_iter_tasks(loader):
+    bench = loader.load("swe-bench-verified", mode="smoke")
     tasks = list(bench.iter_tasks(limit=2))
     assert len(tasks) == 2
     assert all(t.metadata["mode"] == "smoke" for t in tasks)
     assert all("expected_substrings" in t.metadata for t in tasks)
 
 
-def test_swe_smoke_grades_correct_patch():
-    bench = SWEBenchAdapter(mode="smoke")
+def test_swe_smoke_grades_correct_patch(loader):
+    bench = loader.load("swe-bench-verified", mode="smoke")
     task = next(bench.iter_tasks(limit=1))
-    # Build a unified-diff that mentions the expected line and the
-    # expected file path.
     target_file = task.metadata["expected_changed_files"][0]
     expected_line = task.metadata["expected_substrings"][0]
     patch = (
@@ -47,8 +43,8 @@ def test_swe_smoke_grades_correct_patch():
     assert result.status == "passed", result.details
 
 
-def test_swe_smoke_rejects_bare_text():
-    bench = SWEBenchAdapter(mode="smoke")
+def test_swe_smoke_rejects_bare_text(loader):
+    bench = loader.load("swe-bench-verified", mode="smoke")
     task = next(bench.iter_tasks(limit=1))
     result = bench.grade(task, Submission(task_id=task.task_id,
                                           output="here is what I'd do..."))
@@ -56,8 +52,8 @@ def test_swe_smoke_rejects_bare_text():
     assert not result.details["looks_like_patch"]
 
 
-def test_swe_grade_propagates_submission_error():
-    bench = SWEBenchAdapter(mode="smoke")
+def test_swe_grade_propagates_submission_error(loader):
+    bench = loader.load("swe-bench-verified", mode="smoke")
     task = next(bench.iter_tasks(limit=1))
     result = bench.grade(task, Submission(task_id=task.task_id,
                                           output="", error="boom"))
@@ -66,8 +62,8 @@ def test_swe_grade_propagates_submission_error():
 
 # ── Terminal-bench ───────────────────────────────────────────────────────────
 
-def test_tbench_smoke_iter_tasks():
-    bench = TerminalBenchAdapter(mode="smoke")
+def test_tbench_smoke_iter_tasks(loader):
+    bench = loader.load("terminal-bench", mode="smoke")
     tasks = list(bench.iter_tasks(limit=3))
     assert len(tasks) == 3
     assert {t.task_id for t in tasks} == {
@@ -75,8 +71,8 @@ def test_tbench_smoke_iter_tasks():
     }
 
 
-def test_tbench_smoke_correct_command_passes():
-    bench = TerminalBenchAdapter(mode="smoke")
+def test_tbench_smoke_correct_command_passes(loader):
+    bench = loader.load("terminal-bench", mode="smoke")
     task = next(t for t in bench.iter_tasks() if t.task_id == "smoke__write-hello")
     submission = Submission(
         task_id=task.task_id,
@@ -86,16 +82,16 @@ def test_tbench_smoke_correct_command_passes():
     assert result.status == "passed", result.details
 
 
-def test_tbench_smoke_wrong_command_fails():
-    bench = TerminalBenchAdapter(mode="smoke")
+def test_tbench_smoke_wrong_command_fails(loader):
+    bench = loader.load("terminal-bench", mode="smoke")
     task = next(t for t in bench.iter_tasks() if t.task_id == "smoke__write-hello")
     submission = Submission(task_id=task.task_id, output="ls")
     result = bench.grade(task, submission)
     assert result.status == "failed"
 
 
-def test_tbench_smoke_rejects_unsafe_command():
-    bench = TerminalBenchAdapter(mode="smoke")
+def test_tbench_smoke_rejects_unsafe_command(loader):
+    bench = loader.load("terminal-bench", mode="smoke")
     task = next(t for t in bench.iter_tasks() if t.task_id == "smoke__write-hello")
     submission = Submission(task_id=task.task_id, output="sudo rm -rf /")
     result = bench.grade(task, submission)
@@ -103,10 +99,9 @@ def test_tbench_smoke_rejects_unsafe_command():
     assert "refused" in result.details["reason"]
 
 
-def test_tbench_count_files_uses_setup():
-    bench = TerminalBenchAdapter(mode="smoke")
+def test_tbench_count_files_uses_setup(loader):
+    bench = loader.load("terminal-bench", mode="smoke")
     task = next(t for t in bench.iter_tasks() if t.task_id == "smoke__count-files")
-    # Three files set up; correct answer is 3.
     submission = Submission(task_id=task.task_id, output="echo 3 > count.txt")
     result = bench.grade(task, submission)
     assert result.status == "passed", result.details
@@ -114,22 +109,22 @@ def test_tbench_count_files_uses_setup():
 
 # ── TAU-bench ────────────────────────────────────────────────────────────────
 
-def test_tau_smoke_iter_tasks():
-    bench = TauBenchAdapter(mode="smoke")
+def test_tau_smoke_iter_tasks(loader):
+    bench = loader.load("tau-bench", mode="smoke")
     tasks = list(bench.iter_tasks())
     assert len(tasks) == 3
     assert {t.metadata["domain"] for t in tasks} == {"retail", "airline"}
 
 
-def test_tau_smoke_domain_filter():
-    bench = TauBenchAdapter(mode="smoke", domain="retail")
+def test_tau_smoke_domain_filter(loader):
+    bench = loader.load("tau-bench", mode="smoke", domain="retail")
     tasks = list(bench.iter_tasks())
     assert tasks
     assert all(t.metadata["domain"] == "retail" for t in tasks)
 
 
-def test_tau_smoke_json_trace_passes():
-    bench = TauBenchAdapter(mode="smoke")
+def test_tau_smoke_json_trace_passes(loader):
+    bench = loader.load("tau-bench", mode="smoke")
     task = next(t for t in bench.iter_tasks() if t.task_id.startswith("smoke__retail-refund"))
     expected = task.metadata["expected_calls"]
     trace = json.dumps(expected)
@@ -137,8 +132,8 @@ def test_tau_smoke_json_trace_passes():
     assert result.status == "passed", result.details
 
 
-def test_tau_smoke_line_trace_passes():
-    bench = TauBenchAdapter(mode="smoke")
+def test_tau_smoke_line_trace_passes(loader):
+    bench = loader.load("tau-bench", mode="smoke")
     task = next(t for t in bench.iter_tasks() if t.task_id.startswith("smoke__retail-cancel"))
     expected = task.metadata["expected_calls"]
     quote = '"'
@@ -152,26 +147,52 @@ def test_tau_smoke_line_trace_passes():
     assert result.status == "passed", result.details
 
 
-def test_tau_smoke_unquoted_args_strip_trailing_paren():
-    """Regression: _ARG_RE used to greedily capture the closing `)` from
-    line-form tool calls with unquoted values, so ``f(x=1)`` parsed
-    as ``x="1)"``."""
-    from butterfly.eval_engine.benchmarks.tau_bench import _parse_trace
-    parsed = _parse_trace("lookup_order(order_id=A1042)")
+def test_tau_unquoted_args_strip_trailing_paren(loader):
+    """Regression (PR #71 review): ``_ARG_RE`` used to greedily capture
+    the closing ``)`` from line-form tool calls with unquoted values,
+    so ``f(x=1)`` parsed as ``x="1)"``. Re-ported into the evalhub
+    layout by reaching into the loaded plugin module."""
+    bench = loader.load("tau-bench", mode="smoke")
+    # The plugin's _parse_trace lives in the dynamically-loaded module
+    # named ``evalhub_tau_bench_adapter``; import it the same way the
+    # loader does so we don't depend on sys.modules state.
+    import importlib.util
+    from pathlib import Path
+    plugin_path = Path("evalhub/tau-bench/adapter.py").resolve()
+    spec = importlib.util.spec_from_file_location("tau_test_inspect", plugin_path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    parsed = mod._parse_trace("lookup_order(order_id=A1042)")
     assert parsed == [{"name": "lookup_order", "arguments": {"order_id": "A1042"}}]
+    # Bench instance is referenced so the linter doesn't complain.
+    assert bench.info.id == "tau-bench"
 
 
-def test_tau_smoke_missing_call_fails():
-    bench = TauBenchAdapter(mode="smoke")
+def test_every_smoke_task_has_expected_output(loader):
+    """The mock-passing CLI adapter relies on every smoke task carrying
+    a reference ``expected_output``. If a new benchmark plugin forgets
+    to set it, this test fails before the CLI is silently broken
+    (PR #72 review item 1)."""
+    for name in ("swe-bench-verified", "terminal-bench", "tau-bench"):
+        bench = loader.load(name, mode="smoke")
+        tasks = list(bench.iter_tasks())
+        assert tasks, f"{name} produced no tasks"
+        for t in tasks:
+            assert t.metadata.get("expected_output"), (
+                f"{name}::{t.task_id} is missing metadata['expected_output']"
+            )
+
+
+def test_tau_smoke_missing_call_fails(loader):
+    bench = loader.load("tau-bench", mode="smoke")
     task = next(iter(bench.iter_tasks()))
-    # Output a call with the right name but wrong order / missing follow-up.
     output = json.dumps([{"name": "noop", "arguments": {}}])
     result = bench.grade(task, Submission(task_id=task.task_id, output=output))
     assert result.status == "failed"
     assert result.details["missing_calls"]
 
 
-def test_unknown_mode_raises():
-    for cls in (SWEBenchAdapter, TerminalBenchAdapter, TauBenchAdapter):
+def test_unknown_mode_raises(loader):
+    for name in ("swe-bench-verified", "terminal-bench", "tau-bench"):
         with pytest.raises(ValueError):
-            cls(mode="bogus")
+            loader.load(name, mode="bogus")
