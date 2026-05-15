@@ -1,0 +1,11 @@
+{
+  "id": "tau-bench",
+  "name": "TAU-bench (retail + airline)",
+  "description": "Sierra's τ-bench — multi-turn tool-use dialogue against a simulated user and a domain database. Reported by Claude Opus 4.x and Kimi K2.x; pure-Python, no Docker needed.",
+  "homepage": "https://github.com/sierra-research/tau-bench",
+  "task_type": "tool_use_dialogue",
+  "metric": "success_rate",
+  "requires_docker": false,
+  "requires_network": false,
+  "default_limit": 5
+}

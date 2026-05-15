@@ -1,0 +1,17 @@
+agent: develop_machine
+kind: team
+version: "0.1.0"
+description: Develop-Machine workflow — three-role team (developer · checker · reviewer) that ships changes through a draft-PR review loop. Developer talks only to checker; reviewer talks only to checker; checker is the hub.
+
+leader: developer
+
+members:
+  - name: developer
+    agent: dm_developer
+    teamchat_mode: silent
+  - name: checker
+    agent: dm_checker
+    teamchat_mode: default
+  - name: reviewer
+    agent: dm_reviewer
+    teamchat_mode: silent
