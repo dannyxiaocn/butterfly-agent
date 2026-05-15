@@ -153,6 +153,9 @@ class Adapter(Benchmark):
                     "task_id": spec["task_id"],
                     "domain": spec["domain"],
                     "expected_calls": list(spec["expected_calls"]),
+                    # Used by the CLI's mock-passing adapter as a
+                    # universal "pass" signal (PR #72 review item 1).
+                    "expected_output": json.dumps(spec["expected_calls"]),
                     "mode": "smoke",
                 },
             )

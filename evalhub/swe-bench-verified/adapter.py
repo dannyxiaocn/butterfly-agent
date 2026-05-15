@@ -98,6 +98,19 @@ class Adapter(Benchmark):
             yield from self._iter_upstream(limit=limit)
             return
         for inst in _SMOKE_INSTANCES[: limit or len(_SMOKE_INSTANCES)]:
+            target_file = inst["expected_changed_files"][0]
+            expected_line = inst["expected_substrings"][0]
+            # Pre-canned reference solution — used by the CLI's
+            # mock-passing adapter as a universal "pass" signal so the
+            # wiring sanity check works for every benchmark, not just
+            # tau-bench (PR #72 review item 1).
+            expected_output = (
+                f"diff --git a/{target_file} b/{target_file}\n"
+                f"--- a/{target_file}\n"
+                f"+++ b/{target_file}\n"
+                "@@\n"
+                f"+    {expected_line}\n"
+            )
             yield EvalTask(
                 task_id=inst["instance_id"],
                 benchmark=self.info.id,
@@ -111,6 +124,7 @@ class Adapter(Benchmark):
                     "instance_id": inst["instance_id"],
                     "expected_substrings": inst["expected_substrings"],
                     "expected_changed_files": inst["expected_changed_files"],
+                    "expected_output": expected_output,
                     "mode": "smoke",
                 },
             )

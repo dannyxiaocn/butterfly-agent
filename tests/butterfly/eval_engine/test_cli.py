@@ -52,6 +52,24 @@ def test_eval_run_with_enable_and_mock_passes(tmp_path):
     assert (runs[0] / "results.jsonl").is_file()
 
 
+def test_mock_passing_works_for_every_builtin(tmp_path):
+    """Reviewer feedback (PR #72 item 1): the mock-passing adapter
+    must be a universal "pass" baseline, not just for tau-bench. Each
+    smoke task now carries an ``expected_output`` reference solution
+    that the mock echoes back."""
+    proc = _butterfly_eval(
+        "run",
+        "--enable", "swe-bench-verified,terminal-bench,tau-bench",
+        "--adapter", "mock-passing",
+        "--limit", "1",
+        "--evals-root", str(tmp_path / "_evals"),
+    )
+    assert proc.returncode == 0, proc.stderr
+    # All three benchmarks should report passed=1/1.
+    passes = proc.stdout.count("passed=1/1")
+    assert passes == 3, f"expected 3 pass lines, got {passes}\n{proc.stdout}"
+
+
 def test_eval_run_unknown_benchmark_exits_nonzero(tmp_path):
     proc = _butterfly_eval(
         "run",

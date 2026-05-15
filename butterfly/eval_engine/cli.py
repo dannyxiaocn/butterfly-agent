@@ -52,40 +52,35 @@ def _resolve_adapter(name: str) -> AgentAdapter:
     if name == "echo":
         return echo_adapter()
     if name == "mock-passing":
-        def _fn(task):
-            expected = task.metadata.get("expected_substrings") \
-                or task.metadata.get("expected_calls") \
-                or task.metadata.get("expected") \
-                or ""
-            if isinstance(expected, list):
-                if expected and isinstance(expected[0], dict):
-                    return json.dumps(expected)
-                return "\n".join(map(str, expected))
-            return str(expected)
-        return CallableAdapter(_fn, name="mock-passing")
-    from butterfly.eval_engine.api import _adapter_registry
-    if name in _adapter_registry:
-        return _adapter_registry[name]
+        # Every smoke task in evalhub/ ships an ``expected_output`` field
+        # — the reference solution. The mock just echoes it so the CLI
+        # wiring can be sanity-checked across all built-in benchmarks
+        # (PR #72 review item 1).
+        return CallableAdapter(
+            lambda task: str(task.metadata.get("expected_output", "")),
+            name="mock-passing",
+        )
+    from butterfly.eval_engine.api import get_adapter, list_adapter_names
+    adapter = get_adapter(name)
+    if adapter is not None:
+        return adapter
     raise SystemExit(
         f"butterfly eval: unknown adapter {name!r}. Known: echo, mock-passing, "
-        f"{sorted(set(_adapter_registry) - {'echo'})}. Register one via "
+        f"{sorted(set(list_adapter_names()) - {'echo'})}. Register one via "
         "butterfly.eval_engine.api.register_adapter()."
     )
 
 
-def _resolve_enable(
-    enable_arg: str | None,
-    loader: EvalLoader,
-    evals_md: Path,
-) -> list[str]:
+def _resolve_enable(enable_arg: str | None, loader: EvalLoader) -> list[str]:
     if enable_arg:
         names = [n.strip() for n in enable_arg.split(",") if n.strip()]
     else:
-        names = loader.list_enabled(evals_md)
+        # Loader was constructed with the evals.md path; reuse it.
+        names = loader.list_enabled()
     if not names:
         raise SystemExit(
-            f"butterfly eval: nothing enabled. Either pass --enable a,b,c "
-            f"or list benchmarks in {evals_md}."
+            "butterfly eval: nothing enabled. Either pass --enable a,b,c "
+            f"or list benchmarks in {loader._evals_md}."  # noqa: SLF001
         )
     available = {info.id for info in loader.list_available()}
     missing = [n for n in names if n not in available]
@@ -132,9 +127,7 @@ def cmd_run(args) -> int:
         evalhub_dir=Path(args.evalhub_dir) if args.evalhub_dir else None,
         evals_md_path=Path(args.evals_md) if args.evals_md else None,
     )
-    # Use the loader's evals_md path so --evals-md overrides flow through.
-    evals_md_path = Path(args.evals_md) if args.evals_md else _DEFAULT_EVALS_MD
-    names = _resolve_enable(args.enable, loader, evals_md_path)
+    names = _resolve_enable(args.enable, loader)
     adapter = _resolve_adapter(args.adapter)
     root = Path(args.evals_root) if args.evals_root else _DEFAULT_EVALS_ROOT
     svc = EvalService(root)
@@ -260,16 +253,3 @@ def add_eval_parser(subparsers) -> None:
     prun.add_argument("--json", action="store_true",
                       help="Emit the full EvalRun JSON after each benchmark.")
     prun.set_defaults(func=cmd_run)
-
-    p.set_defaults(func=lambda args: _dispatch(args))
-
-
-def _dispatch(args) -> int:
-    """When the user runs ``butterfly eval`` with no subcommand we
-    print a short usage hint instead of argparse's default error."""
-    print(
-        "usage: butterfly eval [list|run] [options]\n"
-        "Try `butterfly eval list` or `butterfly eval run --help`.",
-        file=sys.stderr,
-    )
-    return 2

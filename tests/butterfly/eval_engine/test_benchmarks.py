@@ -147,6 +147,42 @@ def test_tau_smoke_line_trace_passes(loader):
     assert result.status == "passed", result.details
 
 
+def test_tau_unquoted_args_strip_trailing_paren(loader):
+    """Regression (PR #71 review): ``_ARG_RE`` used to greedily capture
+    the closing ``)`` from line-form tool calls with unquoted values,
+    so ``f(x=1)`` parsed as ``x="1)"``. Re-ported into the evalhub
+    layout by reaching into the loaded plugin module."""
+    bench = loader.load("tau-bench", mode="smoke")
+    # The plugin's _parse_trace lives in the dynamically-loaded module
+    # named ``evalhub_tau_bench_adapter``; import it the same way the
+    # loader does so we don't depend on sys.modules state.
+    import importlib.util
+    from pathlib import Path
+    plugin_path = Path("evalhub/tau-bench/adapter.py").resolve()
+    spec = importlib.util.spec_from_file_location("tau_test_inspect", plugin_path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    parsed = mod._parse_trace("lookup_order(order_id=A1042)")
+    assert parsed == [{"name": "lookup_order", "arguments": {"order_id": "A1042"}}]
+    # Bench instance is referenced so the linter doesn't complain.
+    assert bench.info.id == "tau-bench"
+
+
+def test_every_smoke_task_has_expected_output(loader):
+    """The mock-passing CLI adapter relies on every smoke task carrying
+    a reference ``expected_output``. If a new benchmark plugin forgets
+    to set it, this test fails before the CLI is silently broken
+    (PR #72 review item 1)."""
+    for name in ("swe-bench-verified", "terminal-bench", "tau-bench"):
+        bench = loader.load(name, mode="smoke")
+        tasks = list(bench.iter_tasks())
+        assert tasks, f"{name} produced no tasks"
+        for t in tasks:
+            assert t.metadata.get("expected_output"), (
+                f"{name}::{t.task_id} is missing metadata['expected_output']"
+            )
+
+
 def test_tau_smoke_missing_call_fails(loader):
     bench = loader.load("tau-bench", mode="smoke")
     task = next(iter(bench.iter_tasks()))

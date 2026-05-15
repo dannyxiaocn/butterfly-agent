@@ -62,6 +62,8 @@ def _check_tarball(workdir: Path) -> tuple[bool, dict]:
     return target.stat().st_size > 0, {"size": target.stat().st_size}
 
 
+# ``expected_output`` is the reference solution — used by the CLI's
+# mock-passing adapter for end-to-end wiring checks (PR #72 review item 1).
 _SMOKE_TASKS: list[dict] = [
     {
         "task_id": "smoke__write-hello",
@@ -72,6 +74,7 @@ _SMOKE_TASKS: list[dict] = [
         ),
         "setup": [],
         "checker": _check_hello,
+        "expected_output": "printf 'hello world' > hello.txt",
     },
     {
         "task_id": "smoke__count-files",
@@ -82,6 +85,7 @@ _SMOKE_TASKS: list[dict] = [
         ),
         "setup": ["touch a.txt b.txt c.txt"],
         "checker": _check_count_files,
+        "expected_output": "echo 3 > count.txt",
     },
     {
         "task_id": "smoke__tar-archive",
@@ -91,6 +95,7 @@ _SMOKE_TASKS: list[dict] = [
         ),
         "setup": ["echo one > one.txt", "echo two > two.txt"],
         "checker": _check_tarball,
+        "expected_output": "tar czf out.tar.gz *.txt",
     },
 ]
 
@@ -144,6 +149,7 @@ class Adapter(Benchmark):
                 metadata={
                     "task_id": spec["task_id"],
                     "setup": list(spec["setup"]),
+                    "expected_output": spec["expected_output"],
                     "mode": "smoke",
                 },
             )

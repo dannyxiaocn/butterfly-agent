@@ -48,6 +48,16 @@ def list_adapter_names() -> list[str]:
     return sorted(_adapter_registry)
 
 
+def get_adapter(name: str) -> AgentAdapter | None:
+    """Return the named adapter, or ``None`` if not registered.
+
+    Public counterpart to the module-private ``_adapter_registry`` —
+    callers outside this file should go through this function rather
+    than poking at the dict directly.
+    """
+    return _adapter_registry.get(name)
+
+
 def _resolve_adapter(name: str) -> AgentAdapter:
     if name not in _adapter_registry:
         raise HTTPException(

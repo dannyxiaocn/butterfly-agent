@@ -76,6 +76,12 @@ def _load_adapter_module(name: str, evalhub_dir: Path):
     if spec is None or spec.loader is None:
         return None
     mod = importlib.util.module_from_spec(spec)
+    # We register the freshly-built module under ``mod_name`` in
+    # ``sys.modules`` so dataclass / pickle / typing-introspection paths
+    # can resolve names back to it. Re-loading the same plugin name
+    # against a different ``evalhub_dir`` (e.g. successive tests with
+    # tmp_path) overwrites the slot and ``exec_module`` re-runs the body
+    # against the new source — deliberate, so per-test isolation works.
     sys.modules[mod_name] = mod
     spec.loader.exec_module(mod)
     return mod
