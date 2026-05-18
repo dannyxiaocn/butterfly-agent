@@ -163,9 +163,6 @@ def create_app(
 
     @app.get("/api/sessions")
     async def list_sessions():
-        # Meta-sessions are included in the response (the sidebar may
-        # choose to filter them client-side). Matches the pre-refactor
-        # exclude_meta=False contract.
         return io.list_sessions()
 
     @app.post("/api/sessions")
@@ -211,10 +208,8 @@ def create_app(
     async def get_session(session_id: str):
         try:
             info = io.get_session(session_id)
-            # The legacy endpoint merged a fresh config payload into the
-            # session info (the config includes ``is_meta_session`` while
-            # the raw info ``params`` does not). Keep that quirk so the
-            # deployed frontend's config dropdown survives.
+            # Merge a fresh config payload into the session info — the
+            # raw info ``params`` may not reflect the on-disk config.
             params = io.read_config(session_id)
         except Exception as exc:
             raise _http_error(exc) from exc
@@ -248,8 +243,6 @@ def create_app(
 
     @app.post("/api/sessions/{session_id}/messages")
     async def send_message(session_id: str, body: dict):
-        if str(session_id).endswith("_meta"):
-            raise HTTPException(403, "Direct chat with meta sessions is disabled.")
         text = body.get("content", "")
         if not isinstance(text, str):
             raise HTTPException(400, "Body must include 'content' string")

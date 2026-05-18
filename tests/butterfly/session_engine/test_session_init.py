@@ -22,15 +22,12 @@ def _repo_root() -> Path:
 class SessionInitUnitTests(unittest.TestCase):
     def test_init_session_stays_inside_custom_bases(self) -> None:
         unique_agent = f"unit_test_agent_{uuid.uuid4().hex}"
-        leaked_meta_dir = _repo_root() / "sessions" / f"{unique_agent}_meta"
+        leaked_session_dir = _repo_root() / "sessions" / "demo"
         try:
             with TemporaryDirectory() as td, patch(
-                "butterfly.session_engine.agent_state._create_meta_venv",
-                side_effect=lambda p: p / ".venv",
-            ), patch(
                 "butterfly.session_engine.session_init._create_session_venv",
                 side_effect=lambda p: p / ".venv",
-            ), patch("butterfly.session_engine.agent_state.start_meta_agent"):
+            ):
                 root = Path(td)
                 agent_base = root / "agenthub"
                 sessions_base = root / "sessions"
@@ -65,11 +62,10 @@ class SessionInitUnitTests(unittest.TestCase):
                 )
 
                 self.assertTrue((sessions_base / "demo").exists())
-                self.assertTrue((sessions_base / f"{unique_agent}_meta").exists())
-                self.assertFalse(leaked_meta_dir.exists())
+                self.assertFalse(leaked_session_dir.exists())
         finally:
-            if leaked_meta_dir.exists():
-                shutil.rmtree(leaked_meta_dir)
+            if leaked_session_dir.exists():
+                shutil.rmtree(leaked_session_dir)
 
 
 def test_create_session_venv_does_not_accept_incomplete_existing_directory(tmp_path):
@@ -107,12 +103,9 @@ def test_init_session_config_not_clobbered_by_concurrent_ensure_config(tmp_path)
     """
     unique_agent = f"unit_test_agent_{uuid.uuid4().hex}"
     with TemporaryDirectory() as td, patch(
-        "butterfly.session_engine.agent_state._create_meta_venv",
-        side_effect=lambda p: p / ".venv",
-    ), patch(
         "butterfly.session_engine.session_init._create_session_venv",
         side_effect=lambda p: p / ".venv",
-    ), patch("butterfly.session_engine.agent_state.start_meta_agent"):
+    ):
         root = Path(td)
         agent_base = root / "agenthub"
         sessions_base = root / "sessions"
@@ -176,12 +169,9 @@ def test_init_session_writes_manifest_after_config_populated(tmp_path):
     """
     unique_agent = f"unit_test_agent_{uuid.uuid4().hex}"
     with TemporaryDirectory() as td, patch(
-        "butterfly.session_engine.agent_state._create_meta_venv",
-        side_effect=lambda p: p / ".venv",
-    ), patch(
         "butterfly.session_engine.session_init._create_session_venv",
         side_effect=lambda p: p / ".venv",
-    ), patch("butterfly.session_engine.agent_state.start_meta_agent"):
+    ):
         root = Path(td)
         agent_base = root / "agenthub"
         sessions_base = root / "sessions"
@@ -204,7 +194,6 @@ def test_init_session_writes_manifest_after_config_populated(tmp_path):
         observed: dict[str, object] = {"seen": False, "config_model": None}
 
         def spy_write_text(self, data, *args, **kwargs):
-            # Only care about the specific session's manifest, not the meta session's.
             if self.name == "manifest.json" and self.parent.name == session_id:
                 sess_cfg = sessions_base / session_id / "core" / "config.yaml"
                 observed["seen"] = True
@@ -244,12 +233,9 @@ def _run_init_with_stub_config(tmp_path, *, stub_content: str) -> dict:
     """
     unique_agent = f"unit_test_agent_{uuid.uuid4().hex}"
     with TemporaryDirectory() as td, patch(
-        "butterfly.session_engine.agent_state._create_meta_venv",
-        side_effect=lambda p: p / ".venv",
-    ), patch(
         "butterfly.session_engine.session_init._create_session_venv",
         side_effect=lambda p: p / ".venv",
-    ), patch("butterfly.session_engine.agent_state.start_meta_agent"):
+    ):
         root = Path(td)
         agent_base = root / "agenthub"
         sessions_base = root / "sessions"

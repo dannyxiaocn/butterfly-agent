@@ -27,7 +27,6 @@ agenthub/ (static agent templates)
 - **Dual directory pattern**: `sessions/<id>/` (agent-visible workspace) vs `_sessions/<id>/` (system-only state). Agents never see system internals.
 - **Hot reload**: Capabilities reload from disk before every agent activation. Edit files → agent picks up changes next run.
 - **Self-contained agents**: Each agent in `agenthub/` is fully self-contained — all prompts, tools, and skills are physically present. New agents are created with `--init-from <source>` (one-time copy) or `--blank`.
-- **Meta sessions**: Each agent seeds a meta session once; the meta session is the authoritative, evolving config. Child sessions are seeded from meta. Version staleness notices inform users when meta has advanced.
 - **File-based IPC**: `events_v1.jsonl` is the single append-only log; readers cursor by event id (browser SSE uses `Last-Event-ID`). No sockets, no message queues.
 
 ## Versioning

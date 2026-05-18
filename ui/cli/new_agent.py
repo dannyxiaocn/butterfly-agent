@@ -183,7 +183,7 @@ def create_agent(
         manifest.pop("name", None)
         manifest["agent"] = name
         manifest["init_from"] = init_from
-        for field in ("extends", "link", "own", "append", "version", "meta_session"):
+        for field in ("extends", "link", "own", "append", "version"):
             manifest.pop(field, None)
         if duty is not None:
             manifest["duty"] = {

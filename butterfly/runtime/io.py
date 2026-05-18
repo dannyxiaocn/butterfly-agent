@@ -95,11 +95,6 @@ PanelEntry = dict  # JSON form of ``butterfly.session_engine.panel.PanelEntry``
 
 
 # ── Repo layout constants ─────────────────────────────────────────────────────
-#
-# Shared with ``butterfly.session_engine.agent_state`` — deliberately
-# duplicated (not imported) so that agent_state's heavy imports don't
-# pull into this module's startup cost. Both constants target the same
-# filesystem locations.
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 _SESSIONS_DIR = _REPO_ROOT / "sessions"
@@ -161,16 +156,13 @@ def list_sessions(include_archived: bool = False) -> list[SessionInfo]:
     """
     from butterfly.service.sessions_service import list_sessions as _svc_list
 
-    # exclude_meta=False to mirror the pre-refactor web contract. CLI
-    # aliases that want to hide meta sessions (e.g. ``butterfly sessions``)
-    # filter at their own layer.
-    live = _svc_list(_SESSIONS_DIR, _SYSTEM_SESSIONS_DIR, exclude_meta=False)
+    live = _svc_list(_SESSIONS_DIR, _SYSTEM_SESSIONS_DIR)
     if not include_archived or not _ARCHIVED_DIR.is_dir():
         return live
     # Archived sessions mirror the system-dir layout. We reuse the service
     # reader by pointing both base dirs at the archive path — it only
     # cares about manifest.json + status.json existence.
-    archived = _svc_list(_ARCHIVED_DIR, _ARCHIVED_DIR, exclude_meta=False)
+    archived = _svc_list(_ARCHIVED_DIR, _ARCHIVED_DIR)
     # Stamp an ``archived=True`` flag so callers can visually distinguish.
     for info in archived:
         info["archived"] = True
@@ -407,10 +399,8 @@ def read_todo_list(session_id: str) -> TodoList | None:
 def read_config(session_id: str) -> dict:
     """Return the session's ``core/config.yaml`` merged with defaults.
 
-    Includes the ``is_meta_session`` flag (``True`` when the session id
-    ends in ``_meta``) matching the existing ``/api/sessions/{id}/config``
-    response shape. Raises ``FileNotFoundError`` when the session is
-    missing in either the system or user tree.
+    Raises ``FileNotFoundError`` when the session is missing in either
+    the system or user tree.
     """
     from butterfly.service.config_service import get_config as _svc_config
 

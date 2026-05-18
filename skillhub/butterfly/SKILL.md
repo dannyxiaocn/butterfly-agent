@@ -26,7 +26,6 @@ Read the code and tests before trusting documentation. Keep changes local to the
 
 - **Agent** — a reusable agent template (`agenthub/<name>/`): config, prompts, tools, skills
 - **Session** — a running instance of an agent (`sessions/<id>/`): agent-visible workspace
-- **Meta session** — mutable shared seed for all sessions of an agent (`sessions/<agent>_meta/`)
 - **Server** — background daemon that watches for sessions and runs agent loops
 
 ### Quick Start
@@ -155,7 +154,7 @@ butterfly/           runtime implementation
 ├── llm_engine/     provider registry + adapters (anthropic, openai, kimi, codex)
 ├── tool_engine/    tool loading, executors, registry
 ├── skill_engine/   SKILL.md loading + system prompt rendering
-├── session_engine/ agent config, session init, meta-session state, task cards
+├── session_engine/ agent config, session init, task cards
 └── runtime/        server, watcher, IPC, bridge, env, git coordination
 toolhub/            built-in tool implementations (tool.json + executor.py)
 skillhub/           built-in skill definitions (SKILL.md)
@@ -172,7 +171,6 @@ docs/               documentation and task boards
 #### Filesystem-as-Everything
 - Agents read/write session directories; IPC via `context.jsonl` + `events.jsonl`
 - `agenthub/` is read-only template; all mutable state in `sessions/`
-- `sessions/<agent>_meta/` holds agent-level mutable state
 
 #### Hub Pattern (toolhub + skillhub)
 - All built-in tools live in `toolhub/<name>/` with `tool.json` + `executor.py`
@@ -200,7 +198,7 @@ UI → runtime → session_engine → core
 | `llm_engine/` | Provider implementations, message conversion | Tool execution |
 | `tool_engine/` | ToolLoader, executor dispatch, shell/bash tools | Agent loop |
 | `skill_engine/` | SkillLoader, skills.md parsing, prompt rendering | Tool execution |
-| `session_engine/` | Session lifecycle, agent config, meta-session, task cards | Central dispatch |
+| `session_engine/` | Session lifecycle, agent config, task cards | Central dispatch |
 | `runtime/` | Server, watcher, IPC, bridge | Agent config |
 
 ### Session Model
@@ -214,7 +212,7 @@ agenthub/<name>/           read-only template
 
 sessions/<id>/           agent-visible runtime
   └── core/
-      ├── config.yaml    runtime config (from meta session)
+      ├── config.yaml    runtime config (copied from agenthub)
       ├── system.md      system prompt
       ├── task.md        task/heartbeat prompt
       ├── env.md         session environment context
@@ -259,7 +257,7 @@ _sessions/<id>/          system-only twin (agent never sees)
 #### Adding an agent
 
 1. Create `agenthub/<name>/` with `config.yaml`, `prompts/`, `tools.md`, `skills.md` (or use `butterfly agent new -n <name> --init-from agent`)
-2. The meta session is initialized automatically the first time a child session is created from the agent (`populate_meta_from_agent` runs during `init_session`).
+2. New sessions are seeded directly from `agenthub/<name>/` by `init_session`.
 
 ### System Prompt Assembly
 
@@ -289,4 +287,4 @@ Test layout mirrors source: `tests/butterfly/{core,llm_engine,tool_engine,...}/`
 - If a README and the code disagree, trust the code and fix the README
 - If a directory is an operational subsystem, it should have a short README
 - If a file path is part of a contract, mention the path exactly as the code uses it
-- After changing files under `agenthub/<name>/`, either (a) delete the meta session `sessions/<name>_meta/` and `_sessions/<name>_meta/` so the next child session re-bootstraps from the agent, or (b) manually mirror the edits into `sessions/<name>_meta/core/` for existing sessions to pick up.
+- After changing files under `agenthub/<name>/`, new sessions pick up the changes automatically; existing sessions keep their seeded copies until `core/` is edited or the session is deleted.

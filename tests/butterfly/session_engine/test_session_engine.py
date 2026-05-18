@@ -66,14 +66,13 @@ class SessionEngineTest(unittest.TestCase):
         self.assertEqual(status["pid"], 123)
         self.assertIsNotNone(status["updated_at"])
 
-    def test_init_session_copies_meta_seed_content(self) -> None:
+    def test_init_session_copies_agent_seed_content(self) -> None:
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             sessions_base = root / "sessions"
             system_base = root / "_sessions"
             agent_base = root / "agenthub"
             agent_dir = agent_base / "demo"
-            meta_dir = sessions_base / "demo_meta"
 
             (agent_dir / "prompts").mkdir(parents=True)
             (agent_dir / "config.yaml").write_text(
@@ -83,34 +82,23 @@ class SessionEngineTest(unittest.TestCase):
             (agent_dir / "prompts" / "system.md").write_text("sys", encoding="utf-8")
             (agent_dir / "prompts" / "task.md").write_text("task", encoding="utf-8")
             (agent_dir / "prompts" / "env.md").write_text("env", encoding="utf-8")
-
-            (meta_dir / "core" / "memory").mkdir(parents=True)
-            (meta_dir / "playground").mkdir(parents=True)
-            (meta_dir / "core" / "system.md").write_text("sys", encoding="utf-8")
-            (meta_dir / "core" / "task.md").write_text("task", encoding="utf-8")
-            (meta_dir / "core" / "env.md").write_text("env", encoding="utf-8")
-            (meta_dir / "core" / "config.yaml").write_text(
-                "name: demo\nmodel: claude-sonnet-4-6\n", encoding="utf-8"
-            )
-            (meta_dir / "core" / "memory.md").write_text("meta memory", encoding="utf-8")
-            (meta_dir / "core" / "memory" / "layer.md").write_text("layer", encoding="utf-8")
-            (meta_dir / "core" / "tools.md").write_text("bash\n", encoding="utf-8")
-            (meta_dir / "core" / "skills.md").write_text("butterfly\n", encoding="utf-8")
-            (meta_dir / "playground" / "seed.txt").write_text("seed", encoding="utf-8")
+            (agent_dir / "tools.md").write_text("bash\n", encoding="utf-8")
+            (agent_dir / "skills.md").write_text("butterfly\n", encoding="utf-8")
+            (agent_dir / "memory.md").write_text("agent memory", encoding="utf-8")
+            (agent_dir / "memory").mkdir(parents=True, exist_ok=True)
+            (agent_dir / "memory" / "layer.md").write_text("layer", encoding="utf-8")
+            (agent_dir / "playground").mkdir(parents=True)
+            (agent_dir / "playground" / "seed.txt").write_text("seed", encoding="utf-8")
 
             def fake_create_session_venv(session_dir: Path) -> Path:
                 venv = session_dir / ".venv"
                 venv.mkdir(parents=True, exist_ok=True)
                 return venv
 
-            with patch("butterfly.session_engine.session_init._create_session_venv", side_effect=fake_create_session_venv), patch(
-                "butterfly.session_engine.session_init.ensure_meta_session",
-                side_effect=lambda *args, **kwargs: meta_dir,
-            ), patch(
-                "butterfly.session_engine.session_init.ensure_gene_initialized"
-            ), patch(
-                "butterfly.session_engine.session_init.start_meta_agent"
-            ), patch("butterfly.session_engine.session_init.sync_from_agent"):
+            with patch(
+                "butterfly.session_engine.session_init._create_session_venv",
+                side_effect=fake_create_session_venv,
+            ):
                 init_session(
                     "s1",
                     "demo",
@@ -123,7 +111,7 @@ class SessionEngineTest(unittest.TestCase):
             self.assertEqual((core_dir / "system.md").read_text(encoding="utf-8"), "sys")
             self.assertEqual((core_dir / "task.md").read_text(encoding="utf-8"), "task")
             self.assertEqual((core_dir / "env.md").read_text(encoding="utf-8"), "env")
-            self.assertEqual((core_dir / "memory.md").read_text(encoding="utf-8"), "meta memory")
+            self.assertEqual((core_dir / "memory.md").read_text(encoding="utf-8"), "agent memory")
             self.assertTrue((core_dir / "memory" / "layer.md").exists())
             self.assertTrue((core_dir / "tools.md").exists())
             self.assertTrue((core_dir / "skills.md").exists())

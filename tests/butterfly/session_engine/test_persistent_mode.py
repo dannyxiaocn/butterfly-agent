@@ -203,8 +203,7 @@ def test_session_init_creates_duty_card_from_config(tmp_path):
         venv.mkdir(parents=True, exist_ok=True)
         return venv
 
-    with patch("butterfly.session_engine.session_init._create_session_venv", side_effect=fake_venv), \
-         patch("butterfly.session_engine.agent_state._create_meta_venv", side_effect=fake_venv):
+    with patch("butterfly.session_engine.session_init._create_session_venv", side_effect=fake_venv):
         init_session(
             "s1",
             "test_ent",
@@ -242,8 +241,7 @@ def test_session_init_no_duty_keeps_empty_tasks(tmp_path):
         venv.mkdir(parents=True, exist_ok=True)
         return venv
 
-    with patch("butterfly.session_engine.session_init._create_session_venv", side_effect=fake_venv), \
-         patch("butterfly.session_engine.agent_state._create_meta_venv", side_effect=fake_venv):
+    with patch("butterfly.session_engine.session_init._create_session_venv", side_effect=fake_venv):
         init_session(
             "s2",
             "plain",
@@ -254,6 +252,5 @@ def test_session_init_no_duty_keeps_empty_tasks(tmp_path):
 
     tasks_dir = sessions_base / "s2" / "core" / "tasks"
     from butterfly.session_engine.task_cards import load_all_cards
-    # Should have no duty card (meta task may exist from start_meta_agent)
     duty = load_card(tasks_dir, "duty")
     assert duty is None

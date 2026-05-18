@@ -1519,9 +1519,8 @@ async def test_tick_cancel_preserves_tool_use_blocks(tmp_path):
     committed tool_use + tool_result messages on disk so reload surfaces
     the tool cell. Pre-v2.0.34 ``_do_tick``'s CancelledError branch
     rolled ``self._agent._history`` back to the pre-tick snapshot and
-    wrote an empty-``messages`` turn — meta sessions (100% TaskItem
-    workload) therefore lost every tool-call cell on refresh after
-    ⚡ interrupt."""
+    wrote an empty-``messages`` turn — task-heavy sessions therefore
+    lost every tool-call cell on refresh after ⚡ interrupt."""
     tool_started = asyncio.Event()
 
     @tool(description="hangs until cancelled")

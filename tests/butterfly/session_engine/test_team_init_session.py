@@ -66,13 +66,8 @@ class InitTeamSessionTests(unittest.TestCase):
         agent_b = f"b_{uuid.uuid4().hex[:6]}"
 
         with TemporaryDirectory() as td, patch(
-            "butterfly.session_engine.agent_state._create_meta_venv",
-            side_effect=lambda p: p / ".venv",
-        ), patch(
             "butterfly.session_engine.session_init._create_session_venv",
             side_effect=lambda p: p / ".venv",
-        ), patch(
-            "butterfly.session_engine.agent_state.start_meta_agent"
         ):
             root = Path(td)
             agent_base = root / "agenthub"

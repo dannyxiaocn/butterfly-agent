@@ -1115,8 +1115,6 @@ export function createChat(): HTMLElement {
   async function sendMessage(modeOverride?: 'interrupt' | 'wait') {
     const content = inputEl.value.trim();
     if (!content || !store.currentSessionId) return;
-    const sess = store.currentSession;
-    if (sess?.id.endsWith('_meta') || sess?.params?.is_meta_session) return;
     const sessId = store.currentSessionId;
     const mode: 'interrupt' | 'wait' = modeOverride ?? (waitModeChk.checked ? 'wait' : 'interrupt');
     inputEl.value = '';
@@ -1155,13 +1153,9 @@ export function createChat(): HTMLElement {
   });
 
   store.on('currentSession', () => {
-    const sess = store.currentSession;
-    const isMeta = sess?.id.endsWith('_meta') || sess?.params?.is_meta_session;
-    inputEl.disabled = !!isMeta;
-    sendBtn.disabled = !!isMeta;
-    inputEl.placeholder = isMeta
-      ? 'Direct chat with meta sessions is disabled.'
-      : 'Type a message… (Enter = send, Shift+Enter = newline, Alt/⌥+Enter = wait-mode)';
+    inputEl.disabled = false;
+    sendBtn.disabled = false;
+    inputEl.placeholder = 'Type a message… (Enter = send, Shift+Enter = newline, Alt/⌥+Enter = wait-mode)';
   });
 
   return el;

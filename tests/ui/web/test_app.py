@@ -898,17 +898,6 @@ class Phase7Tests(unittest.TestCase):
                 f"expected user_input with text 'hello world', got {user_inputs}",
             )
 
-    def test_messages_endpoint_rejects_meta_session(self) -> None:
-        with TemporaryDirectory() as td:
-            root = _make_session(Path(td), session_id="agent_meta")
-            app = create_app(root / "sessions", root / "_sessions")
-            with TestClient(app) as client:
-                resp = client.post(
-                    "/api/sessions/agent_meta/messages",
-                    json={"content": "hi"},
-                )
-            self.assertEqual(resp.status_code, 403)
-
     def test_messages_endpoint_accepts_wait_mode(self) -> None:
         """Body's ``mode`` field is plumbed through io.send_message so the
         dispatcher can queue rather than interrupt. The recorded user_input

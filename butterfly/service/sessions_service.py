@@ -18,10 +18,6 @@ def _validate_session_id(session_id: str) -> None:
         raise ValueError(f"Invalid session_id: {session_id!r}")
 
 
-def is_meta_session(session_id: str) -> bool:
-    return session_id.endswith("_meta")
-
-
 def list_agents(agenthub_dir: Path) -> list[str]:
     """Return names of agents in agenthub/ that ship a config.yaml."""
     if not agenthub_dir.is_dir():
@@ -115,14 +111,12 @@ def sort_sessions(sessions: list[dict]) -> list[dict]:
     return sessions
 
 
-def list_sessions(sessions_dir: Path, system_sessions_dir: Path, exclude_meta: bool = True) -> list[dict]:
+def list_sessions(sessions_dir: Path, system_sessions_dir: Path) -> list[dict]:
     if not system_sessions_dir.is_dir():
         return []
     result = []
     for d in sorted(system_sessions_dir.iterdir()):
         if not d.is_dir():
-            continue
-        if exclude_meta and is_meta_session(d.name):
             continue
         info = get_session(d.name, sessions_dir, system_sessions_dir)
         if info is not None:
@@ -312,10 +306,9 @@ def _resolve_sessions_base(system_sessions_dir: Path) -> Path | None:
     """Map ``_sessions/`` → ``sessions/`` so we can reach a session's task
     cards from a service that only knows the system dir.
 
-    The pair always lives side-by-side under the same parent (see the
-    repo-root constants in ``butterfly/session_engine/agent_state.py``);
-    relying on the trailing-segment swap keeps the service layer free of
-    a global config import and naturally handles test tmp_path layouts
+    The pair always lives side-by-side under the same parent; relying
+    on the trailing-segment swap keeps the service layer free of a
+    global config import and naturally handles test tmp_path layouts
     that mirror the same structure. Returns None when the parent layout
     doesn't match — caller treats that as "best-effort skip".
     """

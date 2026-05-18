@@ -142,12 +142,10 @@ def _session_tone(info: dict) -> str:
 def _read_all_sessions(
     sessions_base: Path,
     system_base: Path,
-    *,
-    exclude_meta: bool = False,
 ) -> list[dict]:
     """Read all sessions from _sessions/ + sessions/. No server required."""
     from butterfly.service import list_sessions
-    return list_sessions(sessions_base, system_base, exclude_meta=exclude_meta)
+    return list_sessions(sessions_base, system_base)
 
 
 # ── Subcommand: chat ──────────────────────────────────────────────────────────
@@ -495,7 +493,7 @@ def cmd_log(args) -> int:
     session_id = args.session_id
 
     if not session_id:
-        sessions = _read_all_sessions(args.sessions_base, args.system_base, exclude_meta=True)
+        sessions = _read_all_sessions(args.sessions_base, args.system_base)
         if not sessions:
             print("No sessions found.", file=sys.stderr)
             return 1
@@ -644,7 +642,7 @@ def cmd_tasks(args) -> int:
 
     session_id = args.session_id
     if not session_id:
-        sessions = _read_all_sessions(args.sessions_base, args.system_base, exclude_meta=True)
+        sessions = _read_all_sessions(args.sessions_base, args.system_base)
         if not sessions:
             print("No sessions found.", file=sys.stderr)
             return 1
@@ -749,7 +747,7 @@ def cmd_panel(args) -> int:
 
     session_id = args.session_id
     if not session_id:
-        sessions = _read_all_sessions(args.sessions_base, args.system_base, exclude_meta=True)
+        sessions = _read_all_sessions(args.sessions_base, args.system_base)
         if not sessions:
             print("No sessions found.", file=sys.stderr)
             return 1
