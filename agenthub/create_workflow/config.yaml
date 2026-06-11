@@ -1,0 +1,15 @@
+agent: create_workflow
+version: "0.1.0"
+description: Conversational workflow creator — introduces the workflow concept, then walks the user through authoring a saved workflow JSON spec in natural language.
+model: gpt-5.5
+provider: codex-oauth
+fallback_model: kimi-for-coding
+fallback_provider: kimi-coding-plan
+max_iterations: 200
+thinking: true
+thinking_budget: 4000
+thinking_effort: medium
+prompts:
+  system: prompts/system.md
+  task: prompts/task.md
+  env: prompts/env.md
